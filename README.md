@@ -149,6 +149,7 @@ Actions vuelve a compilar el APK. Lo instalas encima del anterior y tus ajustes 
 |---|---|
 | "No encuentro la laptop" | El teléfono tiene que estar en el **mismo Wi-Fi**. Revisa que corriste `abrir_firewall.bat` y que la IP no cambió. |
 | Eco se detiene solo | Revisa los ajustes de batería del Honor (paso 3.3). Si Android lo cierra, Eco te deja una notificación para reactivarlo. |
+| Sale `timed out` al descargar Whisper | Apaga Eco y haz doble clic en **`descargar_modelo.bat`**. Baja el modelo con calma y reintenta solo si se corta. Cuando termine, enciende Eco. Los audios que ya llegaron se procesan solos; si falla el internet, Eco los reintenta cada pocos minutos. |
 | La transcripción tarda mucho | En `config.toml` usa `modelo = "base"`. |
 | La transcripción sale con errores | Usa `modelo = "medium"` o `beam = 3`. Lleva el teléfono en la bolsa de la camisa, no en la del pantalón. |
 | Telegram no responde | Revisa `token` y `chat_id`, y ejecuta `iniciar.bat --probar`. |

@@ -20,6 +20,7 @@ import html
 import json
 import logging
 import math
+import os
 import queue
 import re
 import socket
@@ -39,6 +40,13 @@ from zoneinfo import ZoneInfo
 
 BASE = Path(__file__).resolve().parent
 TOKEN_DE_EJEMPLO = "cambia-esto-por-una-clave-larga"
+
+# Descarga del modelo de Whisper: más paciencia con internet lento (el valor por defecto
+# corta a los 10 s) y sin avisos que no importan en Windows.
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_VERBOSITY", "error")
 MAX_SUBIDA = 200 * 1024 * 1024  # 200 MB
 
 log = logging.getLogger("eco")
@@ -177,6 +185,7 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS items_pendientes ON items(tipo, hecho, recordado, recordar_ts);
 CREATE TABLE IF NOT EXISTS estado (clave TEXT PRIMARY KEY, valor TEXT);
+CREATE TABLE IF NOT EXISTS salida (id INTEGER PRIMARY KEY, texto TEXT NOT NULL, creado TEXT NOT NULL);
 """
 
 
@@ -652,6 +661,26 @@ def enviar(texto: str, chat_id: str | None = None) -> bool:
         return False
 
 
+def enviar_o_guardar(texto: str) -> None:
+    """Si no hay internet, el mensaje queda en cola y se manda en cuanto vuelva."""
+    if not CFG["telegram"].get("token") or not CFG["telegram"].get("chat_id"):
+        return
+    if not enviar(texto):
+        with closing(db()) as con, con:
+            con.execute("INSERT INTO salida(texto, creado) VALUES(?, ?)",
+                        (texto, ahora().isoformat(timespec="seconds")))
+
+
+def vaciar_salida() -> None:
+    with closing(db()) as con:
+        filas = con.execute("SELECT * FROM salida ORDER BY id").fetchall()
+    for f in filas:
+        if not enviar(f["texto"]):
+            return  # sigue sin internet: lo intentamos en la próxima vuelta
+        with closing(db()) as con, con:
+            con.execute("DELETE FROM salida WHERE id=?", (f["id"],))
+
+
 def e(texto) -> str:
     return html.escape(str(texto or ""))
 
@@ -867,7 +896,7 @@ def procesar(ruta: Path) -> int | None:
                               ia_ok=ia_ok)
 
     actualizar_notas(inicio.date())
-    enviar(mensaje_captura(cid))
+    enviar_o_guardar(mensaje_captura(cid))
 
     if CFG["notas"].get("guardar_audio"):
         AUDIOS.mkdir(parents=True, exist_ok=True)
@@ -904,22 +933,64 @@ def _limpiar(*rutas: Path) -> None:
             pass
 
 
+ESPERA_REINTENTO_S = 60
+MAX_REINTENTOS = 6
+_intentos: dict[str, int] = {}
+
+
 def trabajador() -> None:
     while True:
         ruta = COLA.get()
         try:
             if ruta.exists():
                 procesar(ruta)
-        except Exception:
-            log.exception("No pude procesar %s (queda en datos/entrada para reintentar)", ruta.name)
+            _intentos.pop(ruta.name, None)
+        except Exception as ex:
+            # Lo más común es que se haya ido el internet (descarga de Whisper, IA en la nube).
+            # El audio sigue en datos/entrada; se reintenta solo, cada vez esperando más.
+            n = _intentos.get(ruta.name, 0) + 1
+            _intentos[ruta.name] = n
+            if n <= MAX_REINTENTOS:
+                espera = ESPERA_REINTENTO_S * n
+                log.warning("No pude procesar %s (%s). Reintento en %d s.", ruta.name, ex, espera)
+                t = threading.Timer(espera, COLA.put, args=(ruta,))
+                t.daemon = True
+                t.start()
+            else:
+                log.exception("No pude procesar %s tras varios intentos; queda en datos/entrada "
+                              "y se reintenta la próxima vez que enciendas Eco", ruta.name)
         finally:
             COLA.task_done()
+
+
+def descargar_modelo() -> None:
+    """Baja el modelo de Whisper con calma, reintentando si el internet se corta."""
+    modelo = CFG["whisper"]["modelo"]
+    try:
+        from faster_whisper.utils import download_model
+    except ImportError:
+        print("✕ Whisper no está instalado: ejecuta instalar.bat")
+        return
+    for intento in range(1, 31):
+        try:
+            print(f"\nDescargando Whisper '{modelo}' (intento {intento})… si se corta, sigue desde donde quedó.")
+            ruta = download_model(modelo)
+            print(f"\n✓ Modelo listo en {ruta}\n  Ya puedes encender Eco con iniciar.bat")
+            return
+        except KeyboardInterrupt:
+            print("\nDescarga cancelada.")
+            return
+        except Exception as ex:
+            print(f"  Se cortó ({ex.__class__.__name__}). Reintento en 15 s…")
+            time.sleep(15)
+    print("\n✕ No se pudo completar la descarga. Revisa tu internet y vuelve a intentarlo.")
 
 
 def reloj() -> None:
     """Cada 30 s: manda recordatorios vencidos y, a la hora indicada, el resumen del día."""
     while True:
         try:
+            vaciar_salida()
             revisar_recordatorios()
             revisar_resumen()
         except Exception:
@@ -1091,6 +1162,9 @@ def main() -> None:
     preparar_logs()
     if "--probar" in sys.argv:
         diagnostico()
+        return
+    if "--descargar" in sys.argv:
+        descargar_modelo()
         return
     if str(CFG["servidor"]["token"]) == TOKEN_DE_EJEMPLO:
         log.error("Cambia el token de ejemplo en config.toml antes de encender Eco.")
