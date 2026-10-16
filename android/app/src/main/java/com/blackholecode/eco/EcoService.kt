@@ -17,6 +17,7 @@ import android.location.LocationManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.widget.Toast
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -52,6 +53,12 @@ class EcoService : Service() {
         const val ACTION_RELOAD = "com.blackholecode.eco.RELOAD"
         const val ACTION_UPLOAD = "com.blackholecode.eco.UPLOAD"
         const val ACTION_STOP = "com.blackholecode.eco.STOP"
+        const val ACTION_REUNION_INICIAR = "com.blackholecode.eco.REUNION_INICIAR"
+        const val ACTION_REUNION_TERMINAR = "com.blackholecode.eco.REUNION_TERMINAR"
+
+        /** Modo reunión: AAC mono a 32 kbps (~15 MB por hora), una parte cada 10 minutos. */
+        private const val REUNION_PARTE_MS = 10 * 60_000L
+        private const val REUNION_MAX_MS = 8 * 60 * 60_000L
 
         const val SAMPLE_RATE = 16_000
         private const val CH_ACTIVE = "eco_activo"
@@ -63,10 +70,14 @@ class EcoService : Service() {
 
         fun send(context: Context, action: String) {
             val intent = Intent(context, EcoService::class.java).setAction(action)
-            if (action == ACTION_START) context.startForegroundService(intent) else context.startService(intent)
+            if (action == ACTION_START || action == ACTION_REUNION_INICIAR) context.startForegroundService(intent)
+            else context.startService(intent)
         }
 
         fun pendingDir(context: Context): File = File(context.filesDir, "pendientes").apply { mkdirs() }
+        fun meetingDir(context: Context): File = File(context.filesDir, "reunion").apply { mkdirs() }
+
+        fun isUploadable(f: File) = f.name.endsWith(".wav") || f.name.endsWith(".m4a")
     }
 
     private class Clip(val pcm: ShortArray, val startMs: Long, val location: Location?)
@@ -91,6 +102,13 @@ class EcoService : Service() {
     @Volatile private var lastLocation: Location? = null
     private var tickCount = 0
 
+    // Modo reunión
+    private var grabadora: MediaRecorder? = null
+    private var reunionClave = ""
+    private var parteArchivo: File? = null
+    private var parteInicioMs = 0L
+    private var estabaEnPausa = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -114,6 +132,8 @@ class EcoService : Service() {
             ACTION_PAUSE -> togglePause()
             ACTION_RELOAD -> reload()
             ACTION_UPLOAD -> uploadOnce()
+            ACTION_REUNION_INICIAR -> startMeeting()
+            ACTION_REUNION_TERMINAR -> stopMeeting()
             ACTION_STOP -> {
                 shutdown()
                 return START_NOT_STICKY
@@ -124,6 +144,11 @@ class EcoService : Service() {
     }
 
     override fun onDestroy() {
+        if (EcoState.reunionInicioMs > 0) {
+            main.removeCallbacks(rotarParte)
+            closePart(final = true)
+            EcoState.reunionInicioMs = 0
+        }
         if (capturing) stopRecorder(flushSave = true)
         EcoState.running = false
         EcoState.paused = false
@@ -136,28 +161,35 @@ class EcoService : Service() {
 
     private fun startCapture() {
         if (EcoState.running) {
-            if (!EcoState.paused && !capturing) startRecorder()
+            if (!EcoState.paused && !capturing && EcoState.reunionInicioMs == 0L) startRecorder()
             refreshNotification()
             return
         }
+        if (!ensureForeground()) return
+        startRecorder()
+    }
+
+    /** Pone a Eco en primer plano (notificación fija) si todavía no lo está. */
+    private fun ensureForeground(): Boolean {
+        if (EcoState.running) return true
         if (!has(Manifest.permission.RECORD_AUDIO)) {
             EcoState.micError = "Falta el permiso del micrófono"
-            return
+            return false
         }
         try {
             goForeground()
         } catch (e: Exception) {
             EcoState.micError = "Android no dejó iniciar Eco (${e.javaClass.simpleName})"
-            return
+            return false
         }
         getSystemService(NotificationManager::class.java).cancel(NOTIF_STOPPED)
         EcoState.running = true
         EcoState.paused = false
-        startRecorder()
         main.removeCallbacks(tick)
         main.post(tick)
         main.removeCallbacks(uploadLoop)
         main.postDelayed(uploadLoop, 3_000)
+        return true
     }
 
     private fun goForeground() {
@@ -172,7 +204,7 @@ class EcoService : Service() {
     }
 
     private fun togglePause() {
-        if (!EcoState.running) return
+        if (!EcoState.running || EcoState.reunionInicioMs > 0) return
         if (EcoState.paused) {
             EcoState.paused = false
             startRecorder()
@@ -185,13 +217,14 @@ class EcoService : Service() {
 
     /** Aplica nuevos segundos de antes/después sin apagar Eco. */
     private fun reload() {
-        if (!EcoState.running || EcoState.paused) return
+        if (!EcoState.running || EcoState.paused || EcoState.reunionInicioMs > 0) return
         stopRecorder(flushSave = true)
         startRecorder()
         refreshNotification()
     }
 
     private fun shutdown() {
+        if (EcoState.reunionInicioMs > 0) stopMeeting()
         stopRecorder(flushSave = true)
         EcoState.running = false
         EcoState.paused = false
@@ -386,6 +419,162 @@ class EcoService : Service() {
         uploadPending()
     }
 
+    // ───────────────────────── Modo reunión ─────────────────────────
+
+    private fun startMeeting() {
+        if (EcoState.reunionInicioMs > 0) return
+        estabaEnPausa = EcoState.paused
+        if (!ensureForeground()) return
+        // El búfer de momentos suelta el micrófono: la reunión lo graba todo.
+        if (capturing) stopRecorder(flushSave = true)
+        EcoState.paused = false
+        val ahora = System.currentTimeMillis()
+        reunionClave = "reu_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(ahora))
+        EcoState.reunionParte = 0
+        EcoState.reunionError = null
+        refreshLocation()
+        if (!openPart()) {
+            EcoState.reunionInicioMs = 0
+            if (!estabaEnPausa) startRecorder()
+            refreshNotification()
+            return
+        }
+        EcoState.reunionInicioMs = ahora
+        buzz()
+        main.postDelayed(rotarParte, REUNION_PARTE_MS)
+        refreshNotification()
+    }
+
+    private fun stopMeeting() {
+        if (EcoState.reunionInicioMs == 0L) return
+        main.removeCallbacks(rotarParte)
+        closePart(final = true)
+        EcoState.reunionInicioMs = 0
+        buzz()
+        Toast.makeText(this, "Reunión guardada. Se sube a tu laptop.", Toast.LENGTH_SHORT).show()
+        EcoState.paused = estabaEnPausa
+        if (!EcoState.paused) startRecorder()
+        runIo { uploadPending() }
+        refreshNotification()
+    }
+
+    /** Cada 10 minutos: cierra la parte actual (para subirla) y abre la siguiente. */
+    private val rotarParte = object : Runnable {
+        override fun run() {
+            if (EcoState.reunionInicioMs == 0L) return
+            if (System.currentTimeMillis() - EcoState.reunionInicioMs > REUNION_MAX_MS) {
+                stopMeeting()  // tope de seguridad: 8 horas
+                return
+            }
+            closePart(final = false)
+            if (!openPart()) {
+                // No se pudo seguir: lo grabado ya quedó guardado; cerramos la reunión con una marca final.
+                finishMarker()
+                EcoState.reunionInicioMs = 0
+                EcoState.paused = estabaEnPausa
+                if (!EcoState.paused) startRecorder()
+                refreshNotification()
+                return
+            }
+            refreshNotification()
+            runIo { uploadPending() }
+            main.postDelayed(this, REUNION_PARTE_MS)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun newRecorder(): MediaRecorder =
+        if (Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
+
+    private fun openPart(): Boolean {
+        val n = EcoState.reunionParte + 1
+        val file = File(meetingDir(this), "%s_p%03d.m4a".format(Locale.US, reunionClave, n))
+        val mr = newRecorder()
+        return try {
+            mr.setAudioSource(MediaRecorder.AudioSource.MIC)
+            mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            mr.setAudioChannels(1)
+            mr.setAudioSamplingRate(SAMPLE_RATE)
+            mr.setAudioEncodingBitRate(32_000)
+            mr.setOutputFile(file.absolutePath)
+            mr.setOnErrorListener { _, what, _ ->
+                EcoState.reunionError = "El micrófono se detuvo ($what)"
+                main.post { stopMeeting() }
+            }
+            mr.prepare()
+            mr.start()
+            grabadora = mr
+            parteArchivo = file
+            parteInicioMs = System.currentTimeMillis()
+            EcoState.reunionParte = n
+            acquireWakeLock()
+            true
+        } catch (e: Exception) {
+            mr.release()
+            file.delete()
+            EcoState.reunionError = "No se pudo grabar la reunión (${e.javaClass.simpleName})"
+            false
+        }
+    }
+
+    private fun closePart(final: Boolean) {
+        val mr = grabadora ?: return
+        val file = parteArchivo
+        grabadora = null
+        parteArchivo = null
+        val ok = try {
+            mr.stop()
+            true
+        } catch (e: Exception) {
+            false  // parte demasiado corta o micrófono interrumpido
+        } finally {
+            mr.release()
+            if (EcoState.reunionInicioMs == 0L || final) releaseWakeLock()
+        }
+        val n = EcoState.reunionParte
+        if (ok && file != null && file.length() > 0) {
+            val destino = File(pendingDir(this), file.name)
+            writePartMeta(destino.nameWithoutExtension, n, final, parteInicioMs, System.currentTimeMillis())
+            if (!file.renameTo(destino)) {
+                file.copyTo(destino, overwrite = true)
+                file.delete()
+            }
+        } else {
+            file?.delete()
+            if (final) finishMarker()
+        }
+    }
+
+    /** Si la última parte salió vacía, mandamos un pedacito de silencio marcado como final
+     *  para que la laptop sepa que la reunión terminó. */
+    private fun finishMarker() {
+        val n = EcoState.reunionParte
+        val nombre = "%s_p%03d".format(Locale.US, reunionClave, n)
+        val ahora = System.currentTimeMillis()
+        Wav.write(File(pendingDir(this), "$nombre.wav"), ShortArray(SAMPLE_RATE / 5), SAMPLE_RATE)
+        writePartMeta(nombre, n, true, ahora, ahora)
+    }
+
+    private fun writePartMeta(nombre: String, n: Int, final: Boolean, inicio: Long, fin: Long) {
+        val meta = JSONObject()
+            .put("inicio_ms", inicio)
+            .put("duracion_s", (fin - inicio) / 1000.0)
+            .put("app", "eco-android-1")
+            .put(
+                "sesion", JSONObject()
+                    .put("clave", reunionClave)
+                    .put("tipo", "reunion")
+                    .put("parte", n)
+                    .put("final", final)
+            )
+        lastLocation?.let {
+            meta.put("lat", it.latitude).put("lon", it.longitude)
+                .put("precision_m", it.accuracy.toDouble()).put("loc_ms", it.time)
+        }
+        File(pendingDir(this), "$nombre.json").writeText(meta.toString())
+    }
+
     // ───────────────────────── Subida a la laptop ─────────────────────────
 
     private val uploadLoop = object : Runnable {
@@ -405,7 +594,7 @@ class EcoService : Service() {
 
     private fun uploadPending() {
         val dir = pendingDir(this)
-        val files = (dir.listFiles() ?: emptyArray()).filter { it.name.endsWith(".wav") }.sortedBy { it.name }
+        val files = (dir.listFiles() ?: emptyArray()).filter { isUploadable(it) }.sortedBy { it.name }
         if (files.isEmpty()) return
         if (prefs.server.isBlank()) {
             EcoState.lastUpload = "Falta la dirección de tu laptop"
@@ -413,7 +602,7 @@ class EcoService : Service() {
             return
         }
         for (wav in files) {
-            val meta = File(dir, wav.name.removeSuffix(".wav") + ".json")
+            val meta = File(dir, wav.nameWithoutExtension + ".json")
             val result = Net.upload(prefs.server, prefs.token, wav, if (meta.exists()) meta.readText() else null)
             if (result.ok) {
                 wav.delete()
@@ -481,9 +670,14 @@ class EcoService : Service() {
         val icon = Icon.createWithResource(this, R.drawable.ic_eco)
 
         val saving = EcoState.savingRemainingSec >= 0
+        val enReunion = EcoState.reunionInicioMs > 0
         val title: String
         val text: String
         when {
+            enReunion -> {
+                title = "Grabando reunión"
+                text = "Parte ${EcoState.reunionParte} · cada 10 min se sube sola a tu laptop"
+            }
             EcoState.paused -> {
                 title = "Eco en pausa"
                 text = "Micrófono apagado. Nada se está escuchando."
@@ -512,10 +706,18 @@ class EcoService : Service() {
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setCategory(Notification.CATEGORY_SERVICE)
-        if (!EcoState.paused) {
-            builder.addAction(Notification.Action.Builder(icon, if (saving) "Alargar" else "Guardar momento", save).build())
+        if (enReunion) {
+            val terminar = PendingIntent.getService(
+                this, 5, Intent(this, EcoService::class.java).setAction(ACTION_REUNION_TERMINAR), flags
+            )
+            builder.addAction(Notification.Action.Builder(icon, "Terminar reunión", terminar).build())
+            builder.setUsesChronometer(true).setWhen(EcoState.reunionInicioMs).setShowWhen(true)
+        } else {
+            if (!EcoState.paused) {
+                builder.addAction(Notification.Action.Builder(icon, if (saving) "Alargar" else "Guardar momento", save).build())
+            }
+            builder.addAction(Notification.Action.Builder(icon, if (EcoState.paused) "Reanudar" else "Pausar", pause).build())
         }
-        builder.addAction(Notification.Action.Builder(icon, if (EcoState.paused) "Reanudar" else "Pausar", pause).build())
         if (Build.VERSION.SDK_INT >= 31) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }

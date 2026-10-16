@@ -3,9 +3,9 @@
 Write-Host ""
 Stop-ScheduledTask -TaskName "Eco" -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "Eco" -Confirm:$false -ErrorAction SilentlyContinue
-Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
+Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
     Where-Object { $_.CommandLine -match 'eco_app\.pyw' } |
-    ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName Terminate | Out-Null }
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 foreach ($carpeta in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"))) {
     Remove-Item (Join-Path $carpeta "Eco.lnk") -ErrorAction SilentlyContinue
 }

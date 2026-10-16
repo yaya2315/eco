@@ -4,7 +4,7 @@ Eco · app de la laptop
 
 Corre Eco en segundo plano, sin ventana negra, con un ícono junto al reloj:
   • clic (o doble clic) en el ícono → abre tu panel
-  • clic derecho → panel, carpeta de notas, registro, apagar Eco
+  • clic derecho → grabar la clase, panel, carpeta de notas, registro, apagar Eco
 
 Windows lo enciende solo al iniciar sesión (lo configura instalar_inicio.bat).
 Si lo abres cuando ya está encendido, solo te abre el panel.
@@ -78,15 +78,47 @@ def main() -> None:
     def abrir_registro(icon=None, item=None):
         os.startfile(eco.DATOS / "eco.log")
 
+    cerrar = threading.Event()
+
     def apagar(icon, item=None):
         eco.log.info("Eco apagado desde el ícono")
+        cerrar.set()
+        if eco.CLASE is not None and eco.CLASE.activa():
+            eco.CLASE.terminar(esperar=True)  # la última parte queda guardada para la próxima vez
         servidor.shutdown()
         icon.stop()
 
     def texto_estado(item):
+        if eco.CLASE is not None and eco.CLASE.activa():
+            return "Grabando la clase…"
         if eco.ESTADO.get("procesando") or eco.COLA.qsize():
-            return "Procesando un momento…"
+            return "Procesando…"
         return "Recibiendo momentos"
+
+    def texto_clase(item):
+        e = eco.CLASE.estado() if eco.CLASE is not None else {"grabando": False}
+        if e["grabando"]:
+            return f"Terminar la clase ({e['actual']['segundos'] // 60} min)"
+        return "Grabar la clase"
+
+    def alternar_clase(icon, item=None):
+        def hacer():
+            if eco.CLASE.activa():
+                eco.CLASE.terminar(esperar=True)
+                icon.notify("Listo. Eco está analizando la clase; te aviso por Telegram.", "Clase terminada")
+            else:
+                eco.CLASE.iniciar()
+                icon.notify("Eco graba lo que suena en la laptop hasta que la termines.", "Grabando la clase")
+            icon.update_menu()
+        threading.Thread(target=hacer, daemon=True).start()
+
+    def refrescar_menu(icon):
+        icon.visible = True
+        while not cerrar.wait(20):  # se detiene al apagar Eco para que el programa pueda cerrarse
+            try:
+                icon.update_menu()
+            except Exception:
+                pass
 
     icono = pystray.Icon(
         "Eco",
@@ -95,6 +127,7 @@ def main() -> None:
         menu=pystray.Menu(
             pystray.MenuItem(texto_estado, None, enabled=False),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(texto_clase, alternar_clase),
             pystray.MenuItem("Abrir panel", abrir_panel, default=True),
             pystray.MenuItem("Abrir carpeta de notas", abrir_notas),
             pystray.MenuItem("Ver registro", abrir_registro),
@@ -102,7 +135,7 @@ def main() -> None:
             pystray.MenuItem("Apagar Eco", apagar),
         ),
     )
-    icono.run()
+    icono.run(setup=refrescar_menu)
 
 
 if __name__ == "__main__":

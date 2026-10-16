@@ -23,9 +23,10 @@ if (-not (Test-Path $pyw)) {
 
 Paso "1/5  Cerrando Eco si estaba abierto..."
 Stop-ScheduledTask -TaskName "Eco" -ErrorAction SilentlyContinue
+# (el Python del entorno abre un segundo proceso: al cerrar uno el otro ya puede no existir)
 Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
     Where-Object { $_.CommandLine -match 'eco_servidor\.py|eco_app\.pyw' } |
-    ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName Terminate | Out-Null }
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 
 Paso "2/5  Haciendo que Eco encienda solo al iniciar Windows..."

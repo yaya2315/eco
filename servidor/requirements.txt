@@ -3,3 +3,4 @@ anthropic>=0.40
 tzdata
 pystray>=0.19
 pillow>=10
+soundcard>=0.4.4

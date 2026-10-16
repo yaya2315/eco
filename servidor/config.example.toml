@@ -46,6 +46,18 @@ aviso_antes_min = 60            # para tareas con hora: cuántos minutos antes a
 guardar_transcripcion = false   # false = solo se guardan las notas, no lo que dijo cada quien
 guardar_audio = false           # false = el audio se borra apenas se transcribe
 
+[sesiones]
+# Modo clase (laptop) y modo reunión (teléfono): la transcripción completa se guarda para que
+# puedas preguntarle a Eco después. Pon false si no quieres guardarla.
+guardar_transcripcion_clase = true
+guardar_transcripcion_reunion = true
+clase_auto_terminar_min = 20    # la clase se termina sola tras este tiempo en silencio
+
+[respaldo]
+activo = true
+carpeta = ""        # vacío = tu OneDrive\Eco respaldos
+conservar = 14      # cuántas copias diarias guardar
+
 # Lugares con nombre (opcional). Así tus notas dicen "📍 Casa" en vez de coordenadas.
 # Para sacar las coordenadas: mantén presionado el lugar en Google Maps y copia los números.
 # [[lugares]]

@@ -8,9 +8,13 @@ saca lo importante con IA y te lo deja:
   • en notas Markdown (compatibles con Obsidian), y
   • en un bot privado de Telegram que además te recuerda las cosas a tiempo.
 
+También recibe grabaciones largas (modo reunión del teléfono y modo clase de la laptop),
+responde preguntas sobre todo lo guardado y hace un respaldo diario.
+
 Uso:
-    python eco_servidor.py            → arranca Eco
+    python eco_servidor.py            → arranca Eco (con ventana)
     python eco_servidor.py --probar   → revisa configuración, IA, Telegram y Whisper
+    python eco_app.pyw                → arranca Eco en segundo plano, con ícono junto al reloj
 """
 from __future__ import annotations
 
@@ -48,7 +52,8 @@ os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_VERBOSITY", "error")
-MAX_SUBIDA = 200 * 1024 * 1024  # 200 MB
+MAX_SUBIDA = 400 * 1024 * 1024  # 400 MB
+EXT_AUDIO = (".wav", ".m4a", ".aac", ".mp4", ".ogg", ".opus", ".mp3", ".webm")
 
 log = logging.getLogger("eco")
 
@@ -75,6 +80,17 @@ DEFAULTS: dict = {
         "guardar_transcripcion": False,
         "guardar_audio": False,
     },
+    "sesiones": {
+        # Clases y reuniones largas: la transcripción completa sirve para preguntarle a Eco después.
+        "guardar_transcripcion_clase": True,
+        "guardar_transcripcion_reunion": True,
+        "clase_auto_terminar_min": 20,   # si la clase lleva este tiempo en silencio, se termina sola
+    },
+    "respaldo": {
+        "activo": True,
+        "carpeta": "",      # vacío = OneDrive\Eco respaldos
+        "conservar": 14,    # cuántas copias guardar
+    },
     "lugares": [],
 }
 
@@ -85,7 +101,8 @@ ENTRADA = DATOS / "entrada"
 AUDIOS = DATOS / "audios"
 DB_PATH = DATOS / "eco.db"
 NOTAS = BASE / "notas"
-COLA: "queue.Queue[Path]" = queue.Queue()
+COLA: "queue.Queue" = queue.Queue()
+CLASE = None  # grabadora del modo clase (se crea al arrancar)
 
 
 def cargar_config(ruta: Path) -> dict:
@@ -187,7 +204,37 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS items_pendientes ON items(tipo, hecho, recordado, recordar_ts);
 CREATE TABLE IF NOT EXISTS estado (clave TEXT PRIMARY KEY, valor TEXT);
 CREATE TABLE IF NOT EXISTS salida (id INTEGER PRIMARY KEY, texto TEXT NOT NULL, creado TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sesiones (
+    id            INTEGER PRIMARY KEY,
+    clave         TEXT UNIQUE NOT NULL,
+    tipo          TEXT NOT NULL,           -- clase | reunion
+    nombre        TEXT,
+    inicio        TEXT NOT NULL,
+    fin           TEXT,
+    partes_total  INTEGER,                 -- se sabe cuando llega la última parte
+    estado        TEXT NOT NULL DEFAULT 'grabando',   -- grabando | procesando | lista
+    captura_id    INTEGER,
+    lat           REAL,
+    lon           REAL,
+    actualizado   TEXT
+);
+CREATE TABLE IF NOT EXISTS sesion_partes (
+    sesion_id     INTEGER NOT NULL,
+    n             INTEGER NOT NULL,
+    inicio_ms     INTEGER,
+    duracion      REAL,
+    texto         TEXT,
+    PRIMARY KEY (sesion_id, n)
+);
 """
+
+# Índice de búsqueda para "pregúntale a Eco" (va aparte: si SQLite no trae FTS5, Eco sigue funcionando).
+ESQUEMA_INDICE = """
+CREATE VIRTUAL TABLE IF NOT EXISTS indice USING fts5(
+    texto, captura_id UNINDEXED, campo UNINDEXED, tokenize = 'unicode61 remove_diacritics 2'
+);
+"""
+HAY_INDICE = False
 
 
 def db() -> sqlite3.Connection:
@@ -197,8 +244,16 @@ def db() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    global HAY_INDICE
     with closing(db()) as con, con:
         con.executescript(ESQUEMA)
+    try:
+        with closing(db()) as con, con:
+            con.executescript(ESQUEMA_INDICE)
+        HAY_INDICE = True
+    except sqlite3.OperationalError as ex:
+        HAY_INDICE = False
+        log.warning("Sin índice de búsqueda (%s); las preguntas usarán una búsqueda simple.", ex)
 
 
 def estado_get(clave: str) -> str | None:
@@ -275,9 +330,9 @@ def leer_audio(ruta: Path):
             canales, ancho, tasa = w.getnchannels(), w.getsampwidth(), w.getframerate()
             crudo = w.readframes(w.getnframes())
     except (wave.Error, EOFError):
-        return str(ruta)
+        return _decodificar(ruta)
     if ancho != 2:
-        return str(ruta)
+        return _decodificar(ruta)
     audio = np.frombuffer(crudo, dtype="<i2").astype(np.float32) / 32768.0
     if canales > 1:
         audio = audio[: len(audio) // canales * canales].reshape(-1, canales).mean(axis=1)
@@ -285,6 +340,43 @@ def leer_audio(ruta: Path):
         n = int(round(len(audio) * 16000 / tasa))
         audio = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio).astype(np.float32)
     return audio
+
+
+def _decodificar(ruta: Path):
+    """M4A/AAC y otros formatos → 16 kHz mono, usando PyAV directamente (sin la opción que falla)."""
+    import av
+    import numpy as np
+    pedazos = []
+    with av.open(str(ruta)) as contenedor:
+        flujo = next(s for s in contenedor.streams if s.type == "audio")
+        remuestreo = av.AudioResampler(format="s16", layout="mono", rate=16000)
+        for cuadro in contenedor.decode(flujo):
+            for c in remuestreo.resample(cuadro):
+                pedazos.append(c.to_ndarray().reshape(-1))
+        for c in remuestreo.resample(None):
+            pedazos.append(c.to_ndarray().reshape(-1))
+    if not pedazos:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(pedazos).astype(np.float32) / 32768.0
+
+
+# Frases que Whisper "escucha" en silencio o ruido (vienen de los subtítulos con que lo entrenaron).
+ALUCINACIONES = (
+    "subtitulos realizados por la comunidad de amara", "subtitulos por la comunidad de amara",
+    "gracias por ver el video", "gracias por ver", "suscribete al canal", "no olvides suscribirte",
+    "subtitulado por", "amara.org", "musica de fondo", "gracias por su atencion",
+)
+
+
+def _segmento_valido(s) -> bool:
+    texto = re.sub(r"[^a-z0-9. ]", "", _sin_acentos(s.text)).strip()
+    if not texto:
+        return False
+    if getattr(s, "no_speech_prob", 0) > 0.6 and getattr(s, "avg_logprob", 0) < -1.0:
+        return False  # Whisper mismo duda que ahí haya voz
+    if len(texto) < 60 and any(a in texto for a in ALUCINACIONES):
+        return False
+    return True
 
 
 def transcribir(ruta: Path) -> str:
@@ -296,11 +388,14 @@ def transcribir(ruta: Path) -> str:
             log.info("Cargando Whisper '%s'…", w["modelo"])
             _whisper = WhisperModel(w["modelo"], device="cpu", compute_type="int8",
                                     cpu_threads=int(w.get("hilos") or 0))
+        audio = leer_audio(ruta)
+        if not isinstance(audio, str) and len(audio) < 1600:  # menos de 0.1 s: nada que escuchar
+            return ""
         segmentos, _info = _whisper.transcribe(
-            leer_audio(ruta), language=w.get("idioma") or None, beam_size=int(w.get("beam") or 1),
+            audio, language=w.get("idioma") or None, beam_size=int(w.get("beam") or 1),
             vad_filter=True, condition_on_previous_text=False,
         )
-        return " ".join(s.text.strip() for s in segmentos).strip()
+        return " ".join(s.text.strip() for s in segmentos if _segmento_valido(s)).strip()
 
 
 # ════════════════════════════ IA: qué es importante ════════════════════════════
@@ -356,12 +451,26 @@ Responde únicamente con un objeto JSON válido con esta forma:
 {FORMA_JSON}"""
 
 
-def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str) -> str:
-    tipo = "Transcripción del audio" if origen == "audio" else "Nota escrita por él mismo"
+def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str,
+                    contexto: str | None = None) -> str:
+    nombre = CFG["usuario"]["nombre"]
+    tipo = {"texto": "Nota escrita por él mismo"}.get(origen, "Transcripción del audio")
     partes = [
         f"Fecha y hora del fragmento: {fecha_larga(cuando.date())}, {cuando:%H:%M} ({CFG['notas']['zona_horaria']}).",
         f"Hoy es {fecha_larga(ahora().date())}.",
     ]
+    if origen == "clase":
+        partes.append(
+            f"Esto es parte de una CLASE VIRTUAL que recibió {nombre} (hablan el profesor y los compañeros, "
+            f"{nombre} casi no habla). Tareas = lo que dejaron de tarea, lo que hay que entregar, estudiar o "
+            "preparar, con su fecha si la dicen. Datos = temas de examen, fechas, instrucciones, criterios de "
+            "calificación y conceptos clave explicados. No pongas como tarea lo que hizo el profesor en clase.")
+    elif origen == "reunion":
+        partes.append(
+            f"Esto es parte de una conversación o reunión larga en la que participó {nombre}. "
+            f"Anota los acuerdos, los compromisos de {nombre} y los datos que le sirvan.")
+    if contexto:
+        partes.append(contexto)
     if lugar:
         partes.append(f"Lugar: {lugar}.")
     partes.append(f'{tipo}:\n"""\n{texto}\n"""')
@@ -419,7 +528,7 @@ def normalizar(d: dict) -> dict:
     }
 
 
-def _llamar_claude(sistema: str, usuario: str) -> str:
+def _llamar_claude(sistema: str, usuario: str, json_mode: bool = True) -> str:
     try:
         import anthropic
     except ImportError as e:
@@ -427,29 +536,38 @@ def _llamar_claude(sistema: str, usuario: str) -> str:
     ia = CFG["ia"]
     cliente = anthropic.Anthropic(api_key=ia.get("claude_api_key") or None)
     msg = cliente.messages.create(
-        model=ia["claude_modelo"], max_tokens=1500, temperature=0.2,
+        model=ia["claude_modelo"], max_tokens=2000, temperature=0.2,
         system=sistema, messages=[{"role": "user", "content": usuario}],
     )
     return "".join(getattr(b, "text", "") for b in msg.content)
 
 
-def _llamar_ollama(sistema: str, usuario: str) -> str:
+def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True) -> str:
     ia = CFG["ia"]
-    cuerpo = json.dumps({
-        "model": ia["ollama_modelo"], "stream": False, "format": "json",
-        "options": {"temperature": 0.2},
+    pedido = {
+        "model": ia["ollama_modelo"], "stream": False,
+        # num_ctx: Ollama trae 2048-4096 de fábrica y recorta en silencio lo que no cabe.
+        "options": {"temperature": 0.2, "num_ctx": int(ia.get("ollama_contexto") or 8192)},
         "messages": [{"role": "system", "content": sistema}, {"role": "user", "content": usuario}],
-    }).encode()
+    }
+    if json_mode:
+        pedido["format"] = "json"
+    cuerpo = json.dumps(pedido).encode()
     req = urllib.request.Request(ia["ollama_url"].rstrip("/") + "/api/chat", data=cuerpo,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=900) as r:
         return json.load(r)["message"]["content"]
 
 
-def extraer(texto: str, cuando: datetime, lugar: str | None, origen: str = "audio") -> dict:
+def llamar_ia(sistema: str, usuario: str, json_mode: bool = True) -> str:
     proveedor = str(CFG["ia"].get("proveedor", "claude")).lower()
     llamar = _llamar_ollama if proveedor == "ollama" else _llamar_claude
-    respuesta = llamar(_prompt_sistema(), _prompt_usuario(texto, cuando, lugar, origen))
+    return llamar(sistema, usuario, json_mode)
+
+
+def extraer(texto: str, cuando: datetime, lugar: str | None, origen: str = "audio",
+            contexto: str | None = None) -> dict:
+    respuesta = llamar_ia(_prompt_sistema(), _prompt_usuario(texto, cuando, lugar, origen, contexto))
     return pulir(normalizar(_json_de(respuesta)), texto)
 
 
@@ -567,6 +685,7 @@ def guardar_captura(*, archivo: str | None, origen: str, inicio: datetime, dur: 
             for texto in info[tipo]:
                 con.execute("INSERT INTO items(captura_id, tipo, texto) VALUES(?,?,?)",
                             (cid, "dato" if tipo == "datos" else "idea", texto))
+    indexar(cid)
     return cid
 
 
@@ -605,6 +724,8 @@ def render_dia(d: date) -> Path:
                 meta.append(duracion(c["duracion"]))
             if c["origen"] == "texto":
                 meta.append("nota escrita")
+            elif c["origen"] in TIPOS_SESION:
+                meta.append(TIPOS_SESION[c["origen"]].lower())
             meta.append("●" * (c["importancia"] or 3) + "○" * (5 - (c["importancia"] or 3)))
             lineas += [f"## {c['titulo']}", " · ".join(meta), ""]
             if c["resumen"]:
@@ -624,7 +745,10 @@ def render_dia(d: date) -> Path:
                     lineas.append(titulo)
                     lineas += [f"- {i['texto']}" for i in grupo]
                     lineas.append("")
-            if c["transcripcion"]:
+            if c["transcripcion"] and c["origen"] in TIPOS_SESION:
+                enlace = archivo_transcripcion(c).relative_to(NOTAS).as_posix().removesuffix(".md")
+                lineas += [f"📄 Transcripción completa: [[{enlace}]]", ""]
+            elif c["transcripcion"]:
                 lineas += ["<details><summary>Transcripción</summary>", "", c["transcripcion"], "", "</details>", ""]
     ruta = NOTAS / f"{d.isoformat()}.md"
     ruta.write_text("\n".join(lineas).rstrip() + "\n", encoding="utf-8")
@@ -779,7 +903,9 @@ AYUDA = (
     "/pendientes — lo que tienes por hacer\n"
     "/hecho 12 — marcar la tarea #12 como hecha\n"
     "/buscar palabra — buscar en todo lo guardado\n\n"
-    "También puedes escribirme cualquier cosa (\"examen de física el martes\") y la anoto."
+    "Pregúntame lo que quieras con signo de pregunta, por ejemplo:\n"
+    "<i>¿Qué dejó de tarea el profe de física?</i>\n\n"
+    "Y si me escribes cualquier otra cosa (\"examen de física el martes\"), la anoto."
 )
 
 
@@ -848,6 +974,26 @@ def manejar_mensaje(chat: str, texto: str) -> None:
             ini = datetime.fromisoformat(f["inicio"])
             lineas.append(f"• <b>{e(f['titulo'])}</b> — {e(fecha_corta(ini.date()))} {ini:%H:%M}\n  {e(f['resumen'])}")
         enviar("\n".join(lineas))
+    elif comando == "/pregunta" or (not comando.startswith("/") and es_pregunta(texto)):
+        pregunta = resto if comando == "/pregunta" else texto
+        if not pregunta:
+            enviar("¿Qué quieres saber? <code>/pregunta qué dejaron de tarea</code>")
+            return
+        try:
+            tg("sendChatAction", chat_id=dueño, action="typing")
+        except Exception:
+            pass
+        try:
+            r = responder_pregunta(pregunta)
+        except Exception as ex:
+            log.warning("No pude responder la pregunta (%s)", ex)
+            enviar("No pude pensar la respuesta ahora (¿está encendido Ollama?). Inténtalo en un rato.")
+            return
+        partes = [f"💬 {e(r['respuesta'])}"]
+        if r["fuentes"]:
+            partes.append("\n<i>Lo saqué de: " + "; ".join(f"{e(f['titulo'])} ({e(f['cuando'])})"
+                                                        for f in r["fuentes"][:3]) + "</i>")
+        enviar("\n".join(partes))
     elif comando.startswith("/"):
         enviar("No conozco ese comando.\n\n" + AYUDA)
     else:
@@ -890,6 +1036,8 @@ def procesar(ruta: Path) -> int | None:
             meta = json.loads(meta_ruta.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             meta = {}
+    if isinstance(meta.get("sesion"), dict):
+        return procesar_parte(ruta, meta)
     if ya_procesado(archivo):
         _limpiar(ruta, meta_ruta)
         return None
@@ -951,6 +1099,223 @@ def procesar_texto(texto: str) -> int:
     return cid
 
 
+# ════════════════════════════ Sesiones largas (clase y reunión) ════════════════════════════
+# El teléfono (modo reunión) y la laptop (modo clase) mandan la grabación en partes de ~10 min.
+# Cada parte se transcribe apenas llega; cuando llega la última, se analiza todo junto.
+
+TIPOS_SESION = {"clase": "Clase", "reunion": "Reunión"}
+PALABRAS_POR_BLOQUE = 1100  # lo que la IA analiza de una vez (~8 min de habla)
+
+
+def _clave_segura(clave: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(clave or ""))[:60] or f"s{int(time.time())}"
+
+
+def procesar_parte(ruta: Path, meta: dict) -> int | None:
+    s = meta["sesion"]
+    clave = _clave_segura(s.get("clave"))
+    tipo = s.get("tipo") if s.get("tipo") in TIPOS_SESION else "reunion"
+    n = max(1, int(s.get("parte") or 1))
+    final = bool(s.get("final"))
+    nombre = (str(s.get("nombre") or "").strip() or None)
+    inicio_ms = int(meta.get("inicio_ms") or time.time() * 1000)
+    dur = float(meta.get("duracion_s") or 0)
+    lat, lon = ubicacion_de(meta)
+    inicio_iso = datetime.fromtimestamp(inicio_ms / 1000, TZ).isoformat(timespec="seconds")
+
+    with closing(db()) as con, con:
+        fila = con.execute("SELECT * FROM sesiones WHERE clave=?", (clave,)).fetchone()
+        if fila is None:
+            con.execute("INSERT INTO sesiones(clave, tipo, nombre, inicio, lat, lon, actualizado) "
+                        "VALUES(?,?,?,?,?,?,?)", (clave, tipo, nombre, inicio_iso, lat, lon, ahora().isoformat()))
+            fila = con.execute("SELECT * FROM sesiones WHERE clave=?", (clave,)).fetchone()
+        elif inicio_iso < fila["inicio"]:
+            con.execute("UPDATE sesiones SET inicio=? WHERE id=?", (inicio_iso, fila["id"]))
+        sid = fila["id"]
+        if fila["estado"] == "lista":  # ya se cerró (parte repetida que llegó tarde)
+            _limpiar(ruta, ruta.with_suffix(".json"))
+            return fila["captura_id"]
+        if nombre and not fila["nombre"]:
+            con.execute("UPDATE sesiones SET nombre=? WHERE id=?", (nombre, sid))
+        if lat is not None and fila["lat"] is None:
+            con.execute("UPDATE sesiones SET lat=?, lon=? WHERE id=?", (lat, lon, sid))
+        con.execute("INSERT OR IGNORE INTO sesion_partes(sesion_id, n, inicio_ms, duracion) VALUES(?,?,?,?)",
+                    (sid, n, inicio_ms, dur))
+        if final:
+            fin = datetime.fromtimestamp(inicio_ms / 1000 + dur, TZ).isoformat(timespec="seconds")
+            con.execute("UPDATE sesiones SET partes_total=?, fin=? WHERE id=?", (n, fin, sid))
+        ya = con.execute("SELECT texto FROM sesion_partes WHERE sesion_id=? AND n=?", (sid, n)).fetchone()
+
+    if ya["texto"] is None:
+        t0 = time.time()
+        texto = transcribir(ruta)
+        log.info("%s %s · parte %d transcrita (%s de audio) en %.0f s",
+                 TIPOS_SESION[tipo], clave, n, duracion(dur), time.time() - t0)
+        with closing(db()) as con, con:
+            con.execute("UPDATE sesion_partes SET texto=?, duracion=? WHERE sesion_id=? AND n=?",
+                        (texto, dur, sid, n))
+            con.execute("UPDATE sesiones SET actualizado=? WHERE id=?", (ahora().isoformat(), sid))
+
+    _archivar_audio(ruta)
+    return cerrar_sesion_si_esta_completa(sid)
+
+
+def _archivar_audio(ruta: Path) -> None:
+    meta_ruta = ruta.with_suffix(".json")
+    if CFG["notas"].get("guardar_audio"):
+        AUDIOS.mkdir(parents=True, exist_ok=True)
+        ruta.replace(AUDIOS / ruta.name)
+        _limpiar(meta_ruta)
+    else:
+        _limpiar(ruta, meta_ruta)
+
+
+def cerrar_sesion_si_esta_completa(sid: int, forzar: bool = False) -> int | None:
+    with closing(db()) as con:
+        ses = con.execute("SELECT * FROM sesiones WHERE id=?", (sid,)).fetchone()
+        listas = con.execute("SELECT count(*) FROM sesion_partes WHERE sesion_id=? AND texto IS NOT NULL",
+                             (sid,)).fetchone()[0]
+    if ses["estado"] == "lista":
+        return ses["captura_id"]
+    if not forzar and (not ses["partes_total"] or listas < ses["partes_total"]):
+        return None  # todavía faltan partes por llegar o por transcribir
+    return cerrar_sesion(sid)
+
+
+def _bloques(texto: str, palabras: int = PALABRAS_POR_BLOQUE) -> list[str]:
+    p = texto.split()
+    return [" ".join(p[i:i + palabras]) for i in range(0, len(p), palabras)]
+
+
+def extraer_largo(texto: str, inicio: datetime, lugar: str | None, tipo: str, nombre: str | None) -> dict:
+    """Analiza una transcripción larga por bloques y une el resultado."""
+    bloques = _bloques(texto)
+    infos = []
+    for i, b in enumerate(bloques, 1):
+        contexto = f"Este es el bloque {i} de {len(bloques)} de la transcripción." if len(bloques) > 1 else None
+        if nombre:
+            contexto = f"Nombre de la {TIPOS_SESION[tipo].lower()}: {nombre}. " + (contexto or "")
+        infos.append(extraer(b, inicio, lugar, tipo, contexto))
+        log.info("%s · bloque %d de %d analizado", TIPOS_SESION[tipo], i, len(bloques))
+
+    unido = {
+        "titulo": infos[0]["titulo"], "resumen": infos[0]["resumen"],
+        "tareas": [t for i in infos for t in i["tareas"]][:30],
+        "datos": [d for i in infos for d in i["datos"]][:30],
+        "ideas": [d for i in infos for d in i["ideas"]][:20],
+        "importancia": max(i["importancia"] for i in infos),
+    }
+    if len(infos) > 1:
+        resumenes = "\n".join(f"- {i['titulo']}: {i['resumen']}" for i in infos)
+        try:
+            r = _json_de(llamar_ia(
+                "Escribe en español el título y el resumen de una grabación larga a partir de los resúmenes "
+                "de sus partes. Responde solo JSON: {\"titulo\": \"máximo 8 palabras\", \"resumen\": "
+                "\"3 a 5 oraciones con lo más importante\"}",
+                f"Tipo: {TIPOS_SESION[tipo]}" + (f" ({nombre})" if nombre else "") + f"\nPartes:\n{resumenes}"))
+            unido["titulo"] = str(r.get("titulo") or unido["titulo"]).strip()[:80]
+            unido["resumen"] = str(r.get("resumen") or unido["resumen"]).strip()[:1200]
+        except Exception as ex:
+            log.warning("No pude escribir el resumen general (%s); uso el de la primera parte", ex)
+    return pulir(unido, texto)
+
+
+def cerrar_sesion(sid: int) -> int:
+    with closing(db()) as con, con:
+        ses = con.execute("SELECT * FROM sesiones WHERE id=?", (sid,)).fetchone()
+        partes = con.execute("SELECT * FROM sesion_partes WHERE sesion_id=? ORDER BY n", (sid,)).fetchall()
+        con.execute("UPDATE sesiones SET estado='procesando', actualizado=? WHERE id=?", (ahora().isoformat(), sid))
+    tipo, nombre = ses["tipo"], ses["nombre"]
+    etiqueta = TIPOS_SESION[tipo]
+    inicio = datetime.fromisoformat(ses["inicio"])
+    dur = sum(p["duracion"] or 0 for p in partes)
+    texto = "\n\n".join(p["texto"] for p in partes if p["texto"])
+    lugar = lugar_de(ses["lat"], ses["lon"])
+    faltan = [str(p["n"]) for p in partes if p["texto"] is None]
+    log.info("Analizando %s %s (%s, %d partes)…", etiqueta.lower(), ses["clave"], duracion(dur), len(partes))
+
+    ia_ok = True
+    if len(texto.split()) < 20:
+        info = normalizar({"titulo": f"{etiqueta} sin voz clara",
+                           "resumen": "Casi no se escuchó voz en esta grabación."})
+    else:
+        try:
+            with despierta():
+                info = extraer_largo(texto, inicio, lugar, tipo, nombre)
+        except Exception as ex:
+            log.warning("La IA falló con la %s (%s); guardo la transcripción completa", etiqueta.lower(), ex)
+            info = normalizar({"titulo": f"{etiqueta} sin analizar",
+                               "resumen": "No pude analizarla con IA; la transcripción completa está en tus notas."})
+            ia_ok = False
+    info["resumen"] = info["resumen"][:1200]
+    if nombre and not info["titulo"].lower().startswith(nombre.lower()):
+        info["titulo"] = f"{nombre}: {info['titulo']}"[:90]
+    if faltan:
+        info["resumen"] += f" (No llegaron todas las partes: faltó la {', '.join(faltan)}.)"
+
+    clave_cfg = "guardar_transcripcion_clase" if tipo == "clase" else "guardar_transcripcion_reunion"
+    guardar = bool(CFG["sesiones"].get(clave_cfg, True)) or not ia_ok
+    cid = guardar_captura(archivo=f"sesion:{ses['clave']}", origen=tipo, inicio=inicio, dur=dur,
+                          lat=ses["lat"], lon=ses["lon"], lugar=lugar, info=info,
+                          transcripcion=texto if guardar else None, ia_ok=ia_ok)
+    with closing(db()) as con, con:
+        con.execute("UPDATE sesiones SET estado='lista', captura_id=?, actualizado=? WHERE id=?",
+                    (cid, ahora().isoformat(), sid))
+        if not guardar:  # sin transcripción guardada, los pedazos tampoco se quedan
+            con.execute("UPDATE sesion_partes SET texto='' WHERE sesion_id=?", (sid,))
+    if guardar:
+        escribir_transcripcion(cid)
+    actualizar_notas(inicio.date())
+    enviar_o_guardar(mensaje_captura(cid))
+    log.info("%s lista: %s", etiqueta, info["titulo"])
+    return cid
+
+
+def archivo_transcripcion(c) -> Path:
+    ini = datetime.fromisoformat(c["inicio"])
+    titulo = re.sub(r'[\\/:*?"<>|]', "", c["titulo"] or "")[:60].strip()
+    return NOTAS / "transcripciones" / f"{ini:%Y-%m-%d %H%M} {titulo}.md"
+
+
+def escribir_transcripcion(cid: int) -> None:
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+    if not c or not c["transcripcion"]:
+        return
+    ruta = archivo_transcripcion(c)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ini = datetime.fromisoformat(c["inicio"])
+    cuerpo = (f"# {c['titulo']}\n\n{fecha_larga(ini.date()).capitalize()}, {ini:%H:%M} · "
+              f"{duracion(c['duracion'])}\n\n> {c['resumen']}\n\n---\n\n{c['transcripcion']}\n")
+    ruta.write_text(cuerpo, encoding="utf-8")
+
+
+def revisar_sesiones_abandonadas() -> None:
+    """Si una sesión dejó de recibir partes hace 2 h (el teléfono se apagó, Eco se cerró), se cierra
+    con lo que llegó para que no quede colgada."""
+    limite = (ahora() - timedelta(hours=2)).isoformat()
+    with closing(db()) as con:
+        viejas = con.execute("SELECT id, clave FROM sesiones WHERE estado != 'lista' AND actualizado < ?",
+                             (limite,)).fetchall()
+    for v in viejas:
+        if CLASE is not None and CLASE.clave_activa() == v["clave"]:
+            continue
+        with closing(db()) as con, con:  # para no volver a encolarla en cada vuelta del reloj
+            con.execute("UPDATE sesiones SET actualizado=? WHERE id=?", (ahora().isoformat(), v["id"]))
+        COLA.put(("cerrar_sesion", v["id"]))
+
+
+def sesiones_en_curso() -> list[dict]:
+    with closing(db()) as con:
+        filas = con.execute(
+            "SELECT s.*, (SELECT count(*) FROM sesion_partes p WHERE p.sesion_id=s.id) AS recibidas, "
+            "(SELECT coalesce(sum(duracion),0) FROM sesion_partes p WHERE p.sesion_id=s.id) AS segundos "
+            "FROM sesiones s WHERE s.estado != 'lista' ORDER BY s.inicio").fetchall()
+    return [{"tipo": f["tipo"], "etiqueta": TIPOS_SESION.get(f["tipo"], "Sesión"), "nombre": f["nombre"],
+             "estado": f["estado"], "partes": f["recibidas"], "segundos": f["segundos"], "inicio": f["inicio"],
+             "terminada": f["partes_total"] is not None} for f in filas]
+
+
 def _limpiar(*rutas: Path) -> None:
     for r in rutas:
         try:
@@ -982,6 +1347,16 @@ _intentos: dict[str, int] = {}
 def trabajador() -> None:
     while True:
         ruta = COLA.get()
+        if isinstance(ruta, tuple):  # orden interna: ("cerrar_sesion", id)
+            try:
+                ESTADO["procesando"] = "sesión"
+                cerrar_sesion_si_esta_completa(ruta[1], forzar=True)
+            except Exception:
+                log.exception("No pude cerrar la sesión %s", ruta[1])
+            finally:
+                ESTADO["procesando"] = None
+                COLA.task_done()
+            continue
         try:
             if ruta.exists():
                 ESTADO["procesando"] = ruta.name
@@ -1037,6 +1412,8 @@ def reloj() -> None:
             vaciar_salida()
             revisar_recordatorios()
             revisar_resumen()
+            revisar_sesiones_abandonadas()
+            revisar_respaldo()
         except Exception:
             log.exception("Error en el reloj")
         time.sleep(30)
@@ -1067,13 +1444,197 @@ def revisar_resumen() -> None:
         estado_set("ultimo_resumen", hoy)
 
 
+# ════════════════════════════ Pregúntale a Eco ════════════════════════════
+
+PALABRAS_VACIAS = set("""a al algo alguien alguna algunas alguno algunos ante antes aqui asi aun cada como con contra
+cual cuales cualquier cuando cuanto de del desde donde dos el ella ellas ello ellos en entre era eran es esa esas ese eso
+esos esta estaba estan estar este esto estos fue fueron ha habia han has hasta hay la las le les lo los mas me mi mis
+mucho muy nada ni no nos o otra otro para pero poco por porque pues que quien quienes se sea ser si sido sin sobre son
+su sus tal tambien te tengo tiene tienen todo todos tu tus un una uno unos y ya yo dijo dijeron decir dime sabes
+recuerdas acuerdas acuerdo hacer hago hice eco favor oye cosa cosas sobre algo dije dijiste""".split())
+
+CAMPOS_INDICE = ("ficha", "transcripcion")
+
+
+def indexar(cid: int) -> None:
+    if not HAY_INDICE:
+        return
+    with closing(db()) as con, con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        if not c:
+            return
+        its = items_de(con, cid)
+        con.execute("DELETE FROM indice WHERE captura_id=?", (cid,))
+        ficha = "\n".join(x for x in [c["titulo"], c["resumen"], c["lugar"]] + [i["texto"] for i in its] if x)
+        con.execute("INSERT INTO indice(texto, captura_id, campo) VALUES(?,?,?)", (ficha, cid, "ficha"))
+        if c["transcripcion"]:
+            for trozo in _bloques(c["transcripcion"], 160):
+                con.execute("INSERT INTO indice(texto, captura_id, campo) VALUES(?,?,?)", (trozo, cid, "transcripcion"))
+
+
+def reindexar_si_hace_falta() -> None:
+    if not HAY_INDICE:
+        return
+    try:
+        with closing(db()) as con:
+            hay = con.execute("SELECT count(*) FROM indice").fetchone()[0]
+            ids = [r[0] for r in con.execute("SELECT id FROM capturas").fetchall()]
+        if not hay and ids:
+            for cid in ids:
+                indexar(cid)
+            log.info("Índice de búsqueda listo (%d momentos)", len(ids))
+    except Exception:
+        log.exception("No pude armar el índice de búsqueda")
+
+
+def _palabras_clave(pregunta: str) -> list[str]:
+    palabras = re.findall(r"[a-z0-9]+", _sin_acentos(pregunta))
+    return list(dict.fromkeys(w for w in palabras if len(w) > 2 and w not in PALABRAS_VACIAS))[:12]
+
+
+def buscar_para_pregunta(pregunta: str, limite: int = 6) -> list[tuple[sqlite3.Row, str]]:
+    claves = _palabras_clave(pregunta)
+    if not claves:
+        return []
+    with closing(db()) as con:
+        if HAY_INDICE:
+            consulta = " OR ".join(f'"{w}"*' for w in claves)
+            filas = con.execute("SELECT captura_id, texto FROM indice WHERE indice MATCH ? "
+                                "ORDER BY bm25(indice) LIMIT 24", (consulta,)).fetchall()
+        else:
+            condicion = " OR ".join(["titulo LIKE ? OR resumen LIKE ? OR transcripcion LIKE ?"] * len(claves))
+            valores = [f"%{w}%" for w in claves for _ in range(3)]
+            filas = con.execute(f"SELECT id AS captura_id, coalesce(resumen,'') AS texto FROM capturas "
+                                f"WHERE {condicion} ORDER BY inicio DESC LIMIT 24", valores).fetchall()
+        elegidos: list[tuple[sqlite3.Row, str]] = []
+        por_captura: dict[int, int] = {}
+        for f in filas:
+            cid = int(f["captura_id"])
+            if por_captura.get(cid, 0) >= 2:
+                continue
+            c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+            if not c:
+                continue
+            por_captura[cid] = por_captura.get(cid, 0) + 1
+            elegidos.append((c, f["texto"]))
+            if len(elegidos) >= limite:
+                break
+    return elegidos
+
+
+def responder_pregunta(pregunta: str) -> dict:
+    nombre = CFG["usuario"]["nombre"]
+    hallados = buscar_para_pregunta(pregunta)
+    notas = []
+    for i, (c, texto) in enumerate(hallados, 1):
+        ini = datetime.fromisoformat(c["inicio"])
+        tipo = TIPOS_SESION.get(c["origen"], "Momento")
+        notas.append(f"[{i}] {tipo} del {fecha_larga(ini.date())}, {ini:%H:%M} — «{c['titulo']}»\n{texto[:1400]}")
+    tareas = pendientes(15)
+    lista_tareas = "\n".join(f"- {t['texto']}" + (f" ({_cuando_tarea(t)})" if t["fecha"] else "") for t in tareas)
+    sistema = f"""Eres Eco, la memoria personal de {nombre}. Respondes sus preguntas sobre lo que Eco guardó:
+momentos del día, clases, reuniones y tareas.
+Reglas:
+- Usa SOLO la información de las notas y tareas que te doy. Si la respuesta no está ahí, dilo claro
+  ("No encontré eso en lo que guardé") y sugiere qué palabra buscar.
+- Responde en español, directo y corto: máximo 6 oraciones o una lista corta.
+- Cuando uses una nota, di de cuándo es (por ejemplo: "en la clase del jueves 15 a las 9:00").
+- No inventes fechas, nombres ni datos. Las transcripciones automáticas pueden tener errores."""
+    actual = ahora()
+    usuario = (f"Hoy es {fecha_larga(actual.date())}, {actual:%H:%M}.\n\nPregunta de {nombre}: {pregunta}\n\n"
+               f"Notas encontradas:\n" + ("\n\n".join(notas) if notas else "(ninguna)") +
+               f"\n\nTareas pendientes ahora:\n{lista_tareas or '(ninguna)'}")
+    respuesta = llamar_ia(sistema, usuario, json_mode=False).strip()
+    vistos, fuentes = set(), []
+    for c, _ in hallados:
+        if c["id"] in vistos:
+            continue
+        vistos.add(c["id"])
+        ini = datetime.fromisoformat(c["inicio"])
+        fuentes.append({"id": c["id"], "fecha": ini.date().isoformat(), "hora": f"{ini:%H:%M}",
+                        "titulo": c["titulo"], "cuando": f"{fecha_corta(ini.date())} {ini:%H:%M}"})
+    return {"respuesta": respuesta, "fuentes": fuentes[:5]}
+
+
+def es_pregunta(texto: str) -> bool:
+    t = texto.strip()
+    return t.endswith("?") or t.startswith("¿")
+
+
+# ════════════════════════════ Respaldo diario ════════════════════════════
+
+def carpeta_respaldo() -> Path | None:
+    elegida = str(CFG["respaldo"].get("carpeta") or "").strip()
+    if elegida:
+        return Path(elegida).expanduser()
+    for variable in ("OneDriveConsumer", "OneDrive"):
+        raiz = os.environ.get(variable)
+        if raiz and Path(raiz).exists():
+            return Path(raiz) / "Eco respaldos"
+    casa = Path.home() / "OneDrive"
+    return casa / "Eco respaldos" if casa.exists() else None
+
+
+def hacer_respaldo() -> Path:
+    import zipfile
+    destino = carpeta_respaldo()
+    if destino is None:
+        raise RuntimeError("OneDrive no está configurado en esta laptop")
+    destino.mkdir(parents=True, exist_ok=True)
+    copia_db = DATOS / "respaldo_tmp.db"
+    _limpiar(copia_db)
+    with closing(db()) as origen, closing(sqlite3.connect(copia_db)) as copia:
+        origen.backup(copia)  # copia consistente aunque Eco esté escribiendo
+    nombre = f"eco_{ahora():%Y-%m-%d_%H%M}.zip"
+    temporal = destino / (nombre + ".part")
+    try:
+        with zipfile.ZipFile(temporal, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(copia_db, "datos/eco.db")
+            for f in NOTAS.rglob("*"):
+                if f.is_file():
+                    z.write(f, Path("notas") / f.relative_to(NOTAS))
+        temporal.replace(destino / nombre)
+    finally:
+        _limpiar(copia_db, temporal)
+    conservar = max(1, int(CFG["respaldo"].get("conservar") or 14))
+    for viejo in sorted(destino.glob("eco_*.zip"))[:-conservar]:
+        _limpiar(viejo)
+    estado_set("ultimo_respaldo", ahora().isoformat(timespec="seconds"))
+    estado_set("respaldo_error", "")
+    log.info("Respaldo guardado en %s", destino / nombre)
+    return destino / nombre
+
+
+def revisar_respaldo() -> None:
+    if not CFG["respaldo"].get("activo", True):
+        return
+    ultimo = estado_get("ultimo_respaldo")
+    if ultimo and ahora() - datetime.fromisoformat(ultimo) < timedelta(hours=20):
+        return
+    intento = estado_get("respaldo_intento")
+    if intento and ahora() - datetime.fromisoformat(intento) < timedelta(hours=1):
+        return  # si falló, reintenta cada hora y no en cada vuelta del reloj
+    estado_set("respaldo_intento", ahora().isoformat(timespec="seconds"))
+    try:
+        hacer_respaldo()
+    except Exception as ex:
+        estado_set("respaldo_error", str(ex))
+        log.warning("No pude hacer el respaldo: %s", ex)
+
+
+def estado_respaldo() -> dict:
+    destino = carpeta_respaldo()
+    return {"activo": bool(CFG["respaldo"].get("activo", True)), "ultimo": estado_get("ultimo_respaldo"),
+            "carpeta": str(destino) if destino else None, "error": estado_get("respaldo_error") or None}
+
+
 # ════════════════════════════ Servidor HTTP ════════════════════════════
 
 def _nombre_seguro(nombre: str) -> str:
     base = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(nombre or "").name)[:80].strip("._")
     if not base:
         base = f"eco_{int(time.time())}"
-    return base if base.endswith(".wav") else base + ".wav"
+    return base if Path(base).suffix.lower() in EXT_AUDIO else base + ".wav"
 
 
 # Lo que el panel muestra sobre Eco mientras corre.
@@ -1133,6 +1694,9 @@ def api_estado(es_local: bool) -> dict:
         "momentos_hoy": momentos_hoy, "pendientes": pendientes_n,
         "proximo": _tarea_json(prox) if prox else None,
         "hoy": hoy, "es_local": es_local, "notas": str(NOTAS) if es_local else None,
+        "sesiones": sesiones_en_curso(),
+        "clase": CLASE.estado() if CLASE is not None else None,
+        "respaldo": estado_respaldo() if es_local else None,
     }
 
 
@@ -1258,13 +1822,42 @@ class Manejador(BaseHTTPRequestHandler):
         ruta = self.path.split("?")[0]
         if ruta == "/subir":
             return self._subir()
-        if ruta == "/api/tarea":
+        if ruta.startswith("/api/"):
             # La cabecera propia impide que otra página web mande esto a tus espaldas.
             if self.headers.get("X-Eco-Panel") != "1" or not self._puede_ver_panel():
                 return self._json(401, {"ok": False, "error": "token"})
             try:
-                largo = min(int(self.headers.get("Content-Length") or 0), 2048)
+                largo = min(int(self.headers.get("Content-Length") or 0), 8192)
                 datos = json.loads(self.rfile.read(largo) or b"{}")
+            except ValueError:
+                return self._json(400, {"ok": False})
+            if ruta == "/api/preguntar":
+                pregunta = str(datos.get("pregunta") or "").strip()[:500]
+                if not pregunta:
+                    return self._json(400, {"ok": False, "error": "vacía"})
+                try:
+                    return self._json(200, {"ok": True, **responder_pregunta(pregunta)})
+                except Exception as ex:
+                    log.warning("No pude responder la pregunta del panel (%s)", ex)
+                    return self._json(503, {"ok": False, "error": "La inteligencia no respondió. ¿Está encendido Ollama?"})
+            if ruta in ("/api/clase", "/api/respaldo") and not self._es_local():
+                return self._json(403, {"ok": False, "error": "Solo desde la laptop"})
+            if ruta == "/api/clase":
+                if CLASE is None:
+                    return self._json(503, {"ok": False})
+                if datos.get("accion") == "iniciar":
+                    return self._json(200, {"ok": True, "clase": CLASE.iniciar(datos.get("nombre"))})
+                CLASE.terminar(esperar=True)
+                return self._json(200, {"ok": True, "clase": CLASE.estado()})
+            if ruta == "/api/respaldo":
+                try:
+                    hecho = hacer_respaldo()
+                    return self._json(200, {"ok": True, "archivo": str(hecho)})
+                except Exception as ex:
+                    estado_set("respaldo_error", str(ex))
+                    return self._json(200, {"ok": False, "error": str(ex)})
+        if ruta == "/api/tarea":
+            try:
                 tarea = api_marcar_tarea(int(datos["id"]), bool(datos.get("hecho", True)))
             except (ValueError, KeyError, TypeError):
                 return self._json(400, {"ok": False})
@@ -1433,8 +2026,14 @@ def arrancar(consola: bool = True) -> ServidorEco:
         raise YaEncendido(puerto)
     servidor = ServidorEco(("0.0.0.0", puerto), Manejador)
     ESTADO["inicio"] = ahora().isoformat(timespec="seconds")
-    for f in sorted(ENTRADA.glob("*.wav")):  # lo que quedó pendiente la última vez
-        COLA.put(f)
+    global CLASE
+    from clase import GrabadoraClase
+    CLASE = GrabadoraClase(ENTRADA, COLA.put, log,
+                           minutos_silencio=int(CFG["sesiones"].get("clase_auto_terminar_min") or 20))
+    for f in sorted(ENTRADA.iterdir()):  # lo que quedó pendiente la última vez
+        if f.suffix.lower() in EXT_AUDIO:
+            COLA.put(f)
+    threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
     for destino in (trabajador, bot, reloj):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
     log.info("Eco encendido (puerto %d)", puerto)

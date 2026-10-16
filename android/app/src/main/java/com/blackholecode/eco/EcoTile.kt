@@ -19,7 +19,7 @@ class EcoTile : TileService() {
 
     override fun onClick() {
         super.onClick()
-        val listening = EcoState.running && !EcoState.paused
+        val listening = EcoState.running && !EcoState.paused && EcoState.reunionInicioMs == 0L
         if (listening) {
             EcoService.send(this, EcoService.ACTION_SAVE)
             qsTile?.apply {
@@ -28,7 +28,7 @@ class EcoTile : TileService() {
             }
             return
         }
-        // Eco está apagado o en pausa: abrimos la app para que lo reactives.
+        // Eco está apagado, en pausa o grabando una reunión: abrimos la app.
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(MainActivity.EXTRA_AUTOSTART, true)
@@ -52,6 +52,7 @@ class EcoTile : TileService() {
         tile.label = "Guardar momento"
         if (Build.VERSION.SDK_INT >= 29) {
             tile.subtitle = when {
+                EcoState.reunionInicioMs > 0 -> "Grabando reunión"
                 listening -> "Eco escuchando"
                 EcoState.paused -> "Eco en pausa"
                 else -> "Eco apagado"

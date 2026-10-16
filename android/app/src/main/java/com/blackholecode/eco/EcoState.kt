@@ -16,6 +16,11 @@ object EcoState {
     /** Segundos que faltan para cerrar el momento que se está guardando; -1 si no hay ninguno. */
     @Volatile var savingRemainingSec = -1
 
+    /** Modo reunión: cuándo empezó (0 = no hay reunión) y cuántas partes van. */
+    @Volatile var reunionInicioMs = 0L
+    @Volatile var reunionParte = 0
+    @Volatile var reunionError: String? = null
+
     @Volatile var lastSaved = ""
     @Volatile var lastUpload = "Todavía no se ha subido nada"
     @Volatile var lastUploadOk = true

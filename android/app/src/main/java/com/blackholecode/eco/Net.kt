@@ -43,6 +43,7 @@ object Net {
     }
 
     fun upload(server: String, token: String, wav: File, metaJson: String?): Result {
+        val tipo = if (wav.name.endsWith(".m4a")) "audio/mp4" else "audio/wav"
         val base = baseUrl(server) ?: return Result(false, "Falta la dirección de tu laptop")
         var c: HttpURLConnection? = null
         return try {
@@ -52,7 +53,7 @@ object Net {
                 connectTimeout = 4000
                 readTimeout = 60000
                 setFixedLengthStreamingMode(wav.length())
-                setRequestProperty("Content-Type", "audio/wav")
+                setRequestProperty("Content-Type", tipo)
                 setRequestProperty("X-Eco-Token", token)
                 setRequestProperty("X-Eco-Archivo", wav.name)
                 if (metaJson != null) {

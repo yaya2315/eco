@@ -5,6 +5,7 @@ import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -74,6 +75,7 @@ class MainActivity : Activity() {
     private lateinit var halo: View
     private lateinit var saveButton: TextView
     private lateinit var saveCaption: TextView
+    private lateinit var meetingButton: Button
     private lateinit var pauseButton: Button
     private lateinit var powerButton: Button
     private lateinit var serverInput: EditText
@@ -213,7 +215,14 @@ class MainActivity : Activity() {
         val title: String
         val detail: String
         val color: Int
+        val enReunion = s.reunionInicioMs > 0
         when {
+            enReunion -> {
+                title = "Grabando reunión"
+                val seg = ((System.currentTimeMillis() - s.reunionInicioMs) / 1000).toInt()
+                detail = "Llevas ${formatHms(seg)} · parte ${s.reunionParte}. Todo se guarda hasta que la termines."
+                color = C_REC
+            }
             !s.running -> {
                 title = "Eco está apagado"
                 detail = if (error != null) error else "Enciéndelo para empezar a guardar momentos."
@@ -245,23 +254,28 @@ class MainActivity : Activity() {
         statusDetail.text = detail
         (statusDot.background as GradientDrawable).setColor(color)
 
-        val pending = File(filesDir, "pendientes").list()?.count { it.endsWith(".wav") } ?: 0
+        val pending = File(filesDir, "pendientes").listFiles()?.count { EcoService.isUploadable(it) } ?: 0
         statPending.text = if (pending == 0) "Nada pendiente" else "$pending por subir"
         statUpload.text = s.lastUpload
         statUpload.setTextColor(if (s.lastUploadOk) C_TEXT else C_WARN)
 
         val listening = s.running && !s.paused
-        saveButton.isEnabled = listening
-        saveButton.alpha = if (listening) 1f else 0.4f
+        saveButton.isEnabled = listening || enReunion
+        saveButton.alpha = if (listening || enReunion) 1f else 0.4f
+        saveButton.text = if (enReunion) "Terminar\nreunión" else "Guardar\nmomento"
+        saveButton.contentDescription = if (enReunion) "Terminar reunión" else "Guardar momento"
         saveCaption.text = when {
+            enReunion -> "Cada 10 minutos se sube una parte a tu laptop (unos 15 MB por hora)." +
+                (s.reunionError?.let { "\n$it" } ?: "")
             !s.running -> "Enciende Eco para usar el botón."
             s.paused -> "Reanuda para volver a guardar momentos."
             else -> "Guarda los últimos ${formatDuration(s.beforeSec)} y lo que sigue. " +
                 "También desde la notificación o el botón rápido del panel."
         }
-        setHalo(listening, if (s.savingRemainingSec >= 0) C_REC else C_ACCENT)
+        setHalo(listening || enReunion, if (s.savingRemainingSec >= 0 || enReunion) C_REC else C_ACCENT)
+        meetingButton.visibility = if (enReunion) View.GONE else View.VISIBLE
 
-        pauseButton.visibility = if (s.running) View.VISIBLE else View.GONE
+        pauseButton.visibility = if (s.running && !enReunion) View.VISIBLE else View.GONE
         pauseButton.text = if (s.paused) "Reanudar" else "Pausar"
         powerButton.text = if (s.running) "Apagar Eco" else "Encender Eco"
         styleButton(powerButton, primary = !s.running)
@@ -296,6 +310,10 @@ class MainActivity : Activity() {
     // ───────────────────────── Acciones ─────────────────────────
 
     private fun onSaveTapped(v: View) {
+        if (EcoState.reunionInicioMs > 0) {
+            confirmStopMeeting()
+            return
+        }
         if (!(EcoState.running && !EcoState.paused)) return
         val feedback = if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY
         v.performHapticFeedback(feedback)
@@ -304,6 +322,32 @@ class MainActivity : Activity() {
         }.start()
         EcoService.send(this, EcoService.ACTION_SAVE)
         ui.postDelayed({ render() }, 150)
+    }
+
+    private fun startMeeting() {
+        if (!hasMic()) {
+            ensurePermissions()
+            return
+        }
+        EcoService.send(this, EcoService.ACTION_REUNION_INICIAR)
+        ui.postDelayed({ render() }, 400)
+    }
+
+    private fun confirmStopMeeting() {
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("¿Terminar la reunión?")
+            .setMessage("Se deja de grabar y la última parte se sube a tu laptop para analizarla.")
+            .setPositiveButton("Terminar") { _, _ ->
+                EcoService.send(this, EcoService.ACTION_REUNION_TERMINAR)
+                ui.postDelayed({ render() }, 400)
+            }
+            .setNegativeButton("Seguir grabando", null)
+            .show()
+    }
+
+    private fun formatHms(totalSec: Int): String {
+        val s = totalSec.coerceAtLeast(0)
+        return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60) else formatDuration(s)
     }
 
     private fun saveConnection() {
@@ -489,6 +533,10 @@ class MainActivity : Activity() {
             setLineSpacing(0f, 1.2f)
         }
         wrap.addView(saveCaption, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+            bottomMargin = dp(12)
+        })
+        meetingButton = button("Iniciar modo reunión", primary = false) { startMeeting() }
+        wrap.addView(meetingButton, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(16)
         })
         return wrap

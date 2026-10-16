@@ -133,6 +133,28 @@ Eco vive junto al reloj (ícono de anillos). Clic → abre tu **panel**; clic de
 
 Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 
+### 9. Modo clase, modo reunión, preguntas y respaldo
+
+**Modo clase (laptop).** Graba lo que suena en la laptop (Meet, Zoom, Teams), no tu micrófono.
+- Empieza desde el panel (**Grabar la clase**, con nombre opcional) o con clic derecho en el ícono › **Grabar la clase**.
+- Cada 10 minutos Eco transcribe lo grabado; al terminar te manda por Telegram las tareas, fechas y temas de examen.
+- Si pasan 20 minutos en silencio, se termina sola.
+- La transcripción completa queda en `notas/transcripciones/`.
+
+**Modo reunión (teléfono).** Botón **Iniciar modo reunión** en la app: graba por horas hasta que tocas **Terminar reunión** (en la app o en la notificación).
+- Usa unos 15 MB por hora y sube una parte cada 10 minutos, así que la laptop va adelantando el trabajo.
+- Mientras dura la reunión, el botón de momentos se apaga: la reunión ya lo graba todo.
+
+**Pregúntale a Eco.**
+- En Telegram, escribe una pregunta con signo de interrogación: *¿Qué dejó de tarea el profe de física?*
+- En el panel, cambia a **Preguntarle a Eco** arriba a la derecha.
+- Eco busca en todo lo guardado (momentos, clases, reuniones) y te dice de dónde lo sacó.
+
+**Respaldo diario.** Una copia ZIP de tus notas y tu base de datos en `OneDrive\Eco respaldos`; guarda las últimas 14.
+- Necesitas tener **OneDrive** iniciado en la laptop.
+- En el panel ves cuándo fue la última copia y puedes hacer una al momento con **Respaldar ahora**.
+- Tus claves (`config.toml`) no se copian a la nube.
+
 ---
 
 ## Uso diario
@@ -191,5 +213,6 @@ Actions vuelve a compilar el APK. Lo instalas encima del anterior y tus ajustes 
 ## Lo que viene
 
 - **v2:** registro de ubicación del día, resumen con mapa y tareas directo a Google Calendar.
+- **Siguiente:** tareas de Google Classroom y Google Calendar con la cuenta del colegio.
 - **v3:**
   - modo *siempre escuchando* opcional;
