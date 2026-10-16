@@ -13,8 +13,8 @@ android {
         applicationId = "com.blackholecode.eco"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     // Llave fija: así cada APK nuevo se instala encima del anterior sin borrar tus ajustes.
@@ -47,4 +47,9 @@ kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }
+}
+
+dependencies {
+    // Escáner de QR de Google Play Services: sin permiso de cámara y sin pantalla propia que mantener.
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 }

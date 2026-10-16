@@ -72,6 +72,9 @@ def main() -> None:
     def abrir_panel(icon=None, item=None):
         webbrowser.open(panel)
 
+    def conectar_telefono(icon=None, item=None):
+        webbrowser.open(panel + "#conectar")
+
     def abrir_notas(icon=None, item=None):
         os.startfile(eco.NOTAS)
 
@@ -129,6 +132,7 @@ def main() -> None:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(texto_clase, alternar_clase),
             pystray.MenuItem("Abrir panel", abrir_panel, default=True),
+            pystray.MenuItem("Conectar el teléfono (QR)", conectar_telefono),
             pystray.MenuItem("Abrir carpeta de notas", abrir_notas),
             pystray.MenuItem("Ver registro", abrir_registro),
             pystray.Menu.SEPARATOR,

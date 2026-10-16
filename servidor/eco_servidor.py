@@ -1745,6 +1745,24 @@ def api_marcar_tarea(tarea_id: int, hecho: bool) -> dict | None:
         return _tarea_json(con.execute("SELECT * FROM items WHERE id=?", (tarea_id,)).fetchone())
 
 
+def datos_conexion() -> dict:
+    """Lo que necesita el teléfono para conectarse, en un enlace que cabe en un código QR."""
+    puerto = int(CFG["servidor"]["puerto"])
+    fija = direccion_fija()
+    wifi = f"{ip_local()}:{puerto}"
+    principal = f"{fija}:{puerto}" if fija else wifi
+    consulta = urllib.parse.urlencode({"v": 1, "d": principal, "w": wifi, "t": str(CFG["servidor"]["token"])})
+    enlace = f"eco://conectar?{consulta}"
+    svg = None
+    try:
+        import segno
+        svg = segno.make(enlace, error="m", micro=False).svg_inline(
+            scale=1, border=3, dark="#0A0A12", light="#FFFFFF", omitsize=True, svgclass="qr")
+    except Exception as ex:  # segno sin instalar: el panel muestra los datos para escribirlos a mano
+        log.warning("Sin código QR (%s); corre instalar_inicio.bat", ex)
+    return {"direccion": principal, "fija": bool(fija), "svg": svg, "enlace": enlace}
+
+
 _PANEL: bytes | None = None
 
 
@@ -1816,6 +1834,10 @@ class Manejador(BaseHTTPRequestHandler):
                 return self._json(200, api_momentos(params.get("fecha"), (params.get("q") or "").strip()[:80]))
             if ruta == "/api/pendientes":
                 return self._json(200, api_pendientes())
+            if ruta == "/api/conectar":
+                if not self._es_local():  # el QR lleva tu token: solo se muestra en la pantalla de la laptop
+                    return self._json(403, {"ok": False, "error": "Solo desde la laptop"})
+                return self._json(200, datos_conexion())
         self._json(404, {"ok": False})
 
     def do_POST(self) -> None:

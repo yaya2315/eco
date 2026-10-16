@@ -34,6 +34,9 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import java.io.File
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -96,10 +99,13 @@ class MainActivity : Activity() {
         setContentView(buildUi())
         autostartPending = intent?.getBooleanExtra(EXTRA_AUTOSTART, false) == true
         ensurePermissions()
+        // Solo la primera vez: si Android recrea la pantalla (al girarla), no volvemos a preguntar.
+        if (savedInstanceState == null) intent?.data?.let { applyPairing(it.toString(), fromScanner = false) }
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        intent?.data?.let { applyPairing(it.toString(), fromScanner = false) }
         if (intent?.getBooleanExtra(EXTRA_AUTOSTART, false) == true) {
             autostartPending = true
             tryAutostart()
@@ -355,7 +361,7 @@ class MainActivity : Activity() {
         prefs.token = tokenInput.text.toString()
     }
 
-    private fun testConnection() {
+    private fun testConnection(onOk: (() -> Unit)? = null) {
         saveConnection()
         connResult.setTextColor(C_MUTED)
         connResult.text = "Buscando tu laptop…"
@@ -366,8 +372,59 @@ class MainActivity : Activity() {
             runOnUiThread {
                 connResult.setTextColor(if (r.ok) C_LIVE else C_WARN)
                 connResult.text = (if (r.ok) "✓  " else "✕  ") + r.message
+                if (r.ok) onOk?.invoke()
             }
         }.start()
+    }
+
+    // ───────────────────────── Conectar con código QR ─────────────────────────
+
+    /** Abre el escáner de Google (no pide permiso de cámara: lo maneja Play Services). */
+    private fun scanQr() {
+        val opciones = GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .enableAutoZoom()
+            .build()
+        GmsBarcodeScanning.getClient(this, opciones).startScan()
+            .addOnSuccessListener { codigo -> applyPairing(codigo.rawValue, fromScanner = true) }
+            .addOnFailureListener { e ->
+                connResult.setTextColor(C_WARN)
+                connResult.text = "✕  No se pudo abrir el escáner (${e.message ?: "sin detalles"}). " +
+                    "Revisa tu internet la primera vez, o escribe la dirección a mano."
+            }
+    }
+
+    /**
+     * El QR del panel trae: eco://conectar?d=DIRECCIÓN&w=DIRECCIÓN_WIFI&t=TOKEN
+     * Si llega desde otra app o una página (no desde nuestro escáner), se pide confirmación,
+     * para que nadie pueda cambiar a escondidas a dónde se suben tus audios.
+     */
+    private fun applyPairing(raw: String?, fromScanner: Boolean) {
+        val datos = Net.parsePairing(raw)
+        if (datos == null) {
+            connResult.setTextColor(C_WARN)
+            connResult.text = "✕  Ese código no es de Eco. Ábrelo desde el panel de tu laptop."
+            return
+        }
+        val aplicar = {
+            serverInput.setText(datos.server)
+            tokenInput.setText(datos.token)
+            saveConnection()
+            testConnection {
+                toast("Conectado con tu laptop")
+                if ((File(filesDir, "pendientes").listFiles()?.count { EcoService.isUploadable(it) } ?: 0) > 0) uploadNow()
+            }
+        }
+        if (fromScanner) {
+            aplicar()
+        } else {
+            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("¿Conectar Eco con esta laptop?")
+                .setMessage("Tus audios se van a subir a ${datos.server}. Acepta solo si ese código lo sacaste del panel de tu laptop.")
+                .setPositiveButton("Conectar") { _, _ -> aplicar() }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        }
     }
 
     private fun uploadNow() {
@@ -546,9 +603,11 @@ class MainActivity : Activity() {
         val card = card()
         card.addView(label("Tu laptop", 17f, C_TEXT, medium = true))
         card.addView(
-            label("Al encender el servidor, la laptop te muestra estos dos datos.", 13f, C_MUTED),
+            label("En el panel de la laptop toca \"Conectar el teléfono con un QR\" y escanéalo aquí. " +
+                "También puedes escribir los datos a mano.", 13f, C_MUTED).apply { setLineSpacing(0f, 1.2f) },
             lp(top = 4)
         )
+        card.addView(button("Escanear código QR", primary = true) { scanQr() }, lp(top = 14))
         card.addView(overline("DIRECCIÓN"), lp(top = 16))
         serverInput = input("192.168.1.50:8765", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply {
             setText(prefs.server)

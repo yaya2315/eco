@@ -4,3 +4,4 @@ tzdata
 pystray>=0.19
 pillow>=10
 soundcard>=0.4.4
+segno>=1.5

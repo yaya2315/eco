@@ -150,6 +150,14 @@ Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 - En el panel, cambia a **Preguntarle a Eco** arriba a la derecha.
 - Eco busca en todo lo guardado (momentos, clases, reuniones) y te dice de dónde lo sacó.
 
+**Conectar el teléfono con un QR.** Así no escribes la dirección ni el token a mano:
+1. En la laptop, abre el panel y toca **Conectar el teléfono con un QR**, o usa clic derecho en el ícono › **Conectar el teléfono (QR)**.
+2. En la app, en **Tu laptop**, toca **Escanear código QR** y apunta al código.
+
+La app se queda con la dirección fija de Tailscale (o la del Wi-Fi si no tienes Tailscale) y prueba la conexión sola.
+- El código lleva tu token: solo se muestra en la pantalla de la laptop. No le tomes foto.
+- El escáner es el de Google Play Services, así que no pide permiso de cámara; la primera vez necesita internet para bajarse.
+
 **Respaldo diario.** Una copia ZIP de tus notas y tu base de datos en `OneDrive\Eco respaldos`; guarda las últimas 14.
 - Necesitas tener **OneDrive** iniciado en la laptop.
 - En el panel ves cuándo fue la última copia y puedes hacer una al momento con **Respaldar ahora**.

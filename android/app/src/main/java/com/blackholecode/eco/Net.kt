@@ -11,6 +11,40 @@ object Net {
 
     class Result(val ok: Boolean, val message: String)
 
+    class Pairing(val server: String, val token: String)
+
+    /** Lee el enlace del QR (eco://conectar?d=…&t=…). Devuelve null si no es de Eco o no es seguro. */
+    fun parsePairing(raw: String?): Pairing? {
+        if (raw.isNullOrBlank()) return null
+        val uri = try { android.net.Uri.parse(raw.trim()) } catch (_: Exception) { return null }
+        if (uri.scheme != "eco" || uri.host != "conectar") return null
+        val server = (uri.getQueryParameter("d") ?: uri.getQueryParameter("w"))?.trim().orEmpty()
+        val token = uri.getQueryParameter("t")?.trim().orEmpty()
+        if (server.isEmpty() || token.length < 8 || !isPrivateAddress(server)) return null
+        return Pairing(server, token)
+    }
+
+    /**
+     * Solo aceptamos direcciones privadas: Tailscale (100.64.0.0/10), redes de casa
+     * (10.x, 172.16-31.x, 192.168.x) o nombres de Tailscale (*.ts.net). Así un QR o enlace
+     * falso no puede mandar tus audios a un servidor de internet.
+     */
+    fun isPrivateAddress(server: String): Boolean {
+        val host = server.removePrefix("http://").substringBefore('/').substringBefore(':').lowercase()
+        if (host.endsWith(".ts.net")) return true
+        val partes = host.split('.')
+        if (partes.size != 4) return false
+        val n = partes.map { it.toIntOrNull() ?: return false }
+        if (n.any { it !in 0..255 }) return false
+        return when {
+            n[0] == 10 -> true
+            n[0] == 192 && n[1] == 168 -> true
+            n[0] == 172 && n[1] in 16..31 -> true
+            n[0] == 100 && n[1] in 64..127 -> true
+            else -> false
+        }
+    }
+
     /** "192.168.1.50" -> "http://192.168.1.50:8765" */
     fun baseUrl(raw: String): String? {
         var s = raw.trim().removeSuffix("/")

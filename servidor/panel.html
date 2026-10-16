@@ -247,6 +247,22 @@ details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: 
 .grabando { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s3); font: 600 var(--t-xl)/1 var(--display); font-variant-numeric: tabular-nums; }
 .grabando .punto { background: var(--rec); box-shadow: 0 0 0 4px rgba(255, 92, 122, 0.18); }
 .error-texto { color: var(--warn) !important; }
+#abrir-qr { margin: var(--s2) 0 var(--s3); }
+
+/* ── Conectar con QR ── */
+.conectar {
+  width: min(420px, calc(100vw - 32px)); padding: var(--s6); border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--surface); color: var(--text); text-align: center;
+}
+.conectar::backdrop { background: rgba(5, 5, 10, 0.72); backdrop-filter: blur(4px); }
+.conectar h2 { margin: 0; font: 600 var(--t-xl)/1.2 var(--display); }
+.conectar p { margin: var(--s2) 0 0; color: var(--muted); }
+.conectar p strong { color: var(--text); font-weight: 600; }
+.qr-tarjeta { margin: var(--s5) auto 0; width: min(280px, 100%); aspect-ratio: 1; padding: var(--s2); border-radius: var(--r-md); background: #fff; display: grid; place-items: center; }
+.qr-tarjeta svg { width: 100%; height: 100%; display: block; }
+.qr-tarjeta.sin-qr { aspect-ratio: auto; background: var(--surface-2); color: var(--muted); padding: var(--s4); font-size: var(--t-sm); text-align: left; }
+.conectar-dir { font-variant-numeric: tabular-nums; color: var(--text) !important; }
+.conectar-nota { font-size: var(--t-xs); color: var(--faint) !important; }
 .no { color: var(--warn); }
 
 /* ── Estados vacíos y acceso ── */
@@ -352,11 +368,21 @@ details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: 
 
       <section class="panel" aria-labelledby="sis-titulo">
         <h3 class="seccion-titulo" id="sis-titulo">Eco en esta laptop</h3>
+        <button class="boton-principal" type="button" id="abrir-qr" hidden>Conectar el teléfono con un QR</button>
         <dl class="datos" id="sistema"></dl>
       </section>
     </aside>
   </div>
 </div>
+
+<dialog class="conectar" id="conectar" aria-labelledby="conectar-titulo">
+  <h2 id="conectar-titulo">Conecta tu teléfono</h2>
+  <p>En la app <strong>Eco</strong>, toca <strong>Escanear código QR</strong> y apunta a este código.</p>
+  <div class="qr-tarjeta" id="qr"></div>
+  <p class="conectar-dir" id="conectar-dir"></p>
+  <p class="conectar-nota">El código lleva tu token de Eco: no le tomes foto ni lo compartas.</p>
+  <button class="boton-principal" type="button" id="cerrar-qr">Listo</button>
+</dialog>
 
 <form class="acceso" id="acceso" hidden>
   <h2>Abre tu panel de Eco</h2>
@@ -480,8 +506,29 @@ function pintarEstado(e) {
     fila("Respaldo diario", dd);
   }
   $("sistema").innerHTML = filas.join("");
+  $("abrir-qr").hidden = !e.es_local;
+  if (e.es_local && location.hash === "#conectar" && !ui.qrAbierto) { ui.qrAbierto = true; abrirQr(); }
   pintarClase(e);
 }
+
+async function abrirQr() {
+  const dialogo = $("conectar");
+  try {
+    const c = await api("/api/conectar");
+    const caja = $("qr");
+    caja.classList.toggle("sin-qr", !c.svg);
+    caja.innerHTML = c.svg || `No pude dibujar el código (falta una pieza: corre <strong>instalar_inicio.bat</strong>). Mientras tanto, escribe en la app la dirección de abajo y tu token de config.toml.`;
+    const svg = caja.querySelector("svg");
+    if (svg) { svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Código QR para conectar la app Eco"); }
+    $("conectar-dir").textContent = `${c.direccion}${c.fija ? " · dirección fija de Tailscale" : " · solo funciona en este Wi-Fi"}`;
+  } catch {
+    $("qr").classList.add("sin-qr");
+    $("qr").textContent = "El código solo se muestra en la pantalla de la laptop.";
+  }
+  if (!dialogo.open) dialogo.showModal();
+}
+$("abrir-qr").addEventListener("click", abrirQr);
+$("cerrar-qr").addEventListener("click", () => $("conectar").close());
 
 function pintarClase(e) {
   const caja = $("clase");

@@ -32,7 +32,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Enlaces eco://conectar?… (el QR del panel), por si lo escaneas con la cámara del teléfono -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="eco" android:host="conectar" />
+            </intent-filter>
         </activity>
+
+        <!-- Que Play Services descargue el escáner de QR al instalar la app, no al primer uso -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
 
         <service
             android:name=".EcoService"
