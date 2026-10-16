@@ -79,7 +79,7 @@ git push -u origin main
 6. Para encender Eco, haz doble clic en **`iniciar.bat`**. Te va a mostrar algo como `Dirección para la app: 192.168.1.50:8765`.
 7. En la app del teléfono, escribe esa **dirección** y el **token**, y toca **Probar**.
 
-> **Consejo:** la IP de la laptop puede cambiar. En tu router, reserva una IP fija para la laptop (busca la opción *DHCP reservation*). Así no tienes que cambiarla en la app.
+> **Consejo:** la IP de la laptop cambia cuando cambias de red. Para tener una dirección fija que funcione en cualquier red, sigue el paso 7 (Tailscale).
 
 La primera vez que llegue un audio, Whisper descarga el modelo `small` (unos 500 MB). Después ya no necesita descargar nada.
 
@@ -101,12 +101,44 @@ La primera vez que llegue un audio, Whisper descarga el modelo `small` (unos 500
 2. Reinicia Eco y escríbele `/start` a tu bot. Te va a responder con tu **chat_id**.
 3. Pega ese número en `[telegram] chat_id` y reinicia Eco otra vez.
 
+### 7. Dirección fija con Tailscale (recomendado)
+
+Tailscale crea una red privada entre tu laptop y tu teléfono. La laptop recibe una dirección `100.x.y.z` que **no cambia nunca**, y funciona aunque estén en redes distintas, incluso con datos móviles.
+
+1. **Laptop:** descarga Tailscale desde tailscale.com/download, instálalo e inicia sesión (con Google, por ejemplo).
+2. **Teléfono:** instala Tailscale desde la Play Store, inicia sesión **con la misma cuenta** y actívalo.
+3. Vuelve a correr **`abrir_firewall.bat`** como administrador (abre el puerto solo para tus dispositivos de Tailscale).
+4. Enciende Eco: la ventana te muestra la dirección fija `100.x.y.z:8765`. Ponla en la app y toca **Probar**.
+5. Para que no se desconecte:
+   - en el Honor: **Ajustes › Batería › Inicio de aplicaciones › Tailscale**, apaga *Gestionar automáticamente* y deja las tres opciones encendidas;
+   - activa **VPN siempre activada** para Tailscale (Ajustes › Más conexiones › VPN › ⚙ junto a Tailscale).
+
+Solo tus dispositivos con tu cuenta pueden entrar a esa red. Eco además sigue pidiendo tu token.
+
+### 8. Eco siempre encendido + tu panel
+
+Haz doble clic en **`instalar_inicio.bat`** y acepta el permiso de administrador. Eso:
+
+- instala lo que necesita la app de Eco;
+- hace que Eco **encienda solo** cada vez que inicias sesión en Windows, sin ventana negra, y que se reinicie solo si se cae;
+- ajusta la energía para que, **conectada a la corriente**, la laptop no se duerma ni con la tapa cerrada (con batería se comporta como siempre);
+- crea el acceso directo **Eco** en el escritorio y en el menú Inicio;
+- lo enciende de una vez.
+
+Eco vive junto al reloj (ícono de anillos). Clic → abre tu **panel**; clic derecho → carpeta de notas, registro o **Apagar Eco**.
+
+**El panel** (`http://localhost:8765`) muestra la línea de tu día, cada momento con sus tareas, datos e ideas, tus pendientes (los marcas como hechos ahí mismo), una búsqueda en todo lo guardado y el estado de Eco. También lo puedes abrir desde el celular con Tailscale: `http://100.x.y.z:8765` y tu token.
+
+> Si la laptop está **dormida o apagada**, no puede recibir nada: los momentos esperan en el teléfono y se suben solos cuando la enciendes.
+
+Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
+
 ---
 
 ## Uso diario
 
 - **Pasa algo importante:** toca *Guardar momento*. Vas a sentir una vibración corta.
-- **Al llegar a casa:** cuando el teléfono se conecta al mismo Wi-Fi que la laptop, los momentos se suben solos. También puedes tocar *Subir ahora*.
+- **Subida:** con Tailscale, los momentos se suben solos desde donde estés mientras la laptop esté encendida. Sin Tailscale, se suben cuando el teléfono está en el mismo Wi-Fi que la laptop. También puedes tocar *Subir ahora*.
 - **Telegram:**
   - te manda cada momento ya analizado;
   - te avisa **1 hora antes** de lo que tiene hora, y a las **7:00** de lo que solo tiene fecha;
@@ -117,6 +149,7 @@ La primera vez que llegue un audio, Whisper descarga el modelo `small` (unos 500
   - `/hecho 12` — marca como hecha la tarea número 12;
   - `/buscar examen` — busca en todo lo guardado.
 - **Notas rápidas:** escríbele cualquier cosa al bot, por ejemplo *"examen de física el martes"*, y queda anotado con su fecha.
+- **Panel:** el acceso directo **Eco** o el ícono junto al reloj abren tu panel con todo lo guardado.
 - **Notas en Markdown:** quedan en `servidor/notas/`, una por día más `Pendientes.md`. Si quieres verlas en Obsidian, apunta `carpeta` en `config.toml` a tu bóveda.
 
 ## Actualizar la app
@@ -160,5 +193,3 @@ Actions vuelve a compilar el APK. Lo instalas encima del anterior y tus ajustes 
 - **v2:** registro de ubicación del día, resumen con mapa y tareas directo a Google Calendar.
 - **v3:**
   - modo *siempre escuchando* opcional;
-  - acceso desde fuera de casa (Tailscale);
-  - tu propio panel web para explorar todo.

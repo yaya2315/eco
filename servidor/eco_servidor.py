@@ -31,6 +31,7 @@ import time
 import tomllib
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import closing
 from datetime import date, datetime, timedelta
@@ -261,17 +262,42 @@ _whisper = None
 _whisper_lock = threading.Lock()
 
 
+def leer_audio(ruta: Path):
+    """Lee el .wav del teléfono directo a memoria (16 kHz, mono), como lo pide Whisper.
+
+    Así no dependemos de PyAV: faster-whisper 1.2.1 le pasa una opción que PyAV 15+ ya no acepta
+    ("metadata_errors"). Si el archivo no es un WAV normal, se lo dejamos a Whisper tal cual.
+    """
+    import wave
+    import numpy as np
+    try:
+        with wave.open(str(ruta), "rb") as w:
+            canales, ancho, tasa = w.getnchannels(), w.getsampwidth(), w.getframerate()
+            crudo = w.readframes(w.getnframes())
+    except (wave.Error, EOFError):
+        return str(ruta)
+    if ancho != 2:
+        return str(ruta)
+    audio = np.frombuffer(crudo, dtype="<i2").astype(np.float32) / 32768.0
+    if canales > 1:
+        audio = audio[: len(audio) // canales * canales].reshape(-1, canales).mean(axis=1)
+    if tasa != 16000 and len(audio):
+        n = int(round(len(audio) * 16000 / tasa))
+        audio = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio).astype(np.float32)
+    return audio
+
+
 def transcribir(ruta: Path) -> str:
     global _whisper
     w = CFG["whisper"]
     with _whisper_lock:
         if _whisper is None:
             from faster_whisper import WhisperModel  # import lento: solo cuando hace falta
-            log.info("Cargando Whisper '%s' (la primera vez descarga el modelo, ten paciencia)…", w["modelo"])
+            log.info("Cargando Whisper '%s'…", w["modelo"])
             _whisper = WhisperModel(w["modelo"], device="cpu", compute_type="int8",
                                     cpu_threads=int(w.get("hilos") or 0))
         segmentos, _info = _whisper.transcribe(
-            str(ruta), language=w.get("idioma") or None, beam_size=int(w.get("beam") or 1),
+            leer_audio(ruta), language=w.get("idioma") or None, beam_size=int(w.get("beam") or 1),
             vad_filter=True, condition_on_previous_text=False,
         )
         return " ".join(s.text.strip() for s in segmentos).strip()
@@ -933,6 +959,21 @@ def _limpiar(*rutas: Path) -> None:
             pass
 
 
+class despierta:
+    """Mientras Eco procesa un audio, Windows no se suspende (no evita que la apagues tú)."""
+    _kernel = getattr(getattr(__import__("ctypes"), "windll", None), "kernel32", None)
+
+    def __enter__(self):
+        if self._kernel:
+            self._kernel.SetThreadExecutionState(0x80000000 | 0x00000001)  # CONTINUOUS | SYSTEM_REQUIRED
+        return self
+
+    def __exit__(self, *exc):
+        if self._kernel:
+            self._kernel.SetThreadExecutionState(0x80000000)
+        return False
+
+
 ESPERA_REINTENTO_S = 60
 MAX_REINTENTOS = 6
 _intentos: dict[str, int] = {}
@@ -943,7 +984,9 @@ def trabajador() -> None:
         ruta = COLA.get()
         try:
             if ruta.exists():
-                procesar(ruta)
+                ESTADO["procesando"] = ruta.name
+                with despierta():
+                    procesar(ruta)
             _intentos.pop(ruta.name, None)
         except Exception as ex:
             # Lo más común es que se haya ido el internet (descarga de Whisper, IA en la nube).
@@ -960,6 +1003,7 @@ def trabajador() -> None:
                 log.exception("No pude procesar %s tras varios intentos; queda en datos/entrada "
                               "y se reintenta la próxima vez que enciendas Eco", ruta.name)
         finally:
+            ESTADO["procesando"] = None
             COLA.task_done()
 
 
@@ -1032,31 +1076,202 @@ def _nombre_seguro(nombre: str) -> str:
     return base if base.endswith(".wav") else base + ".wav"
 
 
-class Manejador(BaseHTTPRequestHandler):
-    server_version = "Eco/1.0"
+# Lo que el panel muestra sobre Eco mientras corre.
+ESTADO: dict = {"inicio": None, "ultimo_audio": None, "procesando": None}
+_ip_fija = {"valor": None, "cuando": 0.0}
 
+
+def direccion_fija() -> str | None:
+    if time.time() - _ip_fija["cuando"] > 300:
+        _ip_fija["valor"], _ip_fija["cuando"] = ip_tailscale(), time.time()
+    return _ip_fija["valor"]
+
+
+def _tarea_json(t, titulo: str | None = None) -> dict:
+    hoy = ahora().date().isoformat()
+    return {
+        "id": t["id"], "texto": t["texto"], "fecha": t["fecha"], "hora": t["hora"],
+        "cuando": _cuando_tarea(t), "hecho": bool(t["hecho"]),
+        "hoy": t["fecha"] == hoy, "vencida": bool(t["fecha"] and t["fecha"] < hoy and not t["hecho"]),
+        "captura_id": t["captura_id"], "de": titulo,
+    }
+
+
+def _captura_json(con: sqlite3.Connection, c) -> dict:
+    its = items_de(con, c["id"])
+    ini = datetime.fromisoformat(c["inicio"])
+    return {
+        "id": c["id"], "fecha": ini.date().isoformat(), "hora": f"{ini:%H:%M}",
+        "duracion": c["duracion"], "lugar": c["lugar"], "lat": c["lat"], "lon": c["lon"],
+        "titulo": c["titulo"], "resumen": c["resumen"], "importancia": c["importancia"] or 3,
+        "origen": c["origen"], "ia_ok": bool(c["ia_ok"]), "transcripcion": c["transcripcion"],
+        "tareas": [_tarea_json(i) for i in its if i["tipo"] == "tarea"],
+        "datos": [i["texto"] for i in its if i["tipo"] == "dato"],
+        "ideas": [i["texto"] for i in its if i["tipo"] == "idea"],
+    }
+
+
+def api_estado(es_local: bool) -> dict:
+    hoy = ahora().date().isoformat()
+    with closing(db()) as con:
+        momentos_hoy = con.execute("SELECT count(*) FROM capturas WHERE substr(inicio,1,10)=?", (hoy,)).fetchone()[0]
+        pendientes_n = con.execute("SELECT count(*) FROM items WHERE tipo='tarea' AND hecho=0").fetchone()[0]
+        prox = con.execute(
+            "SELECT * FROM items WHERE tipo='tarea' AND hecho=0 AND fecha >= ? "
+            "ORDER BY fecha, hora IS NULL, hora LIMIT 1", (hoy,)).fetchone()
+    puerto = int(CFG["servidor"]["puerto"])
+    fija = direccion_fija()
+    ia = CFG["ia"]
+    return {
+        "ok": True, "inicio": ESTADO["inicio"], "ultimo_audio": ESTADO["ultimo_audio"],
+        "procesando": ESTADO["procesando"], "en_cola": COLA.qsize(),
+        "direccion_fija": f"{fija}:{puerto}" if fija else None,
+        "direccion_wifi": f"{ip_local()}:{puerto}",
+        "ia": f"{ia['proveedor']} · {ia['ollama_modelo'] if ia['proveedor'] == 'ollama' else ia['claude_modelo']}",
+        "whisper": str(CFG["whisper"]["modelo"]), "whisper_cargado": _whisper is not None,
+        "telegram": bool(CFG["telegram"].get("token") and CFG["telegram"].get("chat_id")),
+        "momentos_hoy": momentos_hoy, "pendientes": pendientes_n,
+        "proximo": _tarea_json(prox) if prox else None,
+        "hoy": hoy, "es_local": es_local, "notas": str(NOTAS) if es_local else None,
+    }
+
+
+def api_dias() -> list:
+    with closing(db()) as con:
+        filas = con.execute(
+            "SELECT substr(inicio,1,10) AS dia, count(*) AS n FROM capturas "
+            "GROUP BY dia ORDER BY dia DESC LIMIT 180").fetchall()
+    return [{"fecha": f["dia"], "momentos": f["n"]} for f in filas]
+
+
+def api_momentos(fecha: str | None, q: str | None) -> list:
+    with closing(db()) as con:
+        if q:
+            patron = f"%{q}%"
+            filas = con.execute(
+                "SELECT DISTINCT c.* FROM capturas c LEFT JOIN items i ON i.captura_id=c.id "
+                "WHERE c.titulo LIKE ? OR c.resumen LIKE ? OR c.transcripcion LIKE ? OR c.lugar LIKE ? "
+                "OR i.texto LIKE ? ORDER BY c.inicio DESC LIMIT 60", (patron,) * 5).fetchall()
+        else:
+            dia = _fecha_valida(fecha) or ahora().date().isoformat()
+            filas = con.execute("SELECT * FROM capturas WHERE substr(inicio,1,10)=? ORDER BY inicio",
+                                (dia,)).fetchall()
+        return [_captura_json(con, c) for c in filas]
+
+
+def api_pendientes() -> list:
+    with closing(db()) as con:
+        filas = con.execute(
+            "SELECT i.*, c.titulo AS de FROM items i LEFT JOIN capturas c ON c.id=i.captura_id "
+            "WHERE i.tipo='tarea' AND i.hecho=0 "
+            "ORDER BY i.fecha IS NULL, i.fecha, i.hora IS NULL, i.hora, i.id LIMIT 200").fetchall()
+    return [_tarea_json(f, f["de"]) for f in filas]
+
+
+def api_marcar_tarea(tarea_id: int, hecho: bool) -> dict | None:
+    with closing(db()) as con, con:
+        fila = con.execute("SELECT i.*, c.inicio FROM items i LEFT JOIN capturas c ON c.id=i.captura_id "
+                           "WHERE i.id=? AND i.tipo='tarea'", (tarea_id,)).fetchone()
+        if not fila:
+            return None
+        con.execute("UPDATE items SET hecho=? WHERE id=?", (int(hecho), tarea_id))
+    if fila["inicio"]:
+        actualizar_notas(datetime.fromisoformat(fila["inicio"]).date())
+    with closing(db()) as con:
+        return _tarea_json(con.execute("SELECT * FROM items WHERE id=?", (tarea_id,)).fetchone())
+
+
+_PANEL: bytes | None = None
+
+
+def panel_html() -> bytes:
+    global _PANEL
+    if _PANEL is None:
+        _PANEL = (BASE / "panel.html").read_bytes()
+    return _PANEL
+
+
+class Manejador(BaseHTTPRequestHandler):
+    server_version = "Eco/1.1"
+
+    # ── Permisos ──
     def _autorizado(self) -> bool:
         recibido = (self.headers.get("X-Eco-Token") or "").encode()
         return hmac.compare_digest(recibido, str(CFG["servidor"]["token"]).encode())
 
-    def _json(self, codigo: int, datos: dict) -> None:
-        cuerpo = json.dumps(datos).encode()
+    def _es_local(self) -> bool:
+        """Abierto desde la misma laptop (http://localhost:8765). El nombre del host se revisa
+        para que una página web cualquiera no pueda hacerse pasar por local."""
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        return self.client_address[0] in ("127.0.0.1", "::1") and host in ("localhost", "127.0.0.1", "::1")
+
+    def _puede_ver_panel(self) -> bool:
+        return self._es_local() or self._autorizado()
+
+    # ── Respuestas ──
+    def _json(self, codigo: int, datos) -> None:
+        cuerpo = json.dumps(datos, ensure_ascii=False).encode()
         self.send_response(codigo)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(cuerpo)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(cuerpo)
 
+    def _html(self, cuerpo: bytes) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(cuerpo)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+        self.end_headers()
+        self.wfile.write(cuerpo)
+
+    # ── Rutas ──
     def do_GET(self) -> None:
-        if self.path.split("?")[0] != "/estado":
-            return self._json(404, {"ok": False})
-        if not self._autorizado():
-            return self._json(401, {"ok": False, "error": "token"})
-        self._json(200, {"ok": True, "nombre": "Eco", "en_cola": COLA.qsize()})
+        ruta, _, consulta = self.path.partition("?")
+        params = {k: v[-1] for k, v in urllib.parse.parse_qs(consulta).items()}
+        if ruta in ("/", "/panel"):
+            return self._html(panel_html())
+        if ruta == "/estado":  # lo usa la app del teléfono
+            if not self._autorizado():
+                return self._json(401, {"ok": False, "error": "token"})
+            return self._json(200, {"ok": True, "nombre": "Eco", "en_cola": COLA.qsize()})
+        if ruta.startswith("/api/"):
+            if not self._puede_ver_panel():
+                return self._json(401, {"ok": False, "error": "token"})
+            if ruta == "/api/estado":
+                return self._json(200, api_estado(self._es_local()))
+            if ruta == "/api/dias":
+                return self._json(200, api_dias())
+            if ruta == "/api/momentos":
+                return self._json(200, api_momentos(params.get("fecha"), (params.get("q") or "").strip()[:80]))
+            if ruta == "/api/pendientes":
+                return self._json(200, api_pendientes())
+        self._json(404, {"ok": False})
 
     def do_POST(self) -> None:
-        if self.path.split("?")[0] != "/subir":
-            return self._json(404, {"ok": False})
+        ruta = self.path.split("?")[0]
+        if ruta == "/subir":
+            return self._subir()
+        if ruta == "/api/tarea":
+            # La cabecera propia impide que otra página web mande esto a tus espaldas.
+            if self.headers.get("X-Eco-Panel") != "1" or not self._puede_ver_panel():
+                return self._json(401, {"ok": False, "error": "token"})
+            try:
+                largo = min(int(self.headers.get("Content-Length") or 0), 2048)
+                datos = json.loads(self.rfile.read(largo) or b"{}")
+                tarea = api_marcar_tarea(int(datos["id"]), bool(datos.get("hecho", True)))
+            except (ValueError, KeyError, TypeError):
+                return self._json(400, {"ok": False})
+            return self._json(200 if tarea else 404, {"ok": bool(tarea), "tarea": tarea})
+        self._json(404, {"ok": False})
+
+    def _subir(self) -> None:
         if not self._autorizado():
             return self._json(401, {"ok": False, "error": "token"})
         try:
@@ -1095,6 +1310,7 @@ class Manejador(BaseHTTPRequestHandler):
         destino.with_suffix(".json").write_text(json.dumps(meta), encoding="utf-8")
         parcial.replace(destino)
         COLA.put(destino)
+        ESTADO["ultimo_audio"] = ahora().isoformat(timespec="seconds")
         log.info("Llegó %s desde el teléfono", archivo)
         self._json(200, {"ok": True})
 
@@ -1113,18 +1329,45 @@ def ip_local() -> str:
         return "127.0.0.1"
 
 
-def preparar_logs() -> None:
+def ip_tailscale() -> str | None:
+    """La dirección fija que Tailscale le da a esta laptop (100.x.y.z), si está instalado."""
+    import ipaddress
+    import subprocess
+    red = ipaddress.ip_network("100.64.0.0/10")
+    candidatos: list[str] = []
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
+        r = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        candidatos += r.stdout.split()
+    except (OSError, subprocess.SubprocessError):
         pass
-    formato = logging.Formatter("%(asctime)s  %(message)s", "%H:%M:%S")
-    consola = logging.StreamHandler(sys.stdout)
-    consola.setFormatter(formato)
+    try:
+        candidatos += [i[4][0] for i in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+    except OSError:
+        pass
+    for ip in candidatos:
+        try:
+            if ipaddress.ip_address(ip) in red:
+                return ip
+        except ValueError:
+            continue
+    return None
+
+
+def preparar_logs(consola: bool = True) -> None:
     archivo = logging.FileHandler(DATOS / "eco.log", encoding="utf-8")
     archivo.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    manejadores: list[logging.Handler] = [archivo]
+    if consola and sys.stdout is not None:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+        pantalla = logging.StreamHandler(sys.stdout)
+        pantalla.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%H:%M:%S"))
+        manejadores.insert(0, pantalla)
     log.setLevel(logging.INFO)
-    log.handlers[:] = [consola, archivo]
+    log.handlers[:] = manejadores
 
 
 def diagnostico() -> None:
@@ -1157,29 +1400,74 @@ def diagnostico() -> None:
     print()
 
 
-def main() -> None:
-    configurar(cargar_config(BASE / "config.toml"))
-    preparar_logs()
-    if "--probar" in sys.argv:
-        diagnostico()
-        return
-    if "--descargar" in sys.argv:
-        descargar_modelo()
-        return
-    if str(CFG["servidor"]["token"]) == TOKEN_DE_EJEMPLO:
-        log.error("Cambia el token de ejemplo en config.toml antes de encender Eco.")
-        sys.exit(1)
+class ServidorEco(ThreadingHTTPServer):
+    daemon_threads = True
+    # En Windows, reusar la dirección dejaría que dos Eco "compartan" el puerto sin avisar.
+    allow_reuse_address = os.name != "nt"
 
+
+class YaEncendido(Exception):
+    pass
+
+
+class ConfigIncompleta(Exception):
+    pass
+
+
+def puerto_ocupado(puerto: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", puerto), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def arrancar(consola: bool = True) -> ServidorEco:
+    """Prepara todo y devuelve el servidor listo para serve_forever()."""
+    configurar(cargar_config(BASE / "config.toml"))
+    preparar_logs(consola)
+    if str(CFG["servidor"]["token"]) == TOKEN_DE_EJEMPLO:
+        raise ConfigIncompleta("Cambia el token de ejemplo en config.toml antes de encender Eco.")
+    puerto = int(CFG["servidor"]["puerto"])
+    if puerto_ocupado(puerto):
+        raise YaEncendido(puerto)
+    servidor = ServidorEco(("0.0.0.0", puerto), Manejador)
+    ESTADO["inicio"] = ahora().isoformat(timespec="seconds")
     for f in sorted(ENTRADA.glob("*.wav")):  # lo que quedó pendiente la última vez
         COLA.put(f)
     for destino in (trabajador, bot, reloj):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
+    log.info("Eco encendido (puerto %d)", puerto)
+    return servidor
+
+
+def main() -> None:
+    if "--probar" in sys.argv or "--descargar" in sys.argv:
+        configurar(cargar_config(BASE / "config.toml"))
+        preparar_logs()
+        diagnostico() if "--probar" in sys.argv else descargar_modelo()
+        return
+    try:
+        servidor = arrancar()
+    except ConfigIncompleta as ex:
+        log.error(str(ex))
+        sys.exit(1)
+    except YaEncendido as ex:
+        print(f"\n  Eco ya está encendido en segundo plano.\n  Panel: http://localhost:{ex.args[0]}\n")
+        return
 
     puerto = int(CFG["servidor"]["puerto"])
-    servidor = ThreadingHTTPServer(("0.0.0.0", puerto), Manejador)
+    fija = direccion_fija()
+    if fija:
+        direcciones = (f"     Dirección para la app:  {fija}:{puerto}   (fija, funciona en cualquier red)\n"
+                       f"     En tu Wi-Fi:            {ip_local()}:{puerto}\n")
+    else:
+        direcciones = (f"     Dirección para la app:  {ip_local()}:{puerto}   (cambia si cambias de red)\n"
+                       "     Tip: con Tailscale tendrías una dirección fija. Mira el README.\n")
     print(
         "\n  ◉  Eco está encendido\n"
-        f"     Dirección para la app:  {ip_local()}:{puerto}\n"
+        + direcciones +
+        f"     Panel:                  http://localhost:{puerto}\n"
         f"     Notas:                  {NOTAS}\n"
         f"     IA:                     {CFG['ia']['proveedor']}  ·  Whisper: {CFG['whisper']['modelo']}\n"
         "     (Ctrl + C para apagar)\n",

@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0A0A12">
+<meta name="robots" content="noindex">
+<title>Eco</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23100D24'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%236B5BF5' stroke-opacity='.45' stroke-width='1.6'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%23B8AEFF' stroke-width='1.8'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+:root {
+  /* Misma paleta que la app del teléfono */
+  --void: #0A0A12;
+  --surface: #14141F;
+  --surface-2: #1C1C2A;
+  --line: #2A2A3D;
+  --text: #EEEEF6;
+  --muted: #A3A3BA;
+  --faint: #8C8CA6;
+  --violet: #6B5BF5;
+  --violet-deep: #4A3BD6;
+  --violet-soft: #B8AEFF;
+  --live: #3DDC97;
+  --warn: #FFB547;
+  --rec: #FF5C7A;
+
+  --display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --body: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --r-sm: 8px; --r-md: 14px; --r-lg: 20px;
+
+  --t-xs: 0.8125rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: clamp(1.0625rem, 1rem + 0.3vw, 1.1875rem);
+  --t-xl: clamp(1.375rem, 1.2rem + 0.8vw, 1.75rem);
+  --t-hero: clamp(2.25rem, 1.8rem + 2vw, 3.25rem);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--void);
+  color: var(--text);
+  font: 400 var(--t-md)/1.5 var(--body);
+  font-feature-settings: "tnum" 1;
+  min-height: 100vh;
+}
+/* Un leve resplandor violeta arriba: el único gesto decorativo de la página. */
+body::before {
+  content: "";
+  position: fixed; inset: 0 0 auto 0; height: 420px; pointer-events: none; z-index: 0;
+  background: radial-gradient(60% 100% at 15% 0%, rgba(107, 91, 245, 0.16), transparent 70%);
+}
+a { color: var(--violet-soft); text-underline-offset: 3px; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--violet-soft); outline-offset: 2px; border-radius: 6px; }
+.oculto { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.saltar { position: absolute; left: var(--s4); top: -60px; background: var(--violet); color: #fff; padding: var(--s2) var(--s4); border-radius: var(--r-sm); z-index: 10; }
+.saltar:focus { top: var(--s4); }
+
+.pagina {
+  position: relative; z-index: 1;
+  max-width: 1180px; margin: 0 auto;
+  padding: max(var(--s5), env(safe-area-inset-top)) var(--s4) var(--s7);
+}
+@media (min-width: 720px) { .pagina { padding-inline: var(--s6); } }
+
+/* ── Encabezado ── */
+.cabecera { display: grid; gap: var(--s4); align-items: center; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .cabecera { grid-template-columns: 1fr minmax(260px, 360px); } }
+.marca { display: flex; align-items: center; gap: var(--s3); }
+.marca svg { flex: none; width: 44px; height: 44px; }
+.marca h1 { margin: 0; font: 600 var(--t-hero)/1 var(--display); letter-spacing: -0.03em; }
+.pulso { transform-origin: 22px 22px; animation: pulso 2.8s ease-out infinite; }
+.apagado .pulso { animation: none; opacity: 0; }
+@keyframes pulso { from { transform: scale(0.55); opacity: 0.7; } to { transform: scale(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pulso { animation: none; opacity: 0.35; transform: none; } }
+
+.estado { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin-top: var(--s2); color: var(--muted); font-size: var(--t-sm); }
+.punto { width: 8px; height: 8px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 4px rgba(61, 220, 151, 0.14); flex: none; }
+.estado[data-tipo="procesando"] .punto { background: var(--violet-soft); box-shadow: 0 0 0 4px rgba(184, 174, 255, 0.16); }
+.estado[data-tipo="error"] .punto { background: var(--rec); box-shadow: 0 0 0 4px rgba(255, 92, 122, 0.16); }
+.estado strong { color: var(--text); font-weight: 600; }
+#estado-texto { display: inline-flex; flex-wrap: wrap; gap: 2px var(--s3); }
+
+.buscador { position: relative; }
+.buscador svg { position: absolute; left: 14px; top: 50%; translate: 0 -50%; width: 18px; height: 18px; color: var(--faint); pointer-events: none; }
+.buscador input {
+  width: 100%; min-height: 48px; padding: 0 var(--s4) 0 44px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  transition: border-color .15s, background-color .15s;
+}
+.buscador input::placeholder { color: var(--faint); }
+.buscador input:hover { border-color: #3a3a52; }
+.buscador input:focus { outline: none; border-color: var(--violet); background: var(--surface-2); }
+
+/* ── La línea del día (el elemento protagonista) ── */
+.dia { margin-top: var(--s6); }
+.dia-nav { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.dia-nav h2 { margin: 0 var(--s2) 0 0; font: 600 var(--t-xl)/1.2 var(--display); letter-spacing: -0.015em; }
+.dia-nav h2 span { color: var(--muted); font-weight: 400; }
+.boton-icono {
+  display: inline-grid; place-items: center; width: 44px; height: 44px;
+  background: transparent; border: 1px solid var(--line); border-radius: 50%; cursor: pointer;
+  transition: background-color .15s, border-color .15s;
+}
+.boton-icono:hover:not(:disabled) { background: var(--surface-2); border-color: #3a3a52; }
+.boton-icono:disabled { opacity: .35; cursor: default; }
+.boton-icono svg { width: 18px; height: 18px; }
+.boton-texto {
+  min-height: 44px; padding: 0 var(--s4); border-radius: 999px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--line); font-size: var(--t-sm); font-weight: 600;
+  transition: background-color .15s, border-color .15s;
+}
+.boton-texto:hover { border-color: var(--violet); }
+.resumen-dia { margin: var(--s3) 0 0; color: var(--muted); max-width: 68ch; }
+.resumen-dia strong { color: var(--text); font-weight: 600; }
+
+.linea {
+  position: relative; margin-top: var(--s5); height: 96px;
+  border-radius: var(--r-lg); background: linear-gradient(180deg, var(--surface), rgba(20, 20, 31, 0.4));
+  border: 1px solid var(--line); overflow: hidden;
+}
+.linea-eje { position: absolute; left: var(--s4); right: var(--s4); top: 50%; height: 1px; background: var(--line); }
+.linea-hora { position: absolute; bottom: 8px; translate: -50% 0; font-size: 0.75rem; color: var(--faint); }
+.linea-hora.inicio { translate: -4px 0; }
+.linea-hora.fin { translate: calc(-100% + 4px) 0; }
+.linea-marca { position: absolute; top: calc(50% - 5px); width: 1px; height: 10px; background: var(--line); }
+.linea-ahora { position: absolute; top: 14px; bottom: 26px; width: 2px; translate: -1px 0; background: var(--warn); border-radius: 2px; }
+.linea-ahora::after { content: "ahora"; position: absolute; top: -2px; left: 6px; font-size: 0.6875rem; color: var(--warn); }
+.eco {
+  position: absolute; top: 50%; translate: -50% -50%;
+  width: var(--d); height: var(--d); border-radius: 50%; padding: 0; cursor: pointer;
+  background: radial-gradient(circle, #fff 0 18%, var(--violet-soft) 19% 34%, transparent 35%);
+  border: 1.5px solid rgba(184, 174, 255, 0.7);
+  box-shadow: 0 0 0 calc(var(--d) * 0.28) rgba(107, 91, 245, 0.16), 0 0 0 calc(var(--d) * 0.6) rgba(107, 91, 245, 0.07);
+  transition: transform .15s;
+}
+.eco:hover, .eco:focus-visible { transform: scale(1.15); }
+.eco[data-sel="1"] { border-color: #fff; }
+.linea-vacia { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: var(--t-sm); padding: 0 var(--s4); text-align: center; }
+
+/* ── Distribución ── */
+.cuerpo { display: grid; gap: var(--s6); margin-top: var(--s6); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 960px) { .cuerpo { grid-template-columns: minmax(0, 1fr) 340px; gap: var(--s7); } }
+.seccion-titulo { margin: 0 0 var(--s4); font: 600 var(--t-lg)/1.3 var(--display); }
+.seccion-titulo small { margin-left: var(--s2); color: var(--faint); font: 400 var(--t-sm) var(--body); }
+
+/* ── Momentos: una línea de tiempo vertical ── */
+.momentos { list-style: none; margin: 0; padding: 0; }
+.momento { display: grid; grid-template-columns: 52px 1fr; gap: 0 var(--s4); scroll-margin-top: var(--s5); }
+.momento-hora { padding-top: 2px; font: 600 var(--t-sm)/1.4 var(--display); color: var(--muted); text-align: right; }
+.momento-cuerpo { position: relative; padding: 0 0 var(--s6) var(--s5); border-left: 1px solid var(--line); }
+.momento:last-child .momento-cuerpo { border-left-color: transparent; padding-bottom: 0; }
+.momento-cuerpo::before {
+  content: ""; position: absolute; left: -7px; top: 4px; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--void); border: 2px solid var(--violet-soft);
+}
+.momento[data-imp="4"] .momento-cuerpo::before, .momento[data-imp="5"] .momento-cuerpo::before { background: var(--violet); border-color: #fff; }
+.momento.destacado .momento-titulo { color: #fff; text-decoration: underline; text-decoration-color: var(--violet); text-underline-offset: 6px; }
+.momento-titulo { margin: 0; font: 600 var(--t-lg)/1.35 var(--display); letter-spacing: -0.005em; }
+.momento-meta { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px;
+  border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line);
+  font-size: var(--t-xs); color: var(--muted); text-decoration: none;
+}
+a.chip:hover { border-color: var(--violet); color: var(--text); }
+.chip svg { width: 13px; height: 13px; }
+.chip-aviso { color: var(--warn); border-color: rgba(255, 181, 71, 0.35); }
+.importancia { display: inline-flex; gap: 3px; align-items: center; }
+.importancia i { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--faint); }
+.importancia i.lleno { background: var(--violet-soft); border-color: var(--violet-soft); }
+.momento-resumen { margin: var(--s3) 0 0; color: var(--muted); max-width: 68ch; }
+.grupo { margin-top: var(--s4); }
+.grupo h4 { margin: 0 0 var(--s2); font: 600 var(--t-sm)/1.4 var(--body); color: var(--text); }
+.grupo ul { margin: 0; padding-left: 1.1em; color: var(--muted); }
+.grupo li + li { margin-top: var(--s1); }
+.grupo li::marker { color: var(--violet-soft); }
+.grupo ul.tareas { padding-left: 0; color: inherit; }
+details { margin-top: var(--s4); }
+summary { cursor: pointer; color: var(--violet-soft); font-size: var(--t-sm); min-height: 32px; display: inline-flex; align-items: center; }
+details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: var(--t-sm); max-width: 72ch; white-space: pre-wrap; }
+
+/* ── Tareas (en momentos y en Pendientes) ── */
+.tareas { list-style: none; margin: 0; padding: 0; }
+.tarea { display: flex; gap: var(--s3); align-items: flex-start; }
+.tarea + .tarea { margin-top: var(--s1); }
+.tarea label { display: flex; gap: var(--s3); align-items: flex-start; flex: 1; min-height: 44px; padding: 10px 0; cursor: pointer; }
+.tarea input {
+  appearance: none; flex: none; width: 20px; height: 20px; margin: 1px 0 0; border-radius: 6px;
+  border: 1.5px solid var(--faint); background: transparent; cursor: pointer; display: grid; place-items: center;
+  transition: background-color .15s, border-color .15s;
+}
+.tarea input:hover { border-color: var(--violet-soft); }
+.tarea input:checked { background: var(--violet); border-color: var(--violet); }
+.tarea input:checked::after { content: ""; width: 10px; height: 6px; border: 2px solid #fff; border-top: 0; border-right: 0; rotate: -45deg; translate: 0 -1px; }
+.tarea-texto { display: block; color: var(--text); }
+.tarea.hecha .tarea-texto { color: var(--faint); text-decoration: line-through; }
+.tarea-info { display: block; margin-top: 2px; font-size: var(--t-xs); color: var(--faint); }
+.tarea-info .hoy { color: var(--warn); }
+.tarea-info .vencida { color: var(--rec); }
+
+/* ── Columna lateral ── */
+.lateral { display: grid; gap: var(--s5); }
+@media (min-width: 960px) { .lateral { position: sticky; top: var(--s5); } }
+.panel { padding: var(--s5); border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); }
+.panel .seccion-titulo { margin-bottom: var(--s2); }
+.panel-vacio { margin: var(--s2) 0 0; color: var(--faint); font-size: var(--t-sm); }
+.datos { margin: var(--s2) 0 0; display: grid; gap: var(--s3); }
+.datos div { display: grid; gap: 2px; }
+.datos dt { font-size: var(--t-xs); color: var(--faint); }
+.datos dd { margin: 0; font-size: var(--t-sm); color: var(--text); overflow-wrap: anywhere; }
+.copiar { margin-left: var(--s2); padding: 2px 8px; min-height: 28px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--violet-soft); font-size: var(--t-xs); cursor: pointer; }
+.copiar:hover { border-color: var(--violet); }
+.ok { color: var(--live); }
+.no { color: var(--warn); }
+
+/* ── Estados vacíos y acceso ── */
+.vacio { padding: var(--s6) var(--s5); border: 1px dashed var(--line); border-radius: var(--r-lg); color: var(--muted); max-width: 60ch; }
+.vacio strong { display: block; color: var(--text); font: 600 var(--t-lg)/1.3 var(--display); margin-bottom: var(--s2); }
+.acceso { max-width: 420px; margin: 12vh auto 0; padding: var(--s6); border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); }
+.acceso h2 { margin: 0 0 var(--s2); font: 600 var(--t-xl)/1.2 var(--display); }
+.acceso p { margin: 0 0 var(--s5); color: var(--muted); }
+.acceso input { width: 100%; min-height: 48px; padding: 0 var(--s4); border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface-2); }
+.acceso input:focus { outline: none; border-color: var(--violet); }
+.acceso button { width: 100%; margin-top: var(--s3); min-height: 48px; border: 0; border-radius: var(--r-md); background: var(--violet); color: #fff; font-weight: 600; cursor: pointer; }
+.acceso button:hover { background: var(--violet-deep); }
+.acceso .error { margin: var(--s3) 0 0; color: var(--rec); font-size: var(--t-sm); }
+.aviso-red { margin-top: var(--s4); padding: var(--s3) var(--s4); border-radius: var(--r-md); background: rgba(255, 92, 122, 0.08); border: 1px solid rgba(255, 92, 122, 0.3); color: var(--text); font-size: var(--t-sm); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<a class="saltar" href="#momentos">Ir a los momentos</a>
+
+<div class="pagina" id="app" hidden>
+  <header class="cabecera">
+    <div>
+      <div class="marca">
+        <svg viewBox="0 0 44 44" aria-hidden="true">
+          <circle class="pulso" cx="22" cy="22" r="21" fill="none" stroke="#6B5BF5" stroke-width="1.5"/>
+          <circle cx="22" cy="22" r="15" fill="none" stroke="#6B5BF5" stroke-opacity=".5" stroke-width="1.6"/>
+          <circle cx="22" cy="22" r="9.5" fill="none" stroke="#B8AEFF" stroke-width="2"/>
+          <circle cx="22" cy="22" r="4" fill="#fff"/>
+        </svg>
+        <h1>Eco</h1>
+      </div>
+      <p class="estado" id="estado" role="status" aria-live="polite"><span class="punto" aria-hidden="true"></span><span id="estado-texto">Conectando con Eco…</span></p>
+    </div>
+    <form class="buscador" id="buscador" role="search">
+      <label for="q" class="oculto">Buscar en tus momentos</label>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Buscar: examen, física, filamento…" autocomplete="off">
+    </form>
+  </header>
+
+  <div id="aviso-red" class="aviso-red" role="alert" hidden>Eco no responde. Revisa que siga encendido en la laptop; esta página se actualiza sola cuando vuelva.</div>
+
+  <section class="dia" aria-labelledby="dia-titulo">
+    <div class="dia-nav">
+      <h2 id="dia-titulo">Hoy</h2>
+      <button class="boton-icono" id="dia-anterior" type="button" aria-label="Día anterior con momentos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+      <button class="boton-icono" id="dia-siguiente" type="button" aria-label="Día siguiente con momentos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+      </button>
+      <button class="boton-texto" id="ir-hoy" type="button" hidden>Volver a hoy</button>
+      <button class="boton-texto" id="limpiar" type="button" hidden>Quitar búsqueda</button>
+    </div>
+    <p class="resumen-dia" id="resumen-dia"></p>
+    <div class="linea" id="linea" role="group" aria-label="Momentos del día según la hora"></div>
+  </section>
+
+  <div class="cuerpo">
+    <main id="momentos" tabindex="-1" aria-labelledby="momentos-titulo">
+      <h3 class="seccion-titulo" id="momentos-titulo">Momentos</h3>
+      <ol class="momentos" id="lista-momentos"></ol>
+    </main>
+
+    <aside class="lateral">
+      <section class="panel" aria-labelledby="pend-titulo">
+        <h3 class="seccion-titulo" id="pend-titulo">Pendientes <small id="pend-n"></small></h3>
+        <ul class="tareas" id="lista-pendientes"></ul>
+        <p class="panel-vacio" id="pend-vacio" hidden>Nada pendiente. Cuando Eco escuche una tarea, aparece aquí.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="sis-titulo">
+        <h3 class="seccion-titulo" id="sis-titulo">Eco en esta laptop</h3>
+        <dl class="datos" id="sistema"></dl>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<form class="acceso" id="acceso" hidden>
+  <h2>Abre tu panel de Eco</h2>
+  <p>Desde otro dispositivo, Eco te pide el mismo token que pusiste en la app del teléfono.</p>
+  <label for="token" class="oculto">Token de Eco</label>
+  <input id="token" type="password" autocomplete="current-password" placeholder="Token de Eco" required>
+  <button type="submit">Entrar</button>
+  <p class="error" id="acceso-error" role="alert" hidden>Ese token no coincide con el de tu laptop.</p>
+</form>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+const guardado = {
+  leer(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  poner(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  quitar(k) { try { localStorage.removeItem(k); } catch {} },
+};
+
+const ui = { fecha: null, hoy: null, dias: [], busqueda: "", firma: "", seleccion: null };
+
+function esc(t) {
+  return String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function api(ruta, opciones = {}) {
+  const cabeceras = { ...(opciones.headers || {}) };
+  const token = guardado.leer("eco-token");
+  if (token) cabeceras["X-Eco-Token"] = token;
+  const r = await fetch(ruta, { ...opciones, headers: cabeceras, cache: "no-store" });
+  if (r.status === 401) throw Object.assign(new Error("token"), { token: true });
+  if (!r.ok) throw new Error("http " + r.status);
+  return r.json();
+}
+
+function fechaDe(iso) { const [a, m, d] = iso.split("-").map(Number); return new Date(a, m - 1, d); }
+function nombreDia(iso) {
+  if (iso === ui.hoy) return "Hoy";
+  const f = fechaDe(iso), h = fechaDe(ui.hoy);
+  const dif = Math.round((h - f) / 86400000);
+  if (dif === 1) return "Ayer";
+  const base = `${DIAS[f.getDay()]} ${f.getDate()} de ${MESES[f.getMonth()]}`;
+  return base.charAt(0).toUpperCase() + base.slice(1) + (f.getFullYear() !== h.getFullYear() ? ` de ${f.getFullYear()}` : "");
+}
+function hace(iso) {
+  if (!iso) return null;
+  const min = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (min < 1) return "hace un momento";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  return nombreDia(iso.slice(0, 10)).toLowerCase();
+}
+function plural(n, uno, varios) { return `${n} ${n === 1 ? uno : varios}`; }
+
+const ICONO = {
+  lugar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 21s-7-6.1-7-11.5a7 7 0 0 1 14 0C19 14.9 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
+  tiempo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  nota: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg>',
+};
+
+/* ── Estado de Eco ── */
+function pintarEstado(e) {
+  const caja = $("estado");
+  let texto;
+  if (e.procesando || e.en_cola) {
+    caja.dataset.tipo = "procesando";
+    texto = `<strong>Procesando un momento</strong>${e.en_cola ? ` y ${plural(e.en_cola, "más en espera", "más en espera")}` : ""}`;
+  } else {
+    caja.dataset.tipo = "ok";
+    texto = "<strong>Recibiendo momentos</strong>";
+  }
+  const ultimo = hace(e.ultimo_audio);
+  if (ultimo) texto += `<span>Último audio ${esc(ultimo)}</span>`;
+  $("estado-texto").innerHTML = texto;
+  document.querySelector(".marca").classList.toggle("apagado", false);
+
+  const hoyN = e.momentos_hoy, pend = e.pendientes;
+  let resumen = hoyN ? `Hoy guardaste <strong>${plural(hoyN, "momento", "momentos")}</strong>` : "Hoy todavía no guardaste momentos";
+  resumen += pend ? ` y tienes <strong>${plural(pend, "tarea pendiente", "tareas pendientes")}</strong>.` : ".";
+  if (e.proximo) resumen += ` Lo próximo: ${esc(e.proximo.texto)}, ${esc(e.proximo.cuando)}.`;
+  ui.resumenHoy = resumen;
+
+  const filas = [];
+  const fila = (dt, dd) => filas.push(`<div><dt>${dt}</dt><dd>${dd}</dd></div>`);
+  if (e.direccion_fija) fila("Dirección para la app (fija)", `${esc(e.direccion_fija)} <button class="copiar" type="button" data-copiar="${esc(e.direccion_fija)}">Copiar</button>`);
+  else fila("Dirección para la app", `${esc(e.direccion_wifi)} <span class="no">cambia si cambias de red</span>`);
+  if (e.direccion_fija) fila("En tu Wi-Fi", esc(e.direccion_wifi));
+  fila("Inteligencia", esc(e.ia));
+  fila("Whisper", `${esc(e.whisper)} · ${e.whisper_cargado ? '<span class="ok">listo</span>' : "se carga con el primer audio"}`);
+  fila("Telegram", e.telegram ? '<span class="ok">conectado</span>' : '<span class="no">sin configurar</span>');
+  if (e.inicio) fila("Encendido", esc(hace(e.inicio)));
+  if (e.notas) fila("Tus notas", `${esc(e.notas)} <button class="copiar" type="button" data-copiar="${esc(e.notas)}">Copiar</button>`);
+  $("sistema").innerHTML = filas.join("");
+}
+
+/* ── Línea del día ── */
+function pintarLinea(momentos, esHoy) {
+  const linea = $("linea");
+  let html = '<div class="linea-eje"></div>';
+  for (let h = 0; h <= 24; h += 6) {
+    const x = `calc(16px + (100% - 32px) * ${h / 24})`;
+    const extremo = h === 0 ? " inicio" : h === 24 ? " fin" : "";
+    html += `<span class="linea-marca" style="left:${x}"></span><span class="linea-hora${extremo}" style="left:${x}">${h}:00</span>`;
+  }
+  if (esHoy) {
+    const ahora = new Date(), m = ahora.getHours() * 60 + ahora.getMinutes();
+    html += `<span class="linea-ahora" style="left:calc(16px + (100% - 32px) * ${m / 1440})" aria-hidden="true"></span>`;
+  }
+  for (const mo of momentos) {
+    const [hh, mm] = mo.hora.split(":").map(Number);
+    const x = (hh * 60 + mm) / 1440;
+    const d = 12 + mo.importancia * 3;
+    html += `<button class="eco" type="button" data-ir="${mo.id}" data-sel="${ui.seleccion === mo.id ? 1 : 0}"
+      style="left:calc(16px + (100% - 32px) * ${x}); --d:${d}px"
+      aria-label="${esc(mo.hora)}, ${esc(mo.titulo)}" title="${esc(mo.hora)} · ${esc(mo.titulo)}"></button>`;
+  }
+  if (!momentos.length) html += `<div class="linea-vacia">${ui.busqueda ? "La línea del día se muestra cuando no estás buscando." : "Aquí aparece cada momento a la hora en que lo guardaste."}</div>`;
+  linea.innerHTML = html;
+  linea.hidden = false;
+}
+
+/* ── Momentos ── */
+function tareaHTML(t, conOrigen) {
+  let info = "";
+  if (t.cuando) info = `<span class="${t.vencida ? "vencida" : t.hoy ? "hoy" : ""}">${t.vencida ? "Venció " : ""}${esc(t.cuando)}</span>`;
+  if (conOrigen && t.de) info += `${info ? ", " : ""}de “${esc(t.de)}”`;
+  return `<li class="tarea${t.hecho ? " hecha" : ""}" data-tarea="${t.id}">
+    <label><input type="checkbox" ${t.hecho ? "checked" : ""} data-marcar="${t.id}">
+      <span><span class="tarea-texto">${esc(t.texto)}</span>${info ? `<span class="tarea-info">${info}</span>` : ""}</span>
+    </label></li>`;
+}
+
+function momentoHTML(m, conFecha) {
+  const imp = Array.from({ length: 5 }, (_, i) => `<i class="${i < m.importancia ? "lleno" : ""}"></i>`).join("");
+  const chips = [];
+  if (conFecha) chips.push(`<span class="chip">${esc(nombreDia(m.fecha))}</span>`);
+  if (m.lugar) chips.push(`<span class="chip">${ICONO.lugar}${esc(m.lugar)}</span>`);
+  else if (m.lat != null) chips.push(`<a class="chip" href="https://maps.google.com/?q=${m.lat.toFixed(5)},${m.lon.toFixed(5)}" target="_blank" rel="noopener">${ICONO.lugar}Ver en el mapa</a>`);
+  if (m.duracion) { const s = Math.round(m.duracion); chips.push(`<span class="chip">${ICONO.tiempo}${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}</span>`); }
+  if (m.origen === "texto") chips.push(`<span class="chip">${ICONO.nota}Nota escrita</span>`);
+  chips.push(`<span class="chip"><span class="importancia" role="img" aria-label="Importancia ${m.importancia} de 5">${imp}</span></span>`);
+  if (!m.ia_ok) chips.push(`<span class="chip chip-aviso">Sin analizar: revisa la transcripción</span>`);
+
+  let grupos = "";
+  if (m.tareas.length) grupos += `<div class="grupo"><h4>Por hacer</h4><ul class="tareas">${m.tareas.map((t) => tareaHTML(t, false)).join("")}</ul></div>`;
+  if (m.datos.length) grupos += `<div class="grupo"><h4>Para no olvidar</h4><ul>${m.datos.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>`;
+  if (m.ideas.length) grupos += `<div class="grupo"><h4>Ideas</h4><ul>${m.ideas.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>`;
+  if (m.transcripcion) grupos += `<details><summary>Ver lo que se dijo</summary><p>${esc(m.transcripcion)}</p></details>`;
+
+  return `<li class="momento${ui.seleccion === m.id ? " destacado" : ""}" id="m${m.id}" data-imp="${m.importancia}">
+    <div class="momento-hora">${esc(m.hora)}</div>
+    <article class="momento-cuerpo">
+      <h4 class="momento-titulo">${esc(m.titulo)}</h4>
+      <div class="momento-meta">${chips.join("")}</div>
+      ${m.resumen ? `<p class="momento-resumen">${esc(m.resumen)}</p>` : ""}
+      ${grupos}
+    </article></li>`;
+}
+
+async function cargarMomentos() {
+  const buscando = Boolean(ui.busqueda);
+  const ruta = buscando ? `/api/momentos?q=${encodeURIComponent(ui.busqueda)}` : `/api/momentos?fecha=${ui.fecha}`;
+  const momentos = await api(ruta);
+  const esHoy = ui.fecha === ui.hoy;
+
+  $("dia-titulo").innerHTML = buscando ? `Búsqueda <span>“${esc(ui.busqueda)}”</span>` : esc(nombreDia(ui.fecha));
+  $("limpiar").hidden = !buscando;
+  $("ir-hoy").hidden = buscando || esHoy;
+  $("dia-anterior").disabled = buscando || !ui.dias.some((d) => d < ui.fecha);
+  $("dia-siguiente").disabled = buscando || !ui.dias.some((d) => d > ui.fecha && d <= ui.hoy);
+
+  if (buscando) $("resumen-dia").textContent = momentos.length ? `${plural(momentos.length, "momento encontrado", "momentos encontrados")}, del más reciente al más antiguo.` : "";
+  else if (esHoy) $("resumen-dia").innerHTML = ui.resumenHoy || "";
+  else $("resumen-dia").innerHTML = `Ese día guardaste <strong>${plural(momentos.length, "momento", "momentos")}</strong>.`;
+
+  pintarLinea(buscando ? [] : momentos, esHoy && !buscando);
+  $("momentos-titulo").textContent = buscando ? "Resultados" : "Momentos";
+
+  const lista = $("lista-momentos");
+  if (!momentos.length) {
+    lista.innerHTML = buscando
+      ? `<li class="vacio"><strong>No encontré nada con “${esc(ui.busqueda)}”.</strong>Prueba con otra palabra, como el nombre de una materia, una persona o un lugar.</li>`
+      : esHoy
+        ? `<li class="vacio"><strong>Todavía no hay momentos hoy.</strong>Toca “Guardar momento” en tu teléfono cuando pase algo importante. En uno o dos minutos aparece aquí, ya resumido.</li>`
+        : `<li class="vacio"><strong>Ese día no guardaste momentos.</strong></li>`;
+    return;
+  }
+  lista.innerHTML = momentos.map((m) => momentoHTML(m, buscando)).join("");
+}
+
+async function cargarPendientes() {
+  const tareas = await api("/api/pendientes");
+  $("pend-n").textContent = tareas.length ? `${tareas.length}` : "";
+  $("lista-pendientes").innerHTML = tareas.map((t) => tareaHTML(t, true)).join("");
+  $("pend-vacio").hidden = tareas.length > 0;
+}
+
+async function cargarDias() {
+  ui.dias = (await api("/api/dias")).map((d) => d.fecha);
+}
+
+async function refrescar(forzar = false) {
+  try {
+    const e = await api("/api/estado");
+    $("aviso-red").hidden = true;
+    ui.hoy = e.hoy;
+    if (!ui.fecha) ui.fecha = e.hoy;
+    pintarEstado(e);
+    const firma = [e.momentos_hoy, e.pendientes, e.ultimo_audio, e.procesando, e.en_cola, e.hoy].join("|");
+    if (forzar || firma !== ui.firma) {
+      ui.firma = firma;
+      await cargarDias();
+      await Promise.all([cargarMomentos(), cargarPendientes()]);
+    }
+    mostrar("app");
+  } catch (err) {
+    if (err.token) { mostrar("acceso"); return; }
+    $("aviso-red").hidden = false;
+    $("estado").dataset.tipo = "error";
+    $("estado-texto").innerHTML = "<strong>Sin conexión con Eco</strong>";
+    document.querySelector(".marca").classList.add("apagado");
+  }
+}
+
+function mostrar(cual) {
+  $("app").hidden = cual !== "app";
+  $("acceso").hidden = cual !== "acceso";
+  if (cual === "acceso") $("token").focus();
+}
+
+/* ── Interacciones ── */
+document.addEventListener("change", async (ev) => {
+  const id = ev.target.dataset?.marcar;
+  if (!id) return;
+  const hecho = ev.target.checked;
+  document.querySelectorAll(`[data-tarea="${id}"]`).forEach((li) => {
+    li.classList.toggle("hecha", hecho);
+    li.querySelector("input").checked = hecho;
+  });
+  try {
+    await api("/api/tarea", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Eco-Panel": "1" },
+      body: JSON.stringify({ id: Number(id), hecho }),
+    });
+    setTimeout(() => refrescar(true), hecho ? 700 : 0);
+  } catch {
+    ev.target.checked = !hecho;
+    document.querySelectorAll(`[data-tarea="${id}"]`).forEach((li) => li.classList.toggle("hecha", !hecho));
+  }
+});
+
+document.addEventListener("click", async (ev) => {
+  const copiar = ev.target.closest("[data-copiar]");
+  if (copiar) {
+    try { await navigator.clipboard.writeText(copiar.dataset.copiar); copiar.textContent = "Copiado"; }
+    catch { copiar.textContent = "Selecciónalo y copia"; }
+    setTimeout(() => (copiar.textContent = "Copiar"), 1600);
+    return;
+  }
+  const eco = ev.target.closest("[data-ir]");
+  if (eco) {
+    ui.seleccion = Number(eco.dataset.ir);
+    document.querySelectorAll(".momento.destacado").forEach((n) => n.classList.remove("destacado"));
+    document.querySelectorAll(".eco").forEach((n) => (n.dataset.sel = n === eco ? "1" : "0"));
+    const destino = $("m" + ui.seleccion);
+    if (destino) {
+      destino.classList.add("destacado");
+      const quieto = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      destino.scrollIntoView({ behavior: quieto ? "auto" : "smooth", block: "start" });
+    }
+  }
+});
+
+function irA(fecha) { ui.fecha = fecha; ui.seleccion = null; cargarMomentos().catch(() => {}); }
+$("dia-anterior").addEventListener("click", () => { const d = ui.dias.filter((x) => x < ui.fecha); if (d.length) irA(d[0]); });
+$("dia-siguiente").addEventListener("click", () => { const d = ui.dias.filter((x) => x > ui.fecha && x <= ui.hoy); if (d.length) irA(d[d.length - 1]); });
+$("ir-hoy").addEventListener("click", () => irA(ui.hoy));
+$("limpiar").addEventListener("click", () => { $("q").value = ""; ui.busqueda = ""; cargarMomentos().catch(() => {}); $("q").focus(); });
+
+let espera;
+$("q").addEventListener("input", () => {
+  clearTimeout(espera);
+  espera = setTimeout(() => { ui.busqueda = $("q").value.trim(); cargarMomentos().catch(() => {}); }, 300);
+});
+$("buscador").addEventListener("submit", (ev) => { ev.preventDefault(); clearTimeout(espera); ui.busqueda = $("q").value.trim(); cargarMomentos().catch(() => {}); });
+
+$("acceso").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  guardado.poner("eco-token", $("token").value.trim());
+  $("acceso-error").hidden = true;
+  try { await api("/api/estado"); await refrescar(true); }
+  catch (err) { if (err.token) { guardado.quitar("eco-token"); $("acceso-error").hidden = false; } }
+});
+
+refrescar(true);
+setInterval(() => { if (!document.hidden) refrescar(); }, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refrescar(); });
+</script>
+</body>
+</html>
