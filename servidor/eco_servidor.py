@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import tomllib
+import unicodedata
 import urllib.error
 import urllib.request
 from contextlib import closing
@@ -293,12 +294,28 @@ Extrae SOLO lo que le sirve a {nombre}:
 - ideas: ideas o planes que {nombre} expresó.
 
 Reglas:
+- Todo lo que {nombre} tenga que hacer (comprar, mandar, llevar, estudiar, pagar, llamar…) es una TAREA,
+  aunque lo diga como "acordarme de…". Cada cosa va en UNA sola lista: no la repitas en datos ni en ideas.
+- Horas en formato 24 h. Si no dicen "de la mañana" o "de la madrugada", "a las 1" hasta "a las 6"
+  son de la tarde: "a las 3" = 15:00. "a las 8" sin más = 08:00.
+- titulo: concreto, de qué trata ("Entrega del proyecto de física"). Nunca genérico como "Tareas" o "Recuerdos".
 - No inventes nada. Si no hay nada útil, deja las listas vacías y dilo en el resumen.
 - De otras personas anota solo lo necesario para la tarea o el dato ("Mandarle el archivo a Carlos").
   No anotes detalles íntimos, de salud, de dinero o de la vida privada de terceros.
 - Nunca anotes contraseñas, códigos de verificación ni números de tarjeta.
 - Español claro y corto. Tareas en infinitivo ("Enviar el informe al profe").
 - importancia: 1 (trivial) a 5 (no se puede olvidar).
+
+Ejemplo (fragmento del viernes 9 de octubre de 2026):
+"El lunes a las 2 es la reunión de robótica, acordate de llevar el cargador. El aula nueva es la 12.
+ La contraseña del wifi del lab es Robot2026. Y se me ocurrió hacer un brazo con servos para el robot."
+Respuesta:
+{{"titulo": "Reunión de robótica del lunes", "resumen": "Reunión de robótica el lunes por la tarde en el aula 12; hay que llevar el cargador.",
+ "tareas": [{{"texto": "Ir a la reunión de robótica", "fecha": "2026-10-12", "hora": "14:00"}},
+            {{"texto": "Llevar el cargador a la reunión", "fecha": "2026-10-12", "hora": "14:00"}}],
+ "datos": ["La reunión de robótica es en el aula 12"],
+ "ideas": ["Hacer un brazo con servos para el robot"], "importancia": 4}}
+(La contraseña no se anota.)
 
 Responde únicamente con un objeto JSON válido con esta forma:
 {FORMA_JSON}"""
@@ -398,7 +415,72 @@ def extraer(texto: str, cuando: datetime, lugar: str | None, origen: str = "audi
     proveedor = str(CFG["ia"].get("proveedor", "claude")).lower()
     llamar = _llamar_ollama if proveedor == "ollama" else _llamar_claude
     respuesta = llamar(_prompt_sistema(), _prompt_usuario(texto, cuando, lugar, origen))
-    return normalizar(_json_de(respuesta))
+    return pulir(normalizar(_json_de(respuesta)), texto)
+
+
+# Red de seguridad para modelos chicos (como los de Ollama), que a veces se equivocan
+# en lo mismo: horas de madrugada, tareas metidas en "datos" y cosas repetidas.
+
+VERBOS_DE_TAREA = (
+    "comprar", "mandar", "enviar", "entregar", "llevar", "traer", "pagar", "llamar", "estudiar",
+    "terminar", "imprimir", "revisar", "subir", "preguntar", "avisar", "recoger", "ir ", "escribir",
+    "responder", "contestar", "preparar", "practicar", "buscar", "sacar", "agendar", "reservar",
+    "devolver", "cobrar", "confirmar", "hacer la", "hacer el", "hacer las", "hacer los",
+)
+_RECORDAR = re.compile(r"^(recordar|acordarme|acordarse|acuerdate|no olvidar|no olvides|no te olvides)"
+                       r"\s+(de\s+|que\s+)?")
+
+
+def _sin_acentos(t: str) -> str:
+    t = unicodedata.normalize("NFKD", t.lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def _clave(t: str) -> str:
+    t = _RECORDAR.sub("", _sin_acentos(t).strip())
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", t)).strip()
+
+
+def _quitar_recordar(t: str) -> str:
+    m = _RECORDAR.match(_sin_acentos(t).strip())
+    t = t.strip()[m.end():] if m else t.strip()
+    return t[:1].upper() + t[1:]
+
+
+def pulir(info: dict, texto: str) -> dict:
+    base = _sin_acentos(texto)
+    madrugada = re.search(r"madrugada|(de|en|por) la manana|\ba\.?\s?m\b", base)
+    for t in info["tareas"]:
+        if t["hora"] and not madrugada:
+            h, m = map(int, t["hora"].split(":"))
+            if 1 <= h <= 6:  # "a las 3" casi nunca es de madrugada
+                t["hora"] = f"{h + 12:02d}:{m:02d}"
+
+    datos = []
+    for d in info["datos"]:
+        if _clave(d).startswith(VERBOS_DE_TAREA) or _RECORDAR.match(_sin_acentos(d)):
+            info["tareas"].append({"texto": _quitar_recordar(d), "fecha": None, "hora": None})
+        else:
+            datos.append(d)
+    info["datos"] = datos
+    ideas = []
+    for i in info["ideas"]:
+        if _RECORDAR.match(_sin_acentos(i)):
+            info["tareas"].append({"texto": _quitar_recordar(i), "fecha": None, "hora": None})
+        else:
+            ideas.append(i)
+    info["ideas"] = ideas
+
+    vistos: set[str] = set()
+    for lista in ("tareas", "datos", "ideas"):
+        filtrada = []
+        for x in info[lista]:
+            k = _clave(x["texto"] if lista == "tareas" else x)
+            if k and k not in vistos:
+                vistos.add(k)
+                filtrada.append(x)
+        info[lista] = filtrada
+    return info
 
 
 # ════════════════════════════ Guardar ════════════════════════════
