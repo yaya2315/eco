@@ -1,0 +1,40 @@
+package com.blackholecode.eco
+
+import android.content.Context
+
+/** Ajustes guardados en el teléfono. */
+class Prefs(context: Context) {
+    private val sp = context.getSharedPreferences("eco", Context.MODE_PRIVATE)
+
+    /** IP y puerto de la laptop, por ejemplo 192.168.1.50:8765 */
+    var server: String
+        get() = sp.getString(K_SERVER, "") ?: ""
+        set(value) = sp.edit().putString(K_SERVER, value.trim()).apply()
+
+    /** Clave compartida con el servidor (la misma que pusiste en config.toml). */
+    var token: String
+        get() = sp.getString(K_TOKEN, "") ?: ""
+        set(value) = sp.edit().putString(K_TOKEN, value.trim()).apply()
+
+    /** Cuántos segundos hacia atrás se guardan al tocar "Guardar momento". */
+    var beforeSec: Int
+        get() = sp.getInt(K_BEFORE, DEFAULT_BEFORE)
+        set(value) = sp.edit().putInt(K_BEFORE, value.coerceIn(MIN_BEFORE, MAX_SECONDS)).apply()
+
+    /** Cuántos segundos se siguen grabando después de tocarlo. */
+    var afterSec: Int
+        get() = sp.getInt(K_AFTER, DEFAULT_AFTER)
+        set(value) = sp.edit().putInt(K_AFTER, value.coerceIn(0, MAX_SECONDS)).apply()
+
+    companion object {
+        const val DEFAULT_BEFORE = 180
+        const val DEFAULT_AFTER = 60
+        const val MIN_BEFORE = 15
+        const val MAX_SECONDS = 300
+
+        private const val K_SERVER = "server"
+        private const val K_TOKEN = "token"
+        private const val K_BEFORE = "before_sec"
+        private const val K_AFTER = "after_sec"
+    }
+}

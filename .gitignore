@@ -1,0 +1,17 @@
+# ── Secretos y datos personales: NUNCA a GitHub ──
+servidor/config.toml
+servidor/datos/
+servidor/notas/
+servidor/.venv/
+__pycache__/
+*.pyc
+
+# ── Android ──
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+*.iml
+.DS_Store

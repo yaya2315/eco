@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="eco_bg">#FF0A0A12</color>
+    <color name="eco_accent">#FF6B5BF5</color>
+    <color name="eco_text">#FFEEEEF6</color>
+    <color name="eco_icon_bg">#FF100D24</color>
+</resources>

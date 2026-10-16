@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ícono de notificación y del botón rápido: punto con dos ondas (silueta blanca). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.5,12a2.5,2.5 0,1 0,5 0a2.5,2.5 0,1 0,-5 0z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:pathData="M6,12a6,6 0,1 0,12 0a6,6 0,1 0,-12 0z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="1.6"
+        android:pathData="M2,12a10,10 0,1 0,20 0a10,10 0,1 0,-20 0z" />
+</vector>

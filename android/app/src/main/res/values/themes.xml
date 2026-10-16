@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Eco" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/eco_bg</item>
+        <item name="android:statusBarColor">@color/eco_bg</item>
+        <item name="android:navigationBarColor">@color/eco_bg</item>
+        <item name="android:colorPrimary">@color/eco_accent</item>
+        <item name="android:colorAccent">@color/eco_accent</item>
+        <item name="android:textColorPrimary">@color/eco_text</item>
+    </style>
+</resources>

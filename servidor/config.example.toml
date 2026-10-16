@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────
+#  Eco · configuración del servidor
+#  Copia este archivo como config.toml (instalar.bat lo hace solo)
+#  y llena lo que te falte. config.toml NUNCA se sube a GitHub.
+# ─────────────────────────────────────────────────────────────
+
+[usuario]
+nombre = "Leonardo"
+
+[servidor]
+puerto = 8765
+# Una clave larga e inventada. Es la misma que escribes en la app del teléfono.
+token = "cambia-esto-por-una-clave-larga"
+
+[whisper]
+# tiny / base / small / medium. "small" es el equilibrio para tu Ryzen 5.
+# Si tarda mucho, prueba "base"; si se equivoca mucho, "medium" (más lento).
+modelo = "small"
+idioma = "es"
+beam = 1        # 1 = rápido. 3-5 = un poco más preciso y más lento.
+hilos = 0       # 0 = automático
+
+[ia]
+# "claude" (mejor calidad, necesita internet y una API key)
+# "ollama" (todo en tu laptop, gratis, más lento y menos fino)
+proveedor = "claude"
+claude_modelo = "claude-haiku-5-5"
+claude_api_key = ""             # o deja vacío y usa la variable de entorno ANTHROPIC_API_KEY
+ollama_modelo = "qwen2.5:3b"
+ollama_url = "http://localhost:11434"
+
+[telegram]
+# 1) Habla con @BotFather en Telegram → /newbot → copia el token aquí.
+# 2) Enciende Eco, escríbele /start a tu bot y te responde con tu chat_id.
+token = ""
+chat_id = ""
+
+[notas]
+# Carpeta donde se escriben las notas. Puede ser una ruta de tu bóveda de Obsidian,
+# por ejemplo: "C:/Users/Leonardo/Documents/Obsidian/Eco"
+carpeta = "notas"
+zona_horaria = "America/El_Salvador"
+hora_resumen = "21:00"          # resumen del día por Telegram
+hora_recordatorio = "07:00"     # aviso para tareas con fecha pero sin hora
+aviso_antes_min = 60            # para tareas con hora: cuántos minutos antes avisar
+guardar_transcripcion = false   # false = solo se guardan las notas, no lo que dijo cada quien
+guardar_audio = false           # false = el audio se borra apenas se transcribe
+
+# Lugares con nombre (opcional). Así tus notas dicen "📍 Casa" en vez de coordenadas.
+# Para sacar las coordenadas: mantén presionado el lugar en Google Maps y copia los números.
+# [[lugares]]
+# nombre = "Casa"
+# lat = 13.7000
+# lon = -89.2000
+# radio_m = 150
+#
+# [[lugares]]
+# nombre = "Colegio"
+# lat = 13.7200
+# lon = -89.7200
+# radio_m = 200
