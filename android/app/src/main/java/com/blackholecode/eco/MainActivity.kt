@@ -49,6 +49,7 @@ class MainActivity : Activity() {
 
     companion object {
         const val EXTRA_AUTOSTART = "autostart"
+        const val EXTRA_ACTUALIZAR = "actualizar"
         private const val REQ_PERMS = 10
 
         // Paleta (contrastes verificados contra el fondo: texto 17:1, secundario 8:1).
@@ -87,9 +88,16 @@ class MainActivity : Activity() {
     private lateinit var beforeInput: EditText
     private lateinit var afterInput: EditText
     private lateinit var permsText: TextView
+    private lateinit var updateCard: View
+    private lateinit var updateTitle: TextView
+    private lateinit var updateStatus: TextView
+    private lateinit var updateButton: Button
 
     private var haloAnim: AnimatorSet? = null
     private var haloColor = 0
+    private var lastUpdateCheck = 0L
+    private var installWhenAllowed = false
+    private var installWhenFound = false
 
     // ───────────────────────── Ciclo de vida ─────────────────────────
 
@@ -98,6 +106,7 @@ class MainActivity : Activity() {
         prefs = Prefs(this)
         setContentView(buildUi())
         autostartPending = intent?.getBooleanExtra(EXTRA_AUTOSTART, false) == true
+        installWhenFound = intent?.getBooleanExtra(EXTRA_ACTUALIZAR, false) == true
         ensurePermissions()
         // Solo la primera vez: si Android recrea la pantalla (al girarla), no volvemos a preguntar.
         if (savedInstanceState == null) intent?.data?.let { applyPairing(it.toString(), fromScanner = false) }
@@ -110,12 +119,22 @@ class MainActivity : Activity() {
             autostartPending = true
             tryAutostart()
         }
+        if (intent?.getBooleanExtra(EXTRA_ACTUALIZAR, false) == true) {
+            installWhenFound = true
+            lastUpdateCheck = 0L
+            checkUpdate()
+        }
     }
 
     override fun onResume() {
         super.onResume()
         refreshPerms()
         ui.post(tick)
+        if (installWhenAllowed && canInstall()) {
+            installWhenAllowed = false
+            startUpdate()
+        }
+        checkUpdate()
     }
 
     override fun onPause() {
@@ -234,6 +253,12 @@ class MainActivity : Activity() {
                 detail = if (error != null) error else "Enciéndelo para empezar a guardar momentos."
                 color = C_MUTED
             }
+            s.paused && s.pausaBateria -> {
+                title = "En pausa por batería"
+                detail = "Tu batería está en ${s.batteryPct} %. Eco vuelve a escuchar solo cuando conectes el cargador. " +
+                    "Si lo necesitas ya, toca Reanudar."
+                color = C_WARN
+            }
             s.paused -> {
                 title = "En pausa"
                 detail = "Micrófono apagado. Nada se está escuchando."
@@ -285,6 +310,85 @@ class MainActivity : Activity() {
         pauseButton.text = if (s.paused) "Reanudar" else "Pausar"
         powerButton.text = if (s.running) "Apagar Eco" else "Encender Eco"
         styleButton(powerButton, primary = !s.running)
+        renderUpdate()
+    }
+
+    // ───────────────────────── Actualización desde la laptop ─────────────────────────
+
+    private fun renderUpdate() {
+        val info = EcoState.update
+        val status = EcoState.updateStatus
+        updateCard.visibility = if (info != null || (EcoState.updating && status != null)) View.VISIBLE else View.GONE
+        if (info != null) updateTitle.text = "Eco ${info.versionName} está lista"
+        updateStatus.text = status ?: "La bajas de tu laptop y se instala encima: no pierdes tus ajustes ni lo pendiente."
+        updateButton.isEnabled = !EcoState.updating
+        updateButton.alpha = if (EcoState.updating) 0.5f else 1f
+        updateButton.text = if (EcoState.updating) "Actualizando…" else "Actualizar"
+    }
+
+    /** Pregunta a la laptop (como mucho una vez por minuto) si tiene una versión nueva. */
+    private fun checkUpdate() {
+        val now = System.currentTimeMillis()
+        if (now - lastUpdateCheck < 60_000 || prefs.server.isBlank() || EcoState.updating) return
+        lastUpdateCheck = now
+        val server = prefs.server
+        val token = prefs.token
+        Thread {
+            val info = Updater.refresh(this, server, token)
+            runOnUiThread {
+                render()
+                if (info != null && installWhenFound) {
+                    installWhenFound = false
+                    onUpdateTapped()
+                }
+            }
+        }.start()
+    }
+
+    private fun canInstall() = packageManager.canRequestPackageInstalls()
+
+    private fun onUpdateTapped() {
+        if (EcoState.update == null || EcoState.updating) return
+        if (!canInstall()) {
+            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Permite que Eco se actualice")
+                .setMessage("Android pide permiso una sola vez para que Eco instale su versión nueva. " +
+                    "En la siguiente pantalla activa \"Permitir de esta fuente\" y vuelve con la flecha de atrás.")
+                .setPositiveButton("Ir al permiso") { _, _ ->
+                    installWhenAllowed = true
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                    } catch (_: Exception) {
+                        openAppSettings()
+                    }
+                }
+                .setNegativeButton("Ahora no", null)
+                .show()
+            return
+        }
+        startUpdate()
+    }
+
+    private fun startUpdate() {
+        val info = EcoState.update ?: return
+        EcoState.updating = true
+        EcoState.updateStatus = "Bajando la versión ${info.versionName} de tu laptop…"
+        render()
+        val server = prefs.server
+        val token = prefs.token
+        Thread {
+            try {
+                val apk = Updater.download(this, server, token, info) { pct ->
+                    if (pct >= 0) EcoState.updateStatus = "Bajando de tu laptop… $pct %"
+                }
+                EcoState.updateStatus = "Abriendo el instalador…"
+                Updater.install(this, apk)
+            } catch (e: Exception) {
+                EcoState.updating = false
+                EcoState.updateStatus = "No se pudo: ${e.message ?: "revisa que la laptop esté al alcance"}"
+            }
+            runOnUiThread { render() }
+        }.start()
     }
 
     private fun setHalo(active: Boolean, color: Int) {
@@ -480,7 +584,8 @@ class MainActivity : Activity() {
         col.addView(label("Eco", 34f, C_TEXT, medium = true), lp(top = 4))
         col.addView(label("Tu memoria de bolsillo.", 15f, C_MUTED), lp(top = 2))
 
-        col.addView(buildStatusCard(), lp(top = 20))
+        col.addView(buildUpdateCard(), lp(top = 20))
+        col.addView(buildStatusCard(), lp(top = 12))
         col.addView(buildSaveArea(), lp(top = 8))
 
         // Controles
@@ -510,6 +615,28 @@ class MainActivity : Activity() {
             lp(top = 24)
         )
         return scroll
+    }
+
+    private fun buildUpdateCard(): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0x336B5BF5, C_SURFACE)).apply {
+                cornerRadius = dp(20).toFloat()
+                setStroke(dp(1), 0x66B8AEFF)
+            }
+            setPadding(dp(18), dp(16), dp(18), dp(18))
+            visibility = View.GONE
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        card.addView(label("ACTUALIZACIÓN", 11f, C_ACCENT_SOFT, medium = true).apply { letterSpacing = 0.12f })
+        updateTitle = label("Hay una versión nueva", 17f, C_TEXT, medium = true)
+        card.addView(updateTitle, lp(top = 4))
+        updateStatus = label("", 13f, C_MUTED).apply { setLineSpacing(0f, 1.2f) }
+        card.addView(updateStatus, lp(top = 4))
+        updateButton = button("Actualizar", primary = true) { onUpdateTapped() }
+        card.addView(updateButton, lp(top = 14))
+        updateCard = card
+        return card
     }
 
     private fun buildStatusCard(): View {

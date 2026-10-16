@@ -9,7 +9,9 @@ saca lo importante con IA y te lo deja:
   • en un bot privado de Telegram que además te recuerda las cosas a tiempo.
 
 También recibe grabaciones largas (modo reunión del teléfono y modo clase de la laptop),
-responde preguntas sobre todo lo guardado y hace un respaldo diario.
+notas de voz y fotos por Telegram, responde preguntas sobre todo lo guardado, trae tus tareas
+de Classroom, las pone en Google Calendar, hace un respaldo diario y le pasa al teléfono la
+versión nueva de la app.
 
 Uso:
     python eco_servidor.py            → arranca Eco (con ventana)
@@ -19,8 +21,10 @@ Uso:
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import html
+import io
 import json
 import logging
 import math
@@ -38,7 +42,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from contextlib import closing
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -53,7 +57,9 @@ os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_VERBOSITY", "error")
 MAX_SUBIDA = 400 * 1024 * 1024  # 400 MB
-EXT_AUDIO = (".wav", ".m4a", ".aac", ".mp4", ".ogg", ".opus", ".mp3", ".webm")
+EXT_AUDIO = (".wav", ".m4a", ".aac", ".mp4", ".ogg", ".oga", ".opus", ".mp3", ".webm")
+EXT_IMAGEN = (".jpg", ".jpeg", ".png", ".webp")
+MAX_TELEGRAM = 20 * 1024 * 1024  # lo más que Telegram deja bajar a un bot
 
 log = logging.getLogger("eco")
 
@@ -68,6 +74,7 @@ DEFAULTS: dict = {
         "claude_modelo": "claude-haiku-5-5",
         "claude_api_key": "",
         "ollama_modelo": "qwen2.5:3b",
+        "ollama_vision": "qwen2.5vl:3b",   # lee las fotos que mandas por Telegram
         "ollama_url": "http://localhost:11434",
     },
     "telegram": {"token": "", "chat_id": ""},
@@ -75,6 +82,7 @@ DEFAULTS: dict = {
         "carpeta": "notas",
         "zona_horaria": "America/El_Salvador",
         "hora_resumen": "21:00",
+        "hora_manana": "06:30",            # resumen de la mañana ("" = apagado)
         "hora_recordatorio": "07:00",
         "aviso_antes_min": 60,
         "guardar_transcripcion": False,
@@ -90,6 +98,18 @@ DEFAULTS: dict = {
         "activo": True,
         "carpeta": "",      # vacío = OneDrive\Eco respaldos
         "conservar": 14,    # cuántas copias guardar
+    },
+    "google": {
+        "classroom": True,   # traer las tareas de Classroom
+        "calendar": True,    # poner las tareas con fecha en el calendario "Eco"
+        "cada_min": 20,      # cada cuánto revisar Classroom
+    },
+    "github": {
+        # Para que la laptop baje sola la app nueva del teléfono. El token también se puede
+        # pegar desde el panel (queda en datos/, fuera de GitHub).
+        "token": "",
+        "repo": "yaya2315/eco",
+        "artefacto": "Eco-apk",
     },
     "lugares": [],
 }
@@ -226,7 +246,19 @@ CREATE TABLE IF NOT EXISTS sesion_partes (
     texto         TEXT,
     PRIMARY KEY (sesion_id, n)
 );
+CREATE TABLE IF NOT EXISTS google_eventos (
+    item_id       INTEGER PRIMARY KEY,     -- tarea de Eco
+    evento        TEXT NOT NULL,           -- su evento en el calendario "Eco"
+    firma         TEXT
+);
 """
+
+# Columnas que se agregaron después: se añaden solas a una base de datos vieja.
+MIGRACIONES = {
+    "capturas": [("adjunto", "TEXT")],                      # foto guardada en notas/fotos
+    "items": [("origen", "TEXT"), ("externo", "TEXT"),      # 'classroom' + id de Classroom
+              ("enlace", "TEXT"), ("detalle", "TEXT")],     # link para abrirla + nombre de la clase
+}
 
 # Índice de búsqueda para "pregúntale a Eco" (va aparte: si SQLite no trae FTS5, Eco sigue funcionando).
 ESQUEMA_INDICE = """
@@ -247,6 +279,12 @@ def init_db() -> None:
     global HAY_INDICE
     with closing(db()) as con, con:
         con.executescript(ESQUEMA)
+        for tabla, columnas in MIGRACIONES.items():
+            existentes = {f["name"] for f in con.execute(f"PRAGMA table_info({tabla})")}
+            for nombre, tipo in columnas:
+                if nombre not in existentes:
+                    con.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {tipo}")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS items_externo ON items(externo) WHERE externo IS NOT NULL")
     try:
         with closing(db()) as con, con:
             con.executescript(ESQUEMA_INDICE)
@@ -454,7 +492,11 @@ Responde únicamente con un objeto JSON válido con esta forma:
 def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str,
                     contexto: str | None = None) -> str:
     nombre = CFG["usuario"]["nombre"]
-    tipo = {"texto": "Nota escrita por él mismo"}.get(origen, "Transcripción del audio")
+    tipo = {
+        "texto": "Nota escrita por él mismo",
+        "voz": "Nota de voz que grabó él mismo para acordarse (transcripción automática)",
+        "foto": "Lo que se lee en la foto",
+    }.get(origen, "Transcripción del audio")
     partes = [
         f"Fecha y hora del fragmento: {fecha_larga(cuando.date())}, {cuando:%H:%M} ({CFG['notas']['zona_horaria']}).",
         f"Hoy es {fecha_larga(ahora().date())}.",
@@ -469,6 +511,15 @@ def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str
         partes.append(
             f"Esto es parte de una conversación o reunión larga en la que participó {nombre}. "
             f"Anota los acuerdos, los compromisos de {nombre} y los datos que le sirvan.")
+    elif origen == "foto":
+        partes.append(
+            f"{nombre} le tomó una FOTO a algo para no olvidarlo: una pizarra, un cuaderno, una hoja de "
+            "tareas, un horario o una captura de pantalla. Abajo está lo que se lee en ella. Tareas = lo que hay "
+            "que entregar, estudiar, llevar o hacer, con su fecha si aparece (resuelve 'viernes', '23/10', etc.). "
+            "Datos = fechas de examen, temas, aulas, instrucciones y criterios. Si la foto no tiene nada útil, "
+            "dilo en el resumen.")
+    elif origen == "voz":
+        partes.append(f"{nombre} se lo dictó a sí mismo: casi todo lo que dice es algo que quiere recordar o hacer.")
     if contexto:
         partes.append(contexto)
     if lugar:
@@ -668,13 +719,14 @@ def calcular_recordatorio(fecha: str | None, hora: str | None, referencia: datet
 
 def guardar_captura(*, archivo: str | None, origen: str, inicio: datetime, dur: float | None,
                     lat: float | None, lon: float | None, lugar: str | None, info: dict,
-                    transcripcion: str | None, ia_ok: bool) -> int:
+                    transcripcion: str | None, ia_ok: bool, adjunto: str | None = None) -> int:
     with closing(db()) as con, con:
         cur = con.execute(
             "INSERT INTO capturas(archivo, origen, inicio, duracion, lat, lon, lugar, titulo, resumen, "
-            "transcripcion, importancia, ia_ok, procesado) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "transcripcion, importancia, ia_ok, procesado, adjunto) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (archivo, origen, inicio.isoformat(timespec="seconds"), dur, lat, lon, lugar, info["titulo"],
-             info["resumen"], transcripcion, info["importancia"], int(ia_ok), ahora().isoformat(timespec="seconds")),
+             info["resumen"], transcripcion, info["importancia"], int(ia_ok), ahora().isoformat(timespec="seconds"),
+             adjunto),
         )
         cid = cur.lastrowid
         for t in info["tareas"]:
@@ -722,12 +774,12 @@ def render_dia(d: date) -> Path:
                 meta.append(f"[📍 mapa](https://maps.google.com/?q={c['lat']:.5f},{c['lon']:.5f})")
             if c["duracion"]:
                 meta.append(duracion(c["duracion"]))
-            if c["origen"] == "texto":
-                meta.append("nota escrita")
-            elif c["origen"] in TIPOS_SESION:
-                meta.append(TIPOS_SESION[c["origen"]].lower())
+            if c["origen"] in ETIQUETA_ORIGEN:
+                meta.append(ETIQUETA_ORIGEN[c["origen"]].lower())
             meta.append("●" * (c["importancia"] or 3) + "○" * (5 - (c["importancia"] or 3)))
             lineas += [f"## {c['titulo']}", " · ".join(meta), ""]
+            if c["adjunto"]:
+                lineas += [f"![[{c['adjunto']}|420]]", ""]
             if c["resumen"]:
                 lineas += [c["resumen"], ""]
             its = items_de(con, c["id"])
@@ -749,7 +801,8 @@ def render_dia(d: date) -> Path:
                 enlace = archivo_transcripcion(c).relative_to(NOTAS).as_posix().removesuffix(".md")
                 lineas += [f"📄 Transcripción completa: [[{enlace}]]", ""]
             elif c["transcripcion"]:
-                lineas += ["<details><summary>Transcripción</summary>", "", c["transcripcion"], "", "</details>", ""]
+                resumen = "Lo que se lee en la foto" if c["origen"] == "foto" else "Transcripción"
+                lineas += [f"<details><summary>{resumen}</summary>", "", c["transcripcion"], "", "</details>", ""]
     ruta = NOTAS / f"{d.isoformat()}.md"
     ruta.write_text("\n".join(lineas).rstrip() + "\n", encoding="utf-8")
     return ruta
@@ -769,18 +822,23 @@ def render_pendientes() -> Path:
         lineas.append("_Nada pendiente. 🎉_")
     for t in filas:
         cuando = _cuando_tarea(t)
-        lineas.append(f"- [ ] {t['texto']}" + (f" — 📅 {cuando}" if cuando else "") + f" `#{t['id']}`")
+        enlace = f" · [Classroom]({t['enlace']})" if t["enlace"] else ""
+        lineas.append(f"- [ ] {t['texto']}" + (f" — 📅 {cuando}" if cuando else "") + enlace + f" `#{t['id']}`")
     ruta = NOTAS / "Pendientes.md"
     ruta.write_text("\n".join(lineas) + "\n", encoding="utf-8")
     return ruta
 
 
-def actualizar_notas(d: date) -> None:
+def actualizar_notas(d: date | None) -> None:
+    """Reescribe la nota del día (si se indica) y la de pendientes. Se llama después de cualquier
+    cambio en momentos o tareas, así que también avisa a Google Calendar que hay algo nuevo."""
     try:
-        render_dia(d)
+        if d is not None:
+            render_dia(d)
         render_pendientes()
     except OSError as e:
         log.warning("No pude escribir las notas: %s", e)
+    avisar_google()
 
 
 # ════════════════════════════ Telegram ════════════════════════════
@@ -841,6 +899,8 @@ def mensaje_captura(cid: int) -> str:
         its = items_de(con, cid)
     ini = datetime.fromisoformat(c["inicio"])
     meta = [f"{ini:%H:%M}"]
+    if c["origen"] in ("voz", "foto"):
+        meta.append(ETIQUETA_ORIGEN[c["origen"]].lower())
     if c["lugar"]:
         meta.append(c["lugar"])
     if c["duracion"]:
@@ -900,12 +960,15 @@ def resumen_del_dia(d: date) -> str | None:
 AYUDA = (
     "🫧 <b>Eco</b> — tu memoria de bolsillo\n\n"
     "/hoy — resumen de hoy\n"
+    "/semana — lo que viene en los próximos 7 días\n"
     "/pendientes — lo que tienes por hacer\n"
     "/hecho 12 — marcar la tarea #12 como hecha\n"
     "/buscar palabra — buscar en todo lo guardado\n\n"
     "Pregúntame lo que quieras con signo de pregunta, por ejemplo:\n"
     "<i>¿Qué dejó de tarea el profe de física?</i>\n\n"
-    "Y si me escribes cualquier otra cosa (\"examen de física el martes\"), la anoto."
+    "Si me escribes cualquier otra cosa (\"examen de física el martes\"), la anoto.\n"
+    "🎙️ Mándame una <b>nota de voz</b> y la anoto igual que un momento.\n"
+    "📷 Mándame una <b>foto</b> de la pizarra o de la hoja de tareas y saco las fechas y tareas."
 )
 
 
@@ -929,6 +992,8 @@ def manejar_mensaje(chat: str, texto: str) -> None:
         enviar(AYUDA)
     elif comando == "/hoy":
         enviar(resumen_del_dia(ahora().date()) or "Hoy todavía no guardaste momentos.")
+    elif comando in ("/semana", "/manana", "/agenda"):
+        enviar(agenda(ahora().date(), manana=False) or "No tienes nada con fecha para los próximos 7 días. 🎉")
     elif comando == "/pendientes":
         filas = pendientes(30)
         if not filas:
@@ -953,7 +1018,7 @@ def manejar_mensaje(chat: str, texto: str) -> None:
                     con.execute("UPDATE items SET hecho=1 WHERE id=?", (i,))
                     hechas.append(fila)
         for f in hechas:
-            actualizar_notas(datetime.fromisoformat(f["inicio"]).date())
+            actualizar_notas(datetime.fromisoformat(f["inicio"]).date() if f["inicio"] else None)
         enviar("✓ Hecho: " + "; ".join(e(f["texto"]) for f in hechas) if hechas else "No encontré esa tarea.")
     elif comando == "/buscar":
         if not resto:
@@ -1014,15 +1079,96 @@ def bot() -> None:
                 offset = u["update_id"] + 1
                 estado_set("tg_offset", offset)
                 m = u.get("message") or {}
+                chat = str(m.get("chat", {}).get("id", ""))
                 texto = (m.get("text") or "").strip()
-                if texto:
-                    try:
-                        manejar_mensaje(str(m.get("chat", {}).get("id", "")), texto)
-                    except Exception:
-                        log.exception("Error atendiendo un mensaje de Telegram")
+                try:
+                    if texto:
+                        manejar_mensaje(chat, texto)
+                    elif any(k in m for k in ("voice", "audio", "video_note", "photo", "document")):
+                        manejar_adjunto(chat, m)
+                except Exception:
+                    log.exception("Error atendiendo un mensaje de Telegram")
         except Exception as ex:
             log.warning("Telegram sin conexión (%s); reintento en 15 s", ex)
             time.sleep(15)
+
+
+def manejar_adjunto(chat: str, m: dict) -> None:
+    """Notas de voz y fotos que le mandas al bot: se bajan a datos/entrada y siguen el mismo
+    camino que los momentos del teléfono (el trabajador las procesa una por una)."""
+    dueño = str(CFG["telegram"].get("chat_id") or "")
+    if not dueño or chat != dueño:
+        return
+    doc = m.get("document") or {}
+    tipo_doc = str(doc.get("mime_type") or "")
+    if m.get("voice") or m.get("audio") or m.get("video_note") or tipo_doc.startswith(("audio/", "video/")):
+        archivo, clase = (m.get("voice") or m.get("audio") or m.get("video_note") or doc), "voz"
+    elif m.get("photo") or tipo_doc.startswith("image/"):
+        archivo = max(m["photo"], key=lambda p: p.get("width", 0) * p.get("height", 0)) if m.get("photo") else doc
+        clase = "foto"
+    else:
+        enviar("Por ahora entiendo texto, notas de voz y fotos. 🙂")
+        return
+    if int(archivo.get("file_size") or 0) > MAX_TELEGRAM:
+        enviar("Ese archivo pasa de 20 MB, lo más que Telegram me deja bajar. Mándalo más corto o más liviano.")
+        return
+    meta = {"inicio_ms": int(m.get("date") or time.time()) * 1000, "origen": clase, "app": "telegram"}
+    if archivo.get("duration"):
+        meta["duracion_s"] = float(archivo["duration"])
+    pie = (m.get("caption") or "").strip()
+    if pie:
+        meta["texto"] = pie[:1000]
+    try:
+        ruta = descargar_de_telegram(archivo["file_id"], f"tg_{m.get('message_id', int(time.time()))}_{clase}", meta)
+    except Exception as ex:
+        log.warning("No pude bajar el archivo de Telegram (%s)", ex)
+        enviar("No pude bajar eso de Telegram. Mándamelo otra vez en un rato.")
+        return
+    if ruta is None:
+        enviar("Ese tipo de archivo no lo entiendo todavía. Mándalo como nota de voz o como foto.")
+        return
+    COLA.put(ruta)
+    ESTADO["ultimo_audio"] = ahora().isoformat(timespec="seconds")
+    log.info("Llegó %s por Telegram", ruta.name)
+    if clase == "voz":
+        enviar("🎧 Recibido. Te escucho y te lo anoto en un momento.")
+    else:
+        lenta = str(CFG["ia"].get("proveedor")).lower() == "ollama"
+        enviar("📷 Recibida. Leo la foto y te digo qué encontré" + (" (con Ollama tarda un par de minutos)." if lenta else "."))
+
+
+def descargar_de_telegram(file_id: str, base: str, meta: dict) -> Path | None:
+    r = tg("getFile", file_id=file_id) or {}
+    ruta_tg = (r.get("result") or {}).get("file_path")
+    if not ruta_tg:
+        raise RuntimeError("Telegram no dio la ruta del archivo")
+    ext = Path(ruta_tg).suffix.lower()
+    ext = ".ogg" if ext == ".oga" else ext
+    if ext not in EXT_AUDIO + EXT_IMAGEN:
+        return None
+    nombre = re.sub(r"[^A-Za-z0-9_-]", "_", base)[:60]
+    destino = ENTRADA / (nombre + ext)
+    if ya_procesado(destino.name) or destino.exists():
+        return destino
+    url = f"https://api.telegram.org/file/bot{CFG['telegram']['token']}/{ruta_tg}"
+    parcial = destino.with_suffix(".part")
+    try:
+        with urllib.request.urlopen(url, timeout=120) as resp, open(parcial, "wb") as f:
+            restante = MAX_TELEGRAM + 1
+            while True:
+                bloque = resp.read(1 << 16)
+                if not bloque:
+                    break
+                restante -= len(bloque)
+                if restante < 0:
+                    raise RuntimeError("archivo demasiado grande")
+                f.write(bloque)
+    except Exception:
+        _limpiar(parcial)
+        raise
+    destino.with_suffix(".json").write_text(json.dumps(meta), encoding="utf-8")
+    parcial.replace(destino)
+    return destino
 
 
 # ════════════════════════════ Procesamiento ════════════════════════════
@@ -1041,31 +1187,38 @@ def procesar(ruta: Path) -> int | None:
     if ya_procesado(archivo):
         _limpiar(ruta, meta_ruta)
         return None
+    if ruta.suffix.lower() in EXT_IMAGEN:
+        return procesar_foto(ruta, meta)
 
     inicio = (datetime.fromtimestamp(float(meta["inicio_ms"]) / 1000, TZ)
               if meta.get("inicio_ms") else ahora())
     dur = meta.get("duracion_s")
     lat, lon = ubicacion_de(meta)
     lugar = lugar_de(lat, lon)
+    origen = "voz" if meta.get("origen") == "voz" else "audio"
 
     t0 = time.time()
     texto = transcribir(ruta)
     log.info("Transcrito %s (%s de audio) en %.0f s", archivo, duracion(dur), time.time() - t0)
+    if origen == "voz" and meta.get("texto"):
+        texto = f"{meta['texto']}\n{texto}".strip()  # lo que escribiste junto a la nota de voz
 
-    guardar_texto = bool(CFG["notas"].get("guardar_transcripcion"))
-    if len(texto.split()) < 4:
+    # Tus notas de voz son tuyas: su texto se guarda siempre. Lo que escucha el teléfono, solo si lo pides.
+    guardar_texto = origen == "voz" or bool(CFG["notas"].get("guardar_transcripcion"))
+    minimo = 1 if origen == "voz" else 4  # "comprar pan" es una nota de voz válida
+    if len(texto.split()) < minimo:
         info = normalizar({"titulo": "Sin voz clara", "resumen": "No se entendió lo suficiente en este momento."})
-        cid = guardar_captura(archivo=archivo, origen="audio", inicio=inicio, dur=dur, lat=lat, lon=lon,
+        cid = guardar_captura(archivo=archivo, origen=origen, inicio=inicio, dur=dur, lat=lat, lon=lon,
                               lugar=lugar, info=info, transcripcion=texto or None, ia_ok=True)
     else:
         try:
-            info = extraer(texto, inicio, lugar, "audio")
+            info = extraer(texto, inicio, lugar, origen)
             ia_ok = True
         except Exception as ex:
             log.warning("La IA falló (%s); guardo la transcripción para no perder nada", ex)
             info = normalizar({"titulo": "Momento guardado", "resumen": texto[:200] + ("…" if len(texto) > 200 else "")})
             ia_ok = False
-        cid = guardar_captura(archivo=archivo, origen="audio", inicio=inicio, dur=dur, lat=lat, lon=lon,
+        cid = guardar_captura(archivo=archivo, origen=origen, inicio=inicio, dur=dur, lat=lat, lon=lon,
                               lugar=lugar, info=info, transcripcion=texto if (guardar_texto or not ia_ok) else None,
                               ia_ok=ia_ok)
 
@@ -1099,11 +1252,113 @@ def procesar_texto(texto: str) -> int:
     return cid
 
 
+# ── Fotos (pizarra, cuaderno, hoja de tareas) ──
+
+PEDIDO_FOTO = (
+    "Transcribe TODO el texto que se lee en esta imagen, tal cual y en orden, respetando fechas, horas, "
+    "números, nombres de materias y nombres de personas. Si es una pizarra, un cuaderno, una hoja de tareas, "
+    "un horario, un calendario o una captura de pantalla, copia su contenido completo. No resumas ni inventes. "
+    "Al final agrega una línea que empiece con 'Descripción:' y diga en una oración qué es la imagen."
+)
+
+
+def _imagen_para_ia(ruta: Path) -> tuple[bytes, str]:
+    """La foto en JPEG de máximo 1600 px: suficiente para leer letra de pizarra y mucho más rápida."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(ruta) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im.thumbnail((1600, 1600))
+            salida = io.BytesIO()
+            im.save(salida, "JPEG", quality=88)
+            return salida.getvalue(), "image/jpeg"
+    except Exception:
+        tipo = {".png": "image/png", ".webp": "image/webp"}.get(ruta.suffix.lower(), "image/jpeg")
+        return ruta.read_bytes(), tipo
+
+
+def leer_imagen(ruta: Path) -> str:
+    datos, tipo = _imagen_para_ia(ruta)
+    b64 = base64.b64encode(datos).decode()
+    ia = CFG["ia"]
+    if str(ia.get("proveedor", "claude")).lower() == "ollama":
+        pedido = {
+            "model": ia.get("ollama_vision") or "qwen2.5vl:3b", "stream": False,
+            "options": {"temperature": 0.1, "num_ctx": int(ia.get("ollama_contexto") or 8192)},
+            "messages": [{"role": "user", "content": PEDIDO_FOTO, "images": [b64]}],
+        }
+        req = urllib.request.Request(ia["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(pedido).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=1200) as r:
+                return json.load(r)["message"]["content"].strip()
+        except urllib.error.HTTPError as ex:
+            detalle = ex.read().decode("utf-8", "replace")
+            if ex.code == 404 or "not found" in detalle:
+                raise ModeloFaltante(pedido["model"]) from ex
+            raise
+    import anthropic
+    cliente = anthropic.Anthropic(api_key=ia.get("claude_api_key") or None)
+    msg = cliente.messages.create(
+        model=ia["claude_modelo"], max_tokens=2000, temperature=0,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": tipo, "data": b64}},
+            {"type": "text", "text": PEDIDO_FOTO}]}],
+    )
+    return "".join(getattr(b, "text", "") for b in msg.content).strip()
+
+
+class ModeloFaltante(RuntimeError):
+    pass
+
+
+def procesar_foto(ruta: Path, meta: dict) -> int:
+    meta_ruta = ruta.with_suffix(".json")
+    inicio = (datetime.fromtimestamp(float(meta["inicio_ms"]) / 1000, TZ)
+              if meta.get("inicio_ms") else ahora())
+    pie = str(meta.get("texto") or "").strip()
+    t0 = time.time()
+    try:
+        leido = leer_imagen(ruta)
+    except ModeloFaltante as ex:
+        if _intentos.get(ruta.name, 0) == 0:
+            enviar_o_guardar(f"📷 Para leer fotos falta el modelo de visión en tu laptop. Abre PowerShell y escribe:\n"
+                             f"<code>ollama pull {e(ex.args[0])}</code>\nLa foto queda guardada y la leo apenas esté.")
+        raise
+    log.info("Foto %s leída en %.0f s", ruta.name, time.time() - t0)
+
+    contenido = leido + (f"\n\nLo que {CFG['usuario']['nombre']} escribió junto a la foto: {pie}" if pie else "")
+    try:
+        info = extraer(contenido, inicio, None, "foto")
+        ia_ok = True
+    except Exception as ex:
+        log.warning("La IA falló con la foto (%s); guardo lo que se leyó", ex)
+        info = normalizar({"titulo": "Foto guardada", "resumen": leido[:200]})
+        ia_ok = False
+
+    carpeta = NOTAS / "fotos"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    destino = carpeta / f"{inicio:%Y-%m-%d %H%M%S}{ruta.suffix.lower()}"
+    n = 1
+    while destino.exists():
+        n += 1
+        destino = carpeta / f"{inicio:%Y-%m-%d %H%M%S}-{n}{ruta.suffix.lower()}"
+    ruta.replace(destino)
+    cid = guardar_captura(archivo=ruta.name, origen="foto", inicio=inicio, dur=None, lat=None, lon=None, lugar=None,
+                          info=info, transcripcion=contenido or None, ia_ok=ia_ok,
+                          adjunto=destino.relative_to(NOTAS).as_posix())
+    _limpiar(meta_ruta)
+    actualizar_notas(inicio.date())
+    enviar_o_guardar(mensaje_captura(cid))
+    return cid
+
+
 # ════════════════════════════ Sesiones largas (clase y reunión) ════════════════════════════
 # El teléfono (modo reunión) y la laptop (modo clase) mandan la grabación en partes de ~10 min.
 # Cada parte se transcribe apenas llega; cuando llega la última, se analiza todo junto.
 
 TIPOS_SESION = {"clase": "Clase", "reunion": "Reunión"}
+ETIQUETA_ORIGEN = {"texto": "Nota escrita", "voz": "Nota de voz", "foto": "Foto", **TIPOS_SESION}
 PALABRAS_POR_BLOQUE = 1100  # lo que la IA analiza de una vez (~8 min de habla)
 
 
@@ -1410,6 +1665,7 @@ def reloj() -> None:
     while True:
         try:
             vaciar_salida()
+            revisar_manana()
             revisar_recordatorios()
             revisar_resumen()
             revisar_sesiones_abandonadas()
@@ -1442,6 +1698,79 @@ def revisar_resumen() -> None:
     texto = resumen_del_dia(actual.date())
     if texto is None or enviar(texto) or not CFG["telegram"].get("chat_id"):
         estado_set("ultimo_resumen", hoy)
+
+
+# ── Resumen de la mañana ──
+
+_EXAMEN = re.compile(r"\b(examen(es)?|prueba|parcial|quiz|evaluacion|exposicion|presentacion|laboratorio|"
+                     r"entrega|proyecto|test)\b")
+
+
+def _linea_agenda(t, con_dia: bool) -> str:
+    partes = []
+    if con_dia and t["fecha"]:
+        partes.append(fecha_corta(date.fromisoformat(t["fecha"])))
+    if t["hora"]:
+        partes.append(t["hora"])
+    cuando = f"<i>{e(' · '.join(partes))}</i>  " if partes else ""
+    enlace = f'  <a href="{e(t["enlace"])}">abrir</a>' if t["enlace"] else ""
+    return f"• {cuando}{e(t['texto'])}{enlace}"
+
+
+def agenda(d: date, manana: bool = True) -> str | None:
+    """Lo que viene: vencidas, hoy, exámenes y entregas, y el resto de la semana."""
+    hoy, fin = d.isoformat(), (d + timedelta(days=7)).isoformat()
+    with closing(db()) as con:
+        base = "SELECT * FROM items WHERE tipo='tarea' AND hecho=0 AND "
+        orden = " ORDER BY fecha, hora IS NULL, hora, id"
+        vencidas = con.execute(base + "fecha < ? AND fecha >= ?" + orden,
+                               (hoy, (d - timedelta(days=21)).isoformat())).fetchall()
+        de_hoy = con.execute(base + "fecha = ?" + orden, (hoy,)).fetchall()
+        semana = con.execute(base + "fecha > ? AND fecha <= ?" + orden, (hoy, fin)).fetchall()
+        sin_fecha = con.execute(base + "fecha IS NULL").fetchall()
+    if not (vencidas or de_hoy or semana):
+        return None
+    importantes = [t for t in semana if _EXAMEN.search(_sin_acentos(t["texto"]))]
+    ya = {t["id"] for t in importantes}
+    resto = [t for t in semana if t["id"] not in ya]
+    titulo = f"☀️ <b>Buenos días · {e(fecha_larga(d))}</b>" if manana else f"🗓️ <b>Lo que viene · {e(fecha_larga(d))}</b>"
+    partes = [titulo]
+    if de_hoy:
+        partes += ["", "📌 <b>Para hoy</b>"] + [_linea_agenda(t, False) for t in de_hoy]
+    if importantes:
+        partes += ["", "📝 <b>Exámenes y entregas esta semana</b>"] + [_linea_agenda(t, True) for t in importantes]
+    if resto:
+        partes += ["", "🗓️ <b>El resto de la semana</b>"] + [_linea_agenda(t, True) for t in resto[:15]]
+    if vencidas:
+        partes += ["", "⚠️ <b>Se te pasaron</b>"] + [_linea_agenda(t, True) for t in vencidas[:8]]
+        partes.append("<i>Si ya las hiciste: /hecho y el número (los ves en /pendientes).</i>")
+    if sin_fecha:
+        partes += ["", f"<i>Y {plural(len(sin_fecha), 'pendiente', 'pendientes')} sin fecha → /pendientes</i>"]
+    return "\n".join(partes)
+
+
+def plural(n: int, uno: str, varios: str) -> str:
+    return f"{n} {uno if n == 1 else varios}"
+
+
+def revisar_manana() -> None:
+    hora = str(CFG["notas"].get("hora_manana") or "").strip()
+    if not hora or hora.lower() in ("no", "off", "apagado"):
+        return
+    h, m = _hhmm(hora, (6, 30))
+    actual = ahora()
+    hoy = actual.date().isoformat()
+    # Si la laptop estuvo dormida a esa hora, el resumen llega cuando despierte (hasta el mediodía).
+    if (actual.hour, actual.minute) < (h, m) or actual.hour >= 12 or estado_get("ultimo_manana") == hoy:
+        return
+    texto = agenda(actual.date(), manana=True)
+    if texto is None or enviar(texto) or not CFG["telegram"].get("chat_id"):
+        estado_set("ultimo_manana", hoy)
+        if texto:
+            # Las tareas de hoy sin hora ya salieron en el resumen: no hace falta otro aviso a las 7.
+            with closing(db()) as con, con:
+                con.execute("UPDATE items SET recordado=1 WHERE tipo='tarea' AND hecho=0 AND fecha=? AND hora IS NULL",
+                            (hoy,))
 
 
 # ════════════════════════════ Pregúntale a Eco ════════════════════════════
@@ -1628,6 +1957,632 @@ def estado_respaldo() -> dict:
             "carpeta": str(destino) if destino else None, "error": estado_get("respaldo_error") or None}
 
 
+# ════════════════════════════ Google: Classroom y Calendar ════════════════════════════
+# Eco se conecta con tu cuenta (la del colegio) usando una llave que creas una vez en Google Cloud.
+# Permisos que pide, y nada más:
+#   • ver tus clases y tus tareas de Classroom (solo leer),
+#   • crear su propio calendario "Eco" y manejar SOLO los eventos de ese calendario.
+
+GOOGLE_ALCANCES = " ".join((
+    "openid", "email",
+    "https://www.googleapis.com/auth/classroom.courses.readonly",
+    "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+    "https://www.googleapis.com/auth/calendar.app.created",
+))
+GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
+CLASSROOM = "https://classroom.googleapis.com/v1"
+CALENDAR = "https://www.googleapis.com/calendar/v3"
+
+_google_evento = threading.Event()
+_google_lock = threading.Lock()
+_google_pendientes: dict[str, tuple[str, float]] = {}  # state → (verificador PKCE, cuándo)
+_google_forzar = {"classroom": False}
+
+
+class GoogleError(Exception):
+    def __init__(self, codigo: int, razon: str, mensaje: str):
+        super().__init__(f"{codigo} {razon}: {mensaje}")
+        self.codigo, self.razon, self.mensaje = codigo, razon or "", mensaje or ""
+
+
+def avisar_google(classroom: bool = False) -> None:
+    """Despierta la sincronización (se llama después de cada cambio en tareas)."""
+    if classroom:
+        _google_forzar["classroom"] = True
+    _google_evento.set()
+
+
+def _b64url(datos: bytes) -> str:
+    return base64.urlsafe_b64encode(datos).rstrip(b"=").decode()
+
+
+def google_cliente() -> dict | None:
+    for ruta in (DATOS / "google_cliente.json", BASE / "google_cliente.json"):
+        if ruta.exists():
+            try:
+                d = json.loads(ruta.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            c = d.get("installed") or d.get("web") or d
+            if c.get("client_id") and c.get("client_secret"):
+                return {"id": c["client_id"], "secreto": c["client_secret"]}
+    return None
+
+
+def guardar_google_cliente(texto: str) -> None:
+    """El archivo .json que bajas de Google Cloud (Clientes → Descargar JSON)."""
+    try:
+        d = json.loads(texto)
+    except ValueError:
+        raise ValueError("Ese archivo no es el JSON de Google Cloud.") from None
+    c = d.get("installed") or d.get("web") or {}
+    if not str(c.get("client_id", "")).endswith(".apps.googleusercontent.com") or not c.get("client_secret"):
+        raise ValueError("Ese JSON no es un cliente OAuth. En Google Cloud crea uno de tipo «App de escritorio».")
+    if "web" in d and "installed" not in d:
+        raise ValueError("Ese cliente es de tipo «Aplicación web». Crea uno de tipo «App de escritorio».")
+    (DATOS / "google_cliente.json").write_text(json.dumps(d), encoding="utf-8")
+    estado_set("google_error", "")
+
+
+def _token_google_ruta() -> Path:
+    return DATOS / "google_token.json"
+
+
+def google_token_guardado() -> dict | None:
+    try:
+        return json.loads(_token_google_ruta().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _guardar_token_google(t: dict) -> None:
+    ruta = _token_google_ruta()
+    tmp = ruta.with_suffix(".tmp")
+    tmp.write_text(json.dumps(t), encoding="utf-8")
+    tmp.replace(ruta)
+
+
+def google_redirect() -> str:
+    # Google deja usar cualquier puerto de 127.0.0.1 con clientes de escritorio.
+    return f"http://127.0.0.1:{int(CFG['servidor']['puerto'])}/"
+
+
+def google_url_conectar() -> str:
+    cliente = google_cliente()
+    if not cliente:
+        raise ValueError("Falta la llave de Google Cloud.")
+    verificador = _b64url(os.urandom(48))
+    estado = _b64url(os.urandom(24))
+    limite = time.time() - 900
+    for k in [k for k, (_, t) in _google_pendientes.items() if t < limite]:
+        _google_pendientes.pop(k, None)
+    _google_pendientes[estado] = (verificador, time.time())
+    params = {
+        "client_id": cliente["id"], "redirect_uri": google_redirect(), "response_type": "code",
+        "scope": GOOGLE_ALCANCES, "state": estado, "access_type": "offline", "prompt": "consent",
+        "code_challenge": _b64url(hashlib.sha256(verificador.encode()).digest()), "code_challenge_method": "S256",
+    }
+    return GOOGLE_AUTH + "?" + urllib.parse.urlencode(params)
+
+
+def _post_formulario(url: str, campos: dict) -> dict:
+    req = urllib.request.Request(url, data=urllib.parse.urlencode(campos).encode(),
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as ex:
+        try:
+            err = json.load(ex)
+        except ValueError:
+            err = {}
+        raise GoogleError(ex.code, str(err.get("error", "")), str(err.get("error_description", ""))) from None
+
+
+def _email_de(id_token: str | None) -> str | None:
+    try:
+        cuerpo = id_token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(cuerpo + "=" * (-len(cuerpo) % 4))).get("email")
+    except Exception:
+        return None
+
+
+ERRORES_OAUTH = {
+    "access_denied": "Cancelaste el permiso. Cuando quieras, vuelve a tocar «Conectar con Google».",
+    "admin_policy_enforced": "Tu colegio no permite que esta cuenta use apps externas como Eco (lo decide el "
+                             "administrador del colegio). Puedes conectar tu cuenta personal de Gmail para tener "
+                             "Calendar, o pedirle al colegio que permita la app.",
+    "org_internal": "Ese proyecto de Google Cloud solo acepta cuentas de su organización. En «Público» "
+                    "(Audience) elige «Externo».",
+}
+
+
+def google_callback(params: dict) -> tuple[bool, str]:
+    pendiente = _google_pendientes.pop(str(params.get("state") or ""), None)
+    if not pendiente:
+        return False, "Ese enlace ya venció. Vuelve a tocar «Conectar con Google» en el panel."
+    if params.get("error"):
+        return False, ERRORES_OAUTH.get(params["error"], f"Google no dio el permiso ({params['error']}).")
+    cliente = google_cliente()
+    if not cliente or not params.get("code"):
+        return False, "Falta la llave de Google Cloud."
+    try:
+        r = _post_formulario(GOOGLE_TOKEN, {
+            "code": params["code"], "client_id": cliente["id"], "client_secret": cliente["secreto"],
+            "redirect_uri": google_redirect(), "grant_type": "authorization_code", "code_verifier": pendiente[0],
+        })
+    except GoogleError as ex:
+        return False, f"Google no aceptó la conexión ({ex.razon or ex.codigo}). Inténtalo otra vez."
+    except OSError:
+        return False, "No hay internet ahora mismo. Inténtalo otra vez en un rato."
+    if not r.get("refresh_token"):
+        return False, "Google no dio un permiso permanente. Vuelve a intentarlo."
+    email = _email_de(r.get("id_token"))
+    _guardar_token_google({
+        "refresh_token": r["refresh_token"], "access_token": r.get("access_token"),
+        "expira": time.time() + int(r.get("expires_in") or 3600), "email": email,
+        "alcances": r.get("scope", ""), "conectado": ahora().isoformat(timespec="seconds"),
+    })
+    for k in ("google_error", "classroom_error", "calendar_error"):
+        estado_set(k, "")
+    estado_set("google_primera", "1")
+    log.info("Google conectado (%s)", email)
+    avisar_google(classroom=True)
+    return True, f"Listo: Eco quedó conectado con {email or 'tu cuenta de Google'}."
+
+
+def google_desconectar() -> None:
+    t = google_token_guardado()
+    if t:
+        try:
+            _post_formulario("https://oauth2.googleapis.com/revoke", {"token": t["refresh_token"]})
+        except Exception:
+            pass  # si ya no servía, igual lo borramos
+    _limpiar(_token_google_ruta())
+    log.info("Google desconectado")
+
+
+def google_access_token() -> str:
+    with _google_lock:
+        t = google_token_guardado()
+        if not t:
+            raise GoogleError(401, "sin_conexion", "Eco no está conectado con Google")
+        if t.get("access_token") and float(t.get("expira") or 0) - 60 > time.time():
+            return t["access_token"]
+        cliente = google_cliente()
+        if not cliente:
+            raise GoogleError(401, "sin_cliente", "Falta la llave de Google Cloud")
+        try:
+            r = _post_formulario(GOOGLE_TOKEN, {"client_id": cliente["id"], "client_secret": cliente["secreto"],
+                                                "refresh_token": t["refresh_token"], "grant_type": "refresh_token"})
+        except GoogleError as ex:
+            if ex.razon in ("invalid_grant", "unauthorized_client", "invalid_client"):
+                _limpiar(_token_google_ruta())
+                estado_set("google_error", "Google cerró la conexión (cambiaste la contraseña, quitaste el permiso o "
+                                           "venció). Vuelve a tocar «Conectar con Google».")
+            raise
+        t["access_token"] = r["access_token"]
+        t["expira"] = time.time() + int(r.get("expires_in") or 3600)
+        _guardar_token_google(t)
+        return t["access_token"]
+
+
+def google_api(metodo: str, url: str, cuerpo: dict | None = None, params: dict | None = None) -> dict:
+    if params:
+        url += "?" + urllib.parse.urlencode(params, doseq=True)
+    req = urllib.request.Request(url, method=metodo, data=json.dumps(cuerpo).encode() if cuerpo is not None else None,
+                                 headers={"Authorization": f"Bearer {google_access_token()}",
+                                          "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            crudo = r.read()
+            return json.loads(crudo) if crudo else {}
+    except urllib.error.HTTPError as ex:
+        try:
+            err = json.load(ex).get("error") or {}
+        except (ValueError, AttributeError):
+            err = {}
+        if not isinstance(err, dict):
+            err = {"message": str(err)}
+        errores = err.get("errors") or [{}]
+        razon = errores[0].get("reason") or err.get("status") or ""
+        raise GoogleError(ex.code, str(razon), str(err.get("message") or ex.reason)) from None
+
+
+def _paginas(url: str, clave: str, params: dict, max_paginas: int = 5):
+    params = dict(params)
+    for _ in range(max_paginas):
+        r = google_api("GET", url, params=params)
+        yield from r.get(clave) or []
+        if not r.get("nextPageToken"):
+            return
+        params["pageToken"] = r["nextPageToken"]
+
+
+def _error_google(ex: GoogleError, que: str) -> str:
+    m, r = ex.mensaje.lower(), ex.razon.lower()
+    if ex.codigo == 403 and ("has not been used" in m or "is disabled" in m or "accessnotconfigured" in r
+                             or "service_disabled" in r):
+        api = "Google Classroom API" if que == "classroom" else "Google Calendar API"
+        return f"Falta activar «{api}» en tu proyecto de Google Cloud (README, sección 10, paso 2)."
+    if que == "classroom" and ex.codigo == 403:
+        return ("Tu colegio no deja que apps externas lean Classroom (lo decide el administrador). "
+                "Lo demás de Eco sigue funcionando.")
+    if ex.codigo == 401:
+        return "Google pidió volver a iniciar sesión. Toca «Conectar con Google» otra vez."
+    if ex.codigo == 403 and que == "calendar":
+        return "Google no dio permiso para el calendario. Vuelve a conectar y deja marcada la casilla de Calendar."
+    return f"Google respondió: {ex.mensaje[:160] or ex.codigo}"
+
+
+# ── Classroom → tareas de Eco ──
+
+def _vence_classroom(t: dict) -> tuple[str | None, str | None]:
+    d = t.get("dueDate") or {}
+    if not d.get("year"):
+        return None, None
+    hm = t.get("dueTime")
+    if not hm:
+        return date(d["year"], d["month"], d["day"]).isoformat(), None
+    # Classroom guarda la hora en UTC.
+    local = datetime(d["year"], d["month"], d["day"], int(hm.get("hours", 0)), int(hm.get("minutes", 0)),
+                     tzinfo=timezone.utc).astimezone(TZ)
+    if (local.hour, local.minute) == (23, 59):  # "para el día", sin hora
+        return local.date().isoformat(), None
+    return local.date().isoformat(), f"{local:%H:%M}"
+
+
+def sincronizar_classroom() -> dict:
+    cursos = list(_paginas(f"{CLASSROOM}/courses", "courses",
+                           {"studentId": "me", "courseStates": "ACTIVE", "pageSize": 50}))
+    hoy = ahora().date()
+    viejo, muy_viejo = (hoy - timedelta(days=14)).isoformat(), (hoy - timedelta(days=21)).isoformat()
+    nuevas: list[dict] = []
+    cambiadas = 0
+    for curso in cursos:
+        clase = (curso.get("name") or "Clase").strip()
+        try:
+            trabajos = list(_paginas(f"{CLASSROOM}/courses/{curso['id']}/courseWork", "courseWork",
+                                     {"courseWorkStates": "PUBLISHED", "orderBy": "updateTime desc", "pageSize": 50},
+                                     max_paginas=2))
+            entregas = list(_paginas(f"{CLASSROOM}/courses/{curso['id']}/courseWork/-/studentSubmissions",
+                                     "studentSubmissions", {"userId": "me", "pageSize": 100}, max_paginas=3))
+        except GoogleError as ex:
+            if ex.codigo in (403, 404) and cursos:
+                log.info("Classroom: no pude leer la clase %s (%s)", clase, ex.codigo)
+                continue
+            raise
+        estados = {s.get("courseWorkId"): s.get("state") for s in entregas}
+        for t in trabajos:
+            fecha, hora = _vence_classroom(t)
+            creado = str(t.get("creationTime") or "")[:10]
+            if (fecha and fecha < viejo) or (not fecha and creado and creado < muy_viejo):
+                continue  # cosas viejas: no llenamos tus pendientes con el pasado
+            entregada = estados.get(t.get("id")) in ("TURNED_IN", "RETURNED")
+            texto = f"{clase}: {(t.get('title') or 'Tarea').strip()}"[:300]
+            externo = f"classroom:{t['id']}"
+            with closing(db()) as con, con:
+                previo = con.execute("SELECT * FROM items WHERE externo=?", (externo,)).fetchone()
+                if previo is None:
+                    if entregada:
+                        continue
+                    f, h, ts = calcular_recordatorio(fecha, hora, ahora())
+                    con.execute("INSERT INTO items(captura_id, tipo, texto, fecha, hora, recordar_ts, origen, externo, "
+                                "enlace, detalle) VALUES(NULL, 'tarea', ?, ?, ?, ?, 'classroom', ?, ?, ?)",
+                                (texto, f, h, ts, externo, t.get("alternateLink"), clase))
+                    nuevas.append({"texto": texto, "fecha": f, "hora": h, "enlace": t.get("alternateLink")})
+                    continue
+                cambio = False
+                if (fecha, hora) != (previo["fecha"], previo["hora"]):  # el profe movió la fecha
+                    f, h, ts = calcular_recordatorio(fecha, hora, ahora())
+                    con.execute("UPDATE items SET fecha=?, hora=?, recordar_ts=?, recordado=0 WHERE id=?",
+                                (f, h, ts, previo["id"]))
+                    cambio = True
+                if texto != previo["texto"]:
+                    con.execute("UPDATE items SET texto=? WHERE id=?", (texto, previo["id"]))
+                    cambio = True
+                if entregada and not previo["hecho"]:
+                    con.execute("UPDATE items SET hecho=1 WHERE id=?", (previo["id"],))
+                    cambio = True
+                cambiadas += cambio
+
+    with closing(db()) as con:
+        pendientes_cr = con.execute("SELECT count(*) FROM items WHERE origen='classroom' AND hecho=0").fetchone()[0]
+    if estado_get("google_primera") == "1":
+        estado_set("google_primera", "")
+        enviar_o_guardar(f"📚 <b>Classroom conectado</b>\n{plural(len(cursos), 'clase', 'clases')} · "
+                         f"{plural(pendientes_cr, 'tarea pendiente', 'tareas pendientes')}.\n"
+                         "Te aviso cada vez que dejen algo nuevo.")
+    elif nuevas:
+        lineas = ["📚 <b>" + ("Nueva tarea" if len(nuevas) == 1 else "Nuevas tareas") + " en Classroom</b>"]
+        for n in nuevas[:10]:
+            cuando = _cuando_tarea(n)
+            lineas.append(f"• {e(n['texto'])}" + (f" — <i>{e(cuando)}</i>" if cuando else "")
+                          + (f'  <a href="{e(n["enlace"])}">abrir</a>' if n["enlace"] else ""))
+        enviar_o_guardar("\n".join(lineas))
+    if nuevas or cambiadas:
+        actualizar_notas(None)
+    estado_set("classroom_ultimo", ahora().isoformat(timespec="seconds"))
+    estado_set("classroom_cursos", len(cursos))
+    estado_set("classroom_error", "")
+    log.info("Classroom: %d clases, %d tareas nuevas, %d cambios", len(cursos), len(nuevas), cambiadas)
+    return {"cursos": len(cursos), "nuevas": len(nuevas), "cambios": cambiadas}
+
+
+# ── Tareas de Eco → calendario "Eco" ──
+
+def _q(texto: str) -> str:
+    return urllib.parse.quote(texto, safe="")
+
+
+def calendario_eco() -> str:
+    cal = estado_get("google_calendario")
+    if cal:
+        try:
+            google_api("GET", f"{CALENDAR}/calendars/{_q(cal)}")
+            return cal
+        except GoogleError as ex:
+            if ex.codigo not in (404, 410):
+                raise
+            log.info("El calendario «Eco» ya no existe; lo creo de nuevo")
+            with closing(db()) as con, con:
+                con.execute("DELETE FROM google_eventos")
+    r = google_api("POST", f"{CALENDAR}/calendars", {
+        "summary": "Eco", "description": "Tareas, entregas y exámenes que anotó Eco.",
+        "timeZone": CFG["notas"]["zona_horaria"]})
+    estado_set("google_calendario", r["id"])
+    return r["id"]
+
+
+def _evento_de(t) -> dict:
+    zona = CFG["notas"]["zona_horaria"]
+    cuerpo = {"summary": t["texto"], "description": "Anotado por Eco." + (f"\n{t['enlace']}" if t["enlace"] else "")}
+    if t["hora"]:
+        ini = datetime.fromisoformat(f"{t['fecha']}T{t['hora']}")
+        fin = ini + timedelta(minutes=30)
+        cuerpo["start"] = {"dateTime": ini.isoformat(timespec="seconds"), "timeZone": zona}
+        cuerpo["end"] = {"dateTime": fin.isoformat(timespec="seconds"), "timeZone": zona}
+        minutos = int(CFG["notas"].get("aviso_antes_min", 60))
+        cuerpo["reminders"] = {"useDefault": False, "overrides": [{"method": "popup", "minutes": minutos}]}
+    else:
+        d = date.fromisoformat(t["fecha"])
+        cuerpo["start"] = {"date": d.isoformat()}
+        cuerpo["end"] = {"date": (d + timedelta(days=1)).isoformat()}
+        cuerpo["transparency"] = "transparent"  # no te marca como ocupado todo el día
+        cuerpo["reminders"] = {"useDefault": False, "overrides": []}
+    return cuerpo
+
+
+def sincronizar_calendar() -> int:
+    cal = calendario_eco()
+    base = f"{CALENDAR}/calendars/{_q(cal)}/events"
+    desde = (ahora().date() - timedelta(days=1)).isoformat()
+    with closing(db()) as con:
+        # Las de Classroom ya aparecen en tu calendario por el propio Classroom: no las duplicamos.
+        tareas = con.execute("SELECT * FROM items WHERE tipo='tarea' AND hecho=0 AND fecha IS NOT NULL "
+                             "AND coalesce(origen, '') != 'classroom'").fetchall()
+        mapa = {f["item_id"]: f for f in con.execute("SELECT * FROM google_eventos").fetchall()}
+    vivas: set[int] = set()
+    cambios = 0
+    for t in tareas:
+        previo = mapa.get(t["id"])
+        if previo is None and t["fecha"] < desde:
+            continue  # lo viejo que nunca estuvo en el calendario no se sube
+        vivas.add(t["id"])
+        firma = f"{t['texto']}|{t['fecha']}|{t['hora']}"
+        if previo is not None and previo["firma"] == firma:
+            continue
+        cuerpo = _evento_de(t)
+        evento = None
+        if previo is not None:
+            try:
+                google_api("PATCH", f"{base}/{_q(previo['evento'])}", cuerpo)
+                evento = previo["evento"]
+            except GoogleError as ex:
+                if ex.codigo not in (404, 410):  # lo borraste a mano en Calendar: se vuelve a crear
+                    raise
+        if evento is None:
+            evento = google_api("POST", base, cuerpo)["id"]
+        with closing(db()) as con, con:
+            con.execute("INSERT INTO google_eventos(item_id, evento, firma) VALUES(?,?,?) ON CONFLICT(item_id) "
+                        "DO UPDATE SET evento=excluded.evento, firma=excluded.firma", (t["id"], evento, firma))
+        cambios += 1
+    for item_id, f in mapa.items():
+        if item_id in vivas:
+            continue
+        try:  # tarea hecha, borrada o sin fecha: su evento se va
+            google_api("DELETE", f"{base}/{_q(f['evento'])}")
+        except GoogleError as ex:
+            if ex.codigo not in (404, 410):
+                raise
+        with closing(db()) as con, con:
+            con.execute("DELETE FROM google_eventos WHERE item_id=?", (item_id,))
+        cambios += 1
+    estado_set("calendar_ultimo", ahora().isoformat(timespec="seconds"))
+    estado_set("calendar_error", "")
+    if cambios:
+        log.info("Calendar: %d cambios en el calendario «Eco»", cambios)
+    return cambios
+
+
+def google_hilo() -> None:
+    ultimo_classroom = 0.0
+    time.sleep(15)
+    _google_evento.set()  # primera revisión apenas enciende Eco
+    while True:
+        avisado = _google_evento.wait(timeout=600)
+        _google_evento.clear()
+        if avisado:
+            time.sleep(3)  # junta varios cambios seguidos en una sola vuelta
+            _google_evento.clear()
+        t = google_token_guardado()
+        if not t or not google_cliente():
+            continue
+        g, alcances = CFG["google"], str(t.get("alcances") or "")
+        cada = max(5, int(g.get("cada_min") or 20)) * 60
+        if g.get("classroom", True) and (_google_forzar["classroom"] or time.time() - ultimo_classroom > cada):
+            _google_forzar["classroom"] = False
+            ultimo_classroom = time.time()
+            if "classroom" not in alcances:
+                estado_set("classroom_error", "No diste permiso para Classroom. Vuelve a conectar y deja marcadas "
+                                              "las casillas de Classroom.")
+            else:
+                try:
+                    sincronizar_classroom()
+                except GoogleError as ex:
+                    estado_set("classroom_error", _error_google(ex, "classroom"))
+                    log.warning("Classroom: %s", ex)
+                except Exception as ex:  # sin internet: se reintenta en la próxima vuelta
+                    ultimo_classroom = 0.0
+                    log.warning("Classroom no respondió (%s)", ex)
+        if g.get("calendar", True):
+            if "calendar" not in alcances:
+                estado_set("calendar_error", "No diste permiso para Calendar. Vuelve a conectar y deja marcada "
+                                             "la casilla del calendario.")
+                continue
+            try:
+                sincronizar_calendar()
+            except GoogleError as ex:
+                estado_set("calendar_error", _error_google(ex, "calendar"))
+                log.warning("Calendar: %s", ex)
+            except Exception as ex:
+                log.warning("Calendar no respondió (%s)", ex)
+
+
+def estado_google() -> dict:
+    t = google_token_guardado() or {}
+    alcances = str(t.get("alcances") or "")
+    with closing(db()) as con:
+        tareas_cr = con.execute("SELECT count(*) FROM items WHERE origen='classroom' AND hecho=0").fetchone()[0]
+        eventos = con.execute("SELECT count(*) FROM google_eventos").fetchone()[0]
+    return {
+        "cliente": google_cliente() is not None, "conectado": bool(t), "email": t.get("email"),
+        "error": estado_get("google_error") or None,
+        "classroom": {"activo": bool(CFG["google"].get("classroom", True)), "permiso": "classroom" in alcances,
+                      "ultimo": estado_get("classroom_ultimo"), "cursos": int(estado_get("classroom_cursos") or 0),
+                      "pendientes": tareas_cr, "error": estado_get("classroom_error") or None},
+        "calendar": {"activo": bool(CFG["google"].get("calendar", True)), "permiso": "calendar" in alcances,
+                     "ultimo": estado_get("calendar_ultimo"), "eventos": eventos,
+                     "error": estado_get("calendar_error") or None},
+    }
+
+
+# ════════════════════════════ Actualizar la app del teléfono ════════════════════════════
+# GitHub compila la app cada vez que subes cambios. La laptop baja esa versión sola (con un permiso
+# de solo lectura) y se la ofrece al teléfono, que la instala con un toque. Sin entrar a GitHub.
+
+_app_evento = threading.Event()
+
+
+def _carpeta_app() -> Path:
+    return DATOS / "app"
+
+
+def _github_token() -> str:
+    t = str(CFG["github"].get("token") or "").strip()
+    if t:
+        return t
+    try:
+        return str(json.loads((DATOS / "github.json").read_text(encoding="utf-8")).get("token") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def guardar_github_token(token: str) -> None:
+    token = token.strip()
+    if not re.fullmatch(r"(github_pat_|ghp_)[A-Za-z0-9_]{20,}", token):
+        raise ValueError("Eso no parece un token de GitHub (empieza con github_pat_).")
+    (DATOS / "github.json").write_text(json.dumps({"token": token}), encoding="utf-8")
+    estado_set("app_error", "")
+    _app_evento.set()
+
+
+def _github(url: str, binario: bool = False):
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
+                                               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Eco-laptop"})
+    # "unredirected": el token NO viaja a la página de descarga a la que GitHub redirige.
+    req.add_unredirected_header("Authorization", f"Bearer {_github_token()}")
+    with urllib.request.urlopen(req, timeout=180) as r:
+        return r.read() if binario else json.load(r)
+
+
+def info_app() -> dict | None:
+    try:
+        d = json.loads((_carpeta_app() / "version.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if (_carpeta_app() / "eco.apk").exists() else None
+
+
+def revisar_app() -> None:
+    repo = str(CFG["github"].get("repo") or "").strip()
+    if not _github_token() or not repo:
+        return
+    nombre = str(CFG["github"].get("artefacto") or "Eco-apk")
+    lista = _github(f"https://api.github.com/repos/{repo}/actions/artifacts?name={_q(nombre)}&per_page=10")
+    vivos = [a for a in lista.get("artifacts") or [] if not a.get("expired")]
+    estado_set("app_revisado", ahora().isoformat(timespec="seconds"))
+    estado_set("app_error", "")
+    if not vivos:
+        return
+    ultimo = max(vivos, key=lambda a: a.get("created_at") or "")
+    actual = info_app()
+    if (actual and str(actual.get("artefacto")) == str(ultimo["id"])) or estado_get("app_sin_version") == str(ultimo["id"]):
+        return
+    import zipfile
+    crudo = _github(ultimo["archive_download_url"], binario=True)
+    with zipfile.ZipFile(io.BytesIO(crudo)) as z:
+        nombres = z.namelist()
+        apk = next((n for n in nombres if n.lower().endswith(".apk")), None)
+        version = json.loads(z.read("version.json")) if "version.json" in nombres else {}
+        datos_apk = z.read(apk) if apk else b""
+    if not datos_apk or not version.get("versionCode"):
+        estado_set("app_sin_version", str(ultimo["id"]))  # compilada antes de este cambio: se ignora
+        log.info("La app más reciente en GitHub no trae número de versión; espero la próxima")
+        return
+    carpeta = _carpeta_app()
+    carpeta.mkdir(parents=True, exist_ok=True)
+    tmp = carpeta / "eco.apk.part"
+    tmp.write_bytes(datos_apk)
+    tmp.replace(carpeta / "eco.apk")
+    info = {"versionCode": int(version["versionCode"]), "versionName": str(version.get("versionName") or ""),
+            "commit": version.get("commit"), "tamano": len(datos_apk),
+            "sha256": hashlib.sha256(datos_apk).hexdigest(), "artefacto": ultimo["id"],
+            "creado": ultimo.get("created_at"), "bajado": ahora().isoformat(timespec="seconds")}
+    (carpeta / "version.json").write_text(json.dumps(info), encoding="utf-8")
+    log.info("App del teléfono lista para instalar: versión %s", info["versionName"])
+    if actual and info["versionCode"] > int(actual.get("versionCode") or 0):
+        enviar_o_guardar(f"📲 <b>Versión nueva de la app Eco</b> ({e(info['versionName'])})\n"
+                         "Abre Eco en tu teléfono y toca <b>Actualizar</b>.")
+
+
+def actualizaciones_hilo() -> None:
+    time.sleep(20)
+    _app_evento.set()
+    while True:
+        _app_evento.wait(timeout=30 * 60)
+        _app_evento.clear()
+        try:
+            revisar_app()
+        except urllib.error.HTTPError as ex:
+            estado_set("app_error", {
+                401: "El token de GitHub no sirve o ya venció. Crea otro (README, sección 11).",
+                403: "El token de GitHub no tiene permiso para ver «Actions» de tu repositorio.",
+                404: "GitHub no encuentra el repositorio con ese token: revisa que le diste acceso al repositorio eco.",
+            }.get(ex.code, f"GitHub respondió con error {ex.code}."))
+            log.warning("Actualización de la app: GitHub respondió %s", ex.code)
+        except Exception as ex:  # sin internet: se intenta en la próxima vuelta
+            log.warning("No pude revisar si hay app nueva (%s)", ex)
+
+
+def estado_app() -> dict:
+    info = info_app() or {}
+    return {"token": bool(_github_token()), "version": info.get("versionName"), "codigo": info.get("versionCode"),
+            "creado": info.get("creado"), "revisado": estado_get("app_revisado"),
+            "error": estado_get("app_error") or None}
+
+
 # ════════════════════════════ Servidor HTTP ════════════════════════════
 
 def _nombre_seguro(nombre: str) -> str:
@@ -1655,6 +2610,7 @@ def _tarea_json(t, titulo: str | None = None) -> dict:
         "cuando": _cuando_tarea(t), "hecho": bool(t["hecho"]),
         "hoy": t["fecha"] == hoy, "vencida": bool(t["fecha"] and t["fecha"] < hoy and not t["hecho"]),
         "captura_id": t["captura_id"], "de": titulo,
+        "origen": t["origen"], "enlace": t["enlace"], "clase": t["detalle"],
     }
 
 
@@ -1666,9 +2622,13 @@ def _captura_json(con: sqlite3.Connection, c) -> dict:
         "duracion": c["duracion"], "lugar": c["lugar"], "lat": c["lat"], "lon": c["lon"],
         "titulo": c["titulo"], "resumen": c["resumen"], "importancia": c["importancia"] or 3,
         "origen": c["origen"], "ia_ok": bool(c["ia_ok"]), "transcripcion": c["transcripcion"],
+        "foto": bool(c["adjunto"]),
         "tareas": [_tarea_json(i) for i in its if i["tipo"] == "tarea"],
         "datos": [i["texto"] for i in its if i["tipo"] == "dato"],
         "ideas": [i["texto"] for i in its if i["tipo"] == "idea"],
+        # Para editar: todo junto, con su id
+        "items": [{"id": i["id"], "tipo": i["tipo"], "texto": i["texto"], "fecha": i["fecha"],
+                   "hora": i["hora"], "hecho": bool(i["hecho"])} for i in its],
     }
 
 
@@ -1697,6 +2657,8 @@ def api_estado(es_local: bool) -> dict:
         "sesiones": sesiones_en_curso(),
         "clase": CLASE.estado() if CLASE is not None else None,
         "respaldo": estado_respaldo() if es_local else None,
+        "google": estado_google() if es_local else None,
+        "app": estado_app() if es_local else None,
     }
 
 
@@ -1726,10 +2688,10 @@ def api_momentos(fecha: str | None, q: str | None) -> list:
 def api_pendientes() -> list:
     with closing(db()) as con:
         filas = con.execute(
-            "SELECT i.*, c.titulo AS de FROM items i LEFT JOIN capturas c ON c.id=i.captura_id "
+            "SELECT i.*, c.titulo AS de, c.inicio AS de_inicio FROM items i LEFT JOIN capturas c ON c.id=i.captura_id "
             "WHERE i.tipo='tarea' AND i.hecho=0 "
             "ORDER BY i.fecha IS NULL, i.fecha, i.hora IS NULL, i.hora, i.id LIMIT 200").fetchall()
-    return [_tarea_json(f, f["de"]) for f in filas]
+    return [{**_tarea_json(f, f["de"]), "de_fecha": (f["de_inicio"] or "")[:10] or None} for f in filas]
 
 
 def api_marcar_tarea(tarea_id: int, hecho: bool) -> dict | None:
@@ -1739,10 +2701,112 @@ def api_marcar_tarea(tarea_id: int, hecho: bool) -> dict | None:
         if not fila:
             return None
         con.execute("UPDATE items SET hecho=? WHERE id=?", (int(hecho), tarea_id))
-    if fila["inicio"]:
-        actualizar_notas(datetime.fromisoformat(fila["inicio"]).date())
+    actualizar_notas(datetime.fromisoformat(fila["inicio"]).date() if fila["inicio"] else None)
     with closing(db()) as con:
         return _tarea_json(con.execute("SELECT * FROM items WHERE id=?", (tarea_id,)).fetchone())
+
+
+# ── Editar y borrar desde el panel ──
+
+TIPOS_ITEM = ("tarea", "dato", "idea")
+
+
+def api_guardar_momento(datos: dict) -> dict | None:
+    """Guarda lo que editaste: título, resumen, importancia y la lista completa de tareas, datos e ideas.
+    Lo que ya no viene en la lista se borra; lo nuevo (sin id) se agrega."""
+    cid = int(datos["id"])
+    with closing(db()) as con, con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        if not c:
+            return None
+        titulo = str(datos.get("titulo") or "").strip()[:90] or c["titulo"]
+        resumen = str(datos["resumen"]).strip()[:1500] if datos.get("resumen") is not None else (c["resumen"] or "")
+        try:
+            importancia = max(1, min(5, int(datos.get("importancia") or c["importancia"] or 3)))
+        except (TypeError, ValueError):
+            importancia = c["importancia"] or 3
+        transcripcion_vieja = archivo_transcripcion(c) if c["origen"] in TIPOS_SESION and c["transcripcion"] else None
+        con.execute("UPDATE capturas SET titulo=?, resumen=?, importancia=? WHERE id=?",
+                    (titulo, resumen, importancia, cid))
+
+        if isinstance(datos.get("items"), list):
+            actuales = {i["id"]: i for i in items_de(con, cid)}
+            quedan: set[int] = set()
+            for it in datos["items"][:120]:
+                if not isinstance(it, dict) or it.get("tipo") not in TIPOS_ITEM:
+                    continue
+                tipo = it["tipo"]
+                texto = re.sub(r"\s+", " ", str(it.get("texto") or "")).strip()[:300]
+                if not texto:
+                    continue
+                fecha = _fecha_valida(it.get("fecha")) if tipo == "tarea" and it.get("fecha") else None
+                hora = _hora_valida(it.get("hora")) if tipo == "tarea" else None
+                try:
+                    previo = actuales.get(int(it["id"])) if it.get("id") is not None else None
+                except (TypeError, ValueError):
+                    previo = None
+                if previo is None:
+                    f, h, ts = calcular_recordatorio(fecha, hora, ahora()) if tipo == "tarea" else (None, None, None)
+                    con.execute("INSERT INTO items(captura_id, tipo, texto, fecha, hora, recordar_ts) VALUES(?,?,?,?,?,?)",
+                                (cid, tipo, texto, f, h, ts))
+                    continue
+                quedan.add(previo["id"])
+                if tipo != "tarea":
+                    con.execute("UPDATE items SET tipo=?, texto=?, fecha=NULL, hora=NULL, recordar_ts=NULL, "
+                                "recordado=0, hecho=0 WHERE id=?", (tipo, texto, previo["id"]))
+                elif previo["tipo"] != "tarea" or (fecha, hora) != (previo["fecha"], previo["hora"]):
+                    f, h, ts = calcular_recordatorio(fecha, hora, ahora())  # nueva fecha → nuevo aviso
+                    con.execute("UPDATE items SET tipo='tarea', texto=?, fecha=?, hora=?, recordar_ts=?, recordado=0 "
+                                "WHERE id=?", (texto, f, h, ts, previo["id"]))
+                else:
+                    con.execute("UPDATE items SET texto=? WHERE id=?", (texto, previo["id"]))
+            for iid in set(actuales) - quedan:
+                con.execute("DELETE FROM items WHERE id=?", (iid,))
+
+    indexar(cid)
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        respuesta = _captura_json(con, c)
+    if transcripcion_vieja is not None:
+        escribir_transcripcion(cid)
+        if transcripcion_vieja != archivo_transcripcion(c):
+            _limpiar(transcripcion_vieja)  # cambió el título: el archivo se renombra
+    actualizar_notas(datetime.fromisoformat(c["inicio"]).date())
+    log.info("Momento #%d editado desde el panel", cid)
+    return respuesta
+
+
+def api_borrar_momento(cid: int) -> bool:
+    with closing(db()) as con, con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        if not c:
+            return False
+        con.execute("DELETE FROM items WHERE captura_id=?", (cid,))
+        if HAY_INDICE:
+            con.execute("DELETE FROM indice WHERE captura_id=?", (cid,))
+        # La sesión queda marcada como lista (sin momento), así una parte que llegue tarde no la revive.
+        for s in con.execute("SELECT id FROM sesiones WHERE captura_id=?", (cid,)).fetchall():
+            con.execute("UPDATE sesiones SET captura_id=NULL, estado='lista' WHERE id=?", (s["id"],))
+            con.execute("UPDATE sesion_partes SET texto='' WHERE sesion_id=?", (s["id"],))
+        con.execute("DELETE FROM capturas WHERE id=?", (cid,))
+    if c["origen"] in TIPOS_SESION and c["transcripcion"]:
+        _limpiar(archivo_transcripcion(c))
+    if c["adjunto"]:
+        _limpiar(NOTAS / c["adjunto"])
+    actualizar_notas(datetime.fromisoformat(c["inicio"]).date())
+    log.info("Momento #%d borrado desde el panel", cid)
+    return True
+
+
+def ruta_foto(cid: int) -> Path | None:
+    with closing(db()) as con:
+        c = con.execute("SELECT adjunto FROM capturas WHERE id=?", (cid,)).fetchone()
+    if not c or not c["adjunto"]:
+        return None
+    ruta = (NOTAS / c["adjunto"]).resolve()
+    if NOTAS.resolve() not in ruta.parents or not ruta.is_file():
+        return None
+    return ruta
 
 
 def datos_conexion() -> dict:
@@ -1774,7 +2838,7 @@ def panel_html() -> bytes:
 
 
 class Manejador(BaseHTTPRequestHandler):
-    server_version = "Eco/1.1"
+    server_version = "Eco/1.3"
 
     # ── Permisos ──
     def _autorizado(self) -> bool:
@@ -1809,20 +2873,71 @@ class Manejador(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
-                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+                         "img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(cuerpo)
+
+    def _redirigir(self, destino: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", destino)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+
+    def _archivo(self, ruta: Path, tipo: str) -> None:
+        tam = ruta.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Length", str(tam))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with open(ruta, "rb") as f:
+            while bloque := f.read(1 << 16):
+                self.wfile.write(bloque)
+
+    def _pagina_google(self, ok: bool, mensaje: str) -> None:
+        color = "#3DDC97" if ok else "#FFB547"
+        cuerpo = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Eco · Google</title>
+{'<meta http-equiv="refresh" content="3; url=/#google">' if ok else ''}
+<style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#0A0A12;color:#EEEEF6;
+font:400 1rem/1.5 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;padding:16px}}
+main{{max-width:440px;padding:32px;border-radius:20px;background:#14141F;border:1px solid #2A2A3D}}
+h1{{margin:0 0 8px;font:600 1.5rem/1.2 "Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;color:{color}}}
+p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF}}</style></head>
+<body><main><h1>{'Conectado' if ok else 'No se pudo conectar'}</h1><p>{html.escape(mensaje)}</p>
+<a href="/#google">Volver al panel</a></main></body></html>"""
+        self._html(cuerpo.encode())
 
     # ── Rutas ──
     def do_GET(self) -> None:
         ruta, _, consulta = self.path.partition("?")
         params = {k: v[-1] for k, v in urllib.parse.parse_qs(consulta).items()}
         if ruta in ("/", "/panel"):
+            if params.get("state") and ("code" in params or "error" in params) and self._es_local():
+                return self._pagina_google(*google_callback(params))  # Google vuelve aquí al conectar
             return self._html(panel_html())
+        if ruta == "/google/conectar":
+            if not self._es_local():
+                return self._json(403, {"ok": False, "error": "Solo desde la laptop"})
+            try:
+                return self._redirigir(google_url_conectar())
+            except ValueError as ex:
+                return self._pagina_google(False, str(ex))
         if ruta == "/estado":  # lo usa la app del teléfono
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
             return self._json(200, {"ok": True, "nombre": "Eco", "en_cola": COLA.qsize()})
+        if ruta in ("/app/version", "/app/eco.apk"):  # la app del teléfono pregunta si hay versión nueva
+            if not self._autorizado():
+                return self._json(401, {"ok": False, "error": "token"})
+            info = info_app()
+            if not info:
+                return self._json(404, {"ok": False})
+            if ruta == "/app/version":
+                return self._json(200, {"ok": True, **{k: info[k] for k in ("versionCode", "versionName", "tamano", "sha256")}})
+            return self._archivo(_carpeta_app() / "eco.apk", "application/vnd.android.package-archive")
         if ruta.startswith("/api/"):
             if not self._puede_ver_panel():
                 return self._json(401, {"ok": False, "error": "token"})
@@ -1834,6 +2949,15 @@ class Manejador(BaseHTTPRequestHandler):
                 return self._json(200, api_momentos(params.get("fecha"), (params.get("q") or "").strip()[:80]))
             if ruta == "/api/pendientes":
                 return self._json(200, api_pendientes())
+            if ruta == "/api/foto":
+                try:
+                    foto = ruta_foto(int(params.get("id") or 0))
+                except ValueError:
+                    foto = None
+                if not foto:
+                    return self._json(404, {"ok": False})
+                tipo = {".png": "image/png", ".webp": "image/webp"}.get(foto.suffix.lower(), "image/jpeg")
+                return self._archivo(foto, tipo)
             if ruta == "/api/conectar":
                 if not self._es_local():  # el QR lleva tu token: solo se muestra en la pantalla de la laptop
                     return self._json(403, {"ok": False, "error": "Solo desde la laptop"})
@@ -1849,10 +2973,47 @@ class Manejador(BaseHTTPRequestHandler):
             if self.headers.get("X-Eco-Panel") != "1" or not self._puede_ver_panel():
                 return self._json(401, {"ok": False, "error": "token"})
             try:
-                largo = min(int(self.headers.get("Content-Length") or 0), 8192)
+                largo = min(int(self.headers.get("Content-Length") or 0), 256 * 1024)
                 datos = json.loads(self.rfile.read(largo) or b"{}")
+                if not isinstance(datos, dict):
+                    raise ValueError
             except ValueError:
                 return self._json(400, {"ok": False})
+            if ruta == "/api/momento":
+                try:
+                    momento = api_guardar_momento(datos)
+                except (KeyError, TypeError, ValueError):
+                    return self._json(400, {"ok": False})
+                return self._json(200 if momento else 404, {"ok": bool(momento), "momento": momento})
+            if ruta == "/api/momento/borrar":
+                try:
+                    ok = api_borrar_momento(int(datos["id"]))
+                except (KeyError, TypeError, ValueError):
+                    return self._json(400, {"ok": False})
+                return self._json(200 if ok else 404, {"ok": ok})
+            if ruta.startswith(("/api/google", "/api/github")) and not self._es_local():
+                return self._json(403, {"ok": False, "error": "Solo desde la laptop"})
+            if ruta == "/api/google/cliente":
+                try:
+                    guardar_google_cliente(str(datos.get("contenido") or ""))
+                except ValueError as ex:
+                    return self._json(200, {"ok": False, "error": str(ex)})
+                return self._json(200, {"ok": True, "google": estado_google()})
+            if ruta == "/api/google":
+                if datos.get("accion") == "desconectar":
+                    google_desconectar()
+                else:
+                    avisar_google(classroom=True)
+                return self._json(200, {"ok": True, "google": estado_google()})
+            if ruta == "/api/github":
+                if datos.get("token"):
+                    try:
+                        guardar_github_token(str(datos["token"]))
+                    except ValueError as ex:
+                        return self._json(200, {"ok": False, "error": str(ex)})
+                else:
+                    _app_evento.set()
+                return self._json(200, {"ok": True, "app": estado_app()})
             if ruta == "/api/preguntar":
                 pregunta = str(datos.get("pregunta") or "").strip()[:500]
                 if not pregunta:
@@ -2053,10 +3214,10 @@ def arrancar(consola: bool = True) -> ServidorEco:
     CLASE = GrabadoraClase(ENTRADA, COLA.put, log,
                            minutos_silencio=int(CFG["sesiones"].get("clase_auto_terminar_min") or 20))
     for f in sorted(ENTRADA.iterdir()):  # lo que quedó pendiente la última vez
-        if f.suffix.lower() in EXT_AUDIO:
+        if f.suffix.lower() in EXT_AUDIO + EXT_IMAGEN:
             COLA.put(f)
     threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
-    for destino in (trabajador, bot, reloj):
+    for destino in (trabajador, bot, reloj, google_hilo, actualizaciones_hilo):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
     log.info("Eco encendido (puerto %d)", puerto)
     return servidor

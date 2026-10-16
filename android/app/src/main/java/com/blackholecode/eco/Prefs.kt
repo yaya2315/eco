@@ -26,6 +26,16 @@ class Prefs(context: Context) {
         get() = sp.getInt(K_AFTER, DEFAULT_AFTER)
         set(value) = sp.edit().putInt(K_AFTER, value.coerceIn(0, MAX_SECONDS)).apply()
 
+    /** Eco estaba encendido (para ofrecer volver a encenderlo después de una actualización). */
+    var activo: Boolean
+        get() = sp.getBoolean(K_ACTIVO, false)
+        set(value) = sp.edit().putBoolean(K_ACTIVO, value).apply()
+
+    /** Última versión nueva de la que ya avisamos (para no repetir el aviso). */
+    var avisoVersion: Long
+        get() = sp.getLong(K_AVISO, 0L)
+        set(value) = sp.edit().putLong(K_AVISO, value).apply()
+
     companion object {
         const val DEFAULT_BEFORE = 180
         const val DEFAULT_AFTER = 60
@@ -36,5 +46,7 @@ class Prefs(context: Context) {
         private const val K_TOKEN = "token"
         private const val K_BEFORE = "before_sec"
         private const val K_AFTER = "after_sec"
+        private const val K_ACTIVO = "activo"
+        private const val K_AVISO = "aviso_version"
     }
 }

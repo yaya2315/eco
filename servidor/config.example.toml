@@ -27,6 +27,7 @@ proveedor = "claude"
 claude_modelo = "claude-haiku-5-5"
 claude_api_key = ""             # o deja vacío y usa la variable de entorno ANTHROPIC_API_KEY
 ollama_modelo = "qwen2.5:3b"
+ollama_vision = "qwen2.5vl:3b"  # lee las fotos que le mandas al bot (ollama pull qwen2.5vl:3b)
 ollama_url = "http://localhost:11434"
 
 [telegram]
@@ -41,6 +42,7 @@ chat_id = ""
 carpeta = "notas"
 zona_horaria = "America/El_Salvador"
 hora_resumen = "21:00"          # resumen del día por Telegram
+hora_manana = "06:30"           # resumen de la mañana: hoy, exámenes y la semana ("" = apagado)
 hora_recordatorio = "07:00"     # aviso para tareas con fecha pero sin hora
 aviso_antes_min = 60            # para tareas con hora: cuántos minutos antes avisar
 guardar_transcripcion = false   # false = solo se guardan las notas, no lo que dijo cada quien
@@ -57,6 +59,18 @@ clase_auto_terminar_min = 20    # la clase se termina sola tras este tiempo en s
 activo = true
 carpeta = ""        # vacío = tu OneDrive\Eco respaldos
 conservar = 14      # cuántas copias diarias guardar
+
+[google]
+# Se conecta desde el panel (README, sección 10). Aquí solo eliges qué usar.
+classroom = true    # traer las tareas de Classroom
+calendar = true     # poner tus pendientes con fecha en el calendario "Eco"
+cada_min = 20       # cada cuánto revisar Classroom
+
+[github]
+# Para que la app del teléfono se actualice sola (README, sección 11).
+# El token lo puedes pegar aquí o, mejor, en el panel (así no queda en este archivo).
+token = ""
+repo = "yaya2315/eco"
 
 # Lugares con nombre (opcional). Así tus notas dicen "📍 Casa" en vez de coordenadas.
 # Para sacar las coordenadas: mantén presionado el lugar en Google Maps y copia los números.

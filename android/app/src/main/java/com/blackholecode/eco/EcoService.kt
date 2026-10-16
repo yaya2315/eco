@@ -7,8 +7,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
@@ -18,6 +20,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.widget.Toast
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -62,11 +65,19 @@ class EcoService : Service() {
 
         const val SAMPLE_RATE = 16_000
         private const val CH_ACTIVE = "eco_activo"
-        private const val CH_ALERTS = "eco_avisos"
+        const val CH_ALERTS = "eco_avisos"
         private const val NOTIF_ID = 7
         private const val NOTIF_STOPPED = 8
+        private const val NOTIF_UPDATE = 9
+        const val NOTIF_UPDATED = 10
         private const val UPLOAD_EVERY_MS = 120_000L
+        /** Cada cuántas vueltas de subida (de 2 min) se pregunta a la laptop si hay app nueva: 3 h. */
+        private const val UPDATE_EVERY_ROUNDS = 90
         private const val ACCENT = 0xFF6B5BF5.toInt()
+
+        /** Pausa automática por batería: a este % sin cargador se pausa; vuelve al cargar o al pasar de 25 %. */
+        const val BATERIA_PAUSA = 20
+        const val BATERIA_REANUDAR = 25
 
         fun send(context: Context, action: String) {
             val intent = Intent(context, EcoService::class.java).setAction(action)
@@ -78,6 +89,21 @@ class EcoService : Service() {
         fun meetingDir(context: Context): File = File(context.filesDir, "reunion").apply { mkdirs() }
 
         fun isUploadable(f: File) = f.name.endsWith(".wav") || f.name.endsWith(".m4a")
+
+        fun createChannels(context: Context) {
+            val nm = context.getSystemService(NotificationManager::class.java)
+            nm.createNotificationChannel(
+                NotificationChannel(CH_ACTIVE, "Eco activo", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Aviso fijo mientras Eco tiene el micrófono abierto"
+                    setShowBadge(false)
+                }
+            )
+            nm.createNotificationChannel(
+                NotificationChannel(CH_ALERTS, "Avisos de Eco", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "Cuando Eco se detiene, se actualiza o necesita que lo reactives"
+                }
+            )
+        }
     }
 
     private class Clip(val pcm: ShortArray, val startMs: Long, val location: Location?)
@@ -109,12 +135,16 @@ class EcoService : Service() {
     private var parteInicioMs = 0L
     private var estabaEnPausa = false
 
+    // Batería y actualizaciones
+    private var bateriaRegistrada = false
+    private var uploadRounds = 0
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
-        createChannels()
+        createChannels(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -123,6 +153,13 @@ class EcoService : Service() {
             // Android reinició el servicio después de cerrarlo. Desde segundo plano no se
             // puede reabrir el micrófono, así que avisamos y esperamos a que lo reactives.
             notifyStopped()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (!EcoState.running && (action == ACTION_SAVE || action == ACTION_PAUSE)) {
+            // Se tocó el widget o la notificación, pero Android ya había cerrado Eco.
+            notifyStopped()
+            EcoWidget.refresh(this)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -152,14 +189,18 @@ class EcoService : Service() {
         if (capturing) stopRecorder(flushSave = true)
         EcoState.running = false
         EcoState.paused = false
+        EcoState.pausaBateria = false
+        unregisterBattery()
         main.removeCallbacksAndMessages(null)
         io.shutdown()
+        EcoWidget.refresh(this)
         super.onDestroy()
     }
 
     // ───────────────────────── Ciclo de vida ─────────────────────────
 
     private fun startCapture() {
+        prefs.activo = true
         if (EcoState.running) {
             if (!EcoState.paused && !capturing && EcoState.reunionInicioMs == 0L) startRecorder()
             refreshNotification()
@@ -167,6 +208,7 @@ class EcoService : Service() {
         }
         if (!ensureForeground()) return
         startRecorder()
+        refreshNotification()
     }
 
     /** Pone a Eco en primer plano (notificación fija) si todavía no lo está. */
@@ -185,6 +227,8 @@ class EcoService : Service() {
         getSystemService(NotificationManager::class.java).cancel(NOTIF_STOPPED)
         EcoState.running = true
         EcoState.paused = false
+        EcoState.pausaBateria = false
+        registerBattery()
         main.removeCallbacks(tick)
         main.post(tick)
         main.removeCallbacks(uploadLoop)
@@ -206,11 +250,17 @@ class EcoService : Service() {
     private fun togglePause() {
         if (!EcoState.running || EcoState.reunionInicioMs > 0) return
         if (EcoState.paused) {
+            if (EcoState.pausaBateria) {
+                // Reanudaste a mano con poca batería: respetamos tu decisión hasta que cargues.
+                EcoState.pausaBateria = false
+                EcoState.bateriaPermitida = true
+            }
             EcoState.paused = false
             startRecorder()
         } else {
             stopRecorder(flushSave = true)
             EcoState.paused = true
+            EcoState.pausaBateria = false
         }
         refreshNotification()
     }
@@ -224,15 +274,81 @@ class EcoService : Service() {
     }
 
     private fun shutdown() {
+        prefs.activo = false
         if (EcoState.reunionInicioMs > 0) stopMeeting()
         stopRecorder(flushSave = true)
         EcoState.running = false
         EcoState.paused = false
+        EcoState.pausaBateria = false
+        unregisterBattery()
         main.removeCallbacks(tick)
         main.removeCallbacks(uploadLoop)
         stopForeground(STOP_FOREGROUND_REMOVE)
+        EcoWidget.refresh(this)
         runIo { uploadPending() }
         stopSelf()
+    }
+
+    // ───────────────────────── Batería ─────────────────────────
+
+    private val bateria = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = onBatteryIntent(intent)
+    }
+
+    private fun registerBattery() {
+        if (bateriaRegistrada) return
+        val filtro = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(bateria, filtro, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(bateria, filtro)
+        bateriaRegistrada = true
+    }
+
+    private fun unregisterBattery() {
+        if (!bateriaRegistrada) return
+        try { unregisterReceiver(bateria) } catch (_: Exception) {}
+        bateriaRegistrada = false
+    }
+
+    /** Lee la batería ahora mismo (el aviso de Android solo llega cuando cambia). */
+    private fun checkBatteryNow() {
+        val actual = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return
+        onBatteryIntent(actual)
+    }
+
+    private fun onBatteryIntent(intent: Intent) {
+        val nivel = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val escala = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+        if (nivel < 0 || escala <= 0) return
+        onBattery(nivel * 100 / escala, intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0)
+    }
+
+    private fun onBattery(pct: Int, cargando: Boolean) {
+        val cambio = pct != EcoState.batteryPct || cargando != EcoState.charging
+        EcoState.batteryPct = pct
+        EcoState.charging = cargando
+        if (!EcoState.running) return
+        val recuperada = cargando || pct >= BATERIA_REANUDAR
+        if (recuperada) EcoState.bateriaPermitida = false
+        if (EcoState.pausaBateria) {
+            if (recuperada) {
+                EcoState.pausaBateria = false
+                if (EcoState.paused && EcoState.reunionInicioMs == 0L) {
+                    EcoState.paused = false
+                    startRecorder()
+                }
+                refreshNotification()
+            }
+            return
+        }
+        val listening = !EcoState.paused && EcoState.reunionInicioMs == 0L
+        if (listening && !cargando && pct <= BATERIA_PAUSA && !EcoState.bateriaPermitida) {
+            stopRecorder(flushSave = true)  // si estabas guardando un momento, se guarda lo que había
+            EcoState.paused = true
+            EcoState.pausaBateria = true
+            refreshNotification()
+        } else if (cambio && EcoState.reunionInicioMs > 0) {
+            refreshNotification()  // la reunión sigue; solo actualizamos el aviso de batería
+        }
     }
 
     // ───────────────────────── Micrófono ─────────────────────────
@@ -454,6 +570,7 @@ class EcoService : Service() {
         Toast.makeText(this, "Reunión guardada. Se sube a tu laptop.", Toast.LENGTH_SHORT).show()
         EcoState.paused = estabaEnPausa
         if (!EcoState.paused) startRecorder()
+        checkBatteryNow()
         runIo { uploadPending() }
         refreshNotification()
     }
@@ -580,9 +697,33 @@ class EcoService : Service() {
     private val uploadLoop = object : Runnable {
         override fun run() {
             if (!EcoState.running) return
-            runIo { uploadPending() }
+            val revisar = uploadRounds++ % UPDATE_EVERY_ROUNDS == 0
+            runIo {
+                uploadPending()
+                if (revisar) checkForUpdate()
+            }
             main.postDelayed(this, UPLOAD_EVERY_MS)
         }
+    }
+
+    /** ¿Tu laptop tiene una versión nueva de Eco? Avisa una sola vez por versión. */
+    private fun checkForUpdate() {
+        val info = Updater.refresh(this, prefs.server, prefs.token) ?: return
+        if (info.versionCode <= prefs.avisoVersion) return
+        prefs.avisoVersion = info.versionCode
+        val intent = Intent(this, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_ACTUALIZAR, true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val open = PendingIntent.getActivity(this, 7, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = Notification.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_eco)
+            .setColor(ACCENT)
+            .setContentTitle("Hay una versión nueva de Eco")
+            .setContentText("Versión ${info.versionName}. Toca para instalarla (no pierdes tus ajustes).")
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(NOTIF_UPDATE, n)
     }
 
     private fun uploadOnce() {
@@ -647,21 +788,6 @@ class EcoService : Service() {
         }
     }
 
-    private fun createChannels() {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CH_ACTIVE, "Eco activo", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Aviso fijo mientras Eco tiene el micrófono abierto"
-                setShowBadge(false)
-            }
-        )
-        nm.createNotificationChannel(
-            NotificationChannel(CH_ALERTS, "Avisos de Eco", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = "Cuando Eco se detiene y necesita que lo reactives"
-            }
-        )
-    }
-
     private fun buildNotification(): Notification {
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flags)
@@ -676,7 +802,16 @@ class EcoService : Service() {
         when {
             enReunion -> {
                 title = "Grabando reunión"
-                text = "Parte ${EcoState.reunionParte} · cada 10 min se sube sola a tu laptop"
+                val pct = EcoState.batteryPct
+                text = if (pct in 0..BATERIA_PAUSA && !EcoState.charging) {
+                    "Batería en $pct %: la reunión sigue grabando. Conecta el cargador si puedes."
+                } else {
+                    "Parte ${EcoState.reunionParte} · cada 10 min se sube sola a tu laptop"
+                }
+            }
+            EcoState.pausaBateria -> {
+                title = "Eco en pausa: batería baja"
+                text = "Tienes ${EcoState.batteryPct} %. Vuelve a escuchar solo cuando conectes el cargador."
             }
             EcoState.paused -> {
                 title = "Eco en pausa"
@@ -725,6 +860,7 @@ class EcoService : Service() {
     }
 
     private fun refreshNotification() {
+        EcoWidget.refresh(this)
         if (!EcoState.running) return
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification())
     }

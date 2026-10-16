@@ -53,6 +53,7 @@ class EcoTile : TileService() {
         if (Build.VERSION.SDK_INT >= 29) {
             tile.subtitle = when {
                 EcoState.reunionInicioMs > 0 -> "Grabando reunión"
+                EcoState.pausaBateria -> "Pausa: batería baja"
                 listening -> "Eco escuchando"
                 EcoState.paused -> "Eco en pausa"
                 else -> "Eco apagado"

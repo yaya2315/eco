@@ -13,9 +13,10 @@ Eco escucha en tu teléfono y guarda **solo los momentos que tú le pides**. Tu 
 
 **Modo dashcam:** el micrófono llena un búfer en memoria que se sobrescribe solo. Nada se guarda en disco hasta que tocas **Guardar momento**. En ese momento Eco guarda los últimos 3 minutos y graba 1 minuto más. Las dos duraciones se ajustan desde la app.
 
-Puedes guardar un momento desde tres lugares:
+Puedes guardar un momento desde cuatro lugares:
 
 - el botón grande de la app;
+- el **widget** de la pantalla de inicio;
 - la notificación;
 - el **botón rápido** del panel, que funciona incluso con la pantalla bloqueada.
 
@@ -161,7 +162,84 @@ La app se queda con la dirección fija de Tailscale (o la del Wi-Fi si no tienes
 **Respaldo diario.** Una copia ZIP de tus notas y tu base de datos en `OneDrive\Eco respaldos`; guarda las últimas 14.
 - Necesitas tener **OneDrive** iniciado en la laptop.
 - En el panel ves cuándo fue la última copia y puedes hacer una al momento con **Respaldar ahora**.
-- Tus claves (`config.toml`) no se copian a la nube.
+- Tus claves (`config.toml`, Google y GitHub) no se copian a la nube.
+
+**Notas de voz y fotos por Telegram.**
+- Mándale una **nota de voz** al bot: Eco la transcribe y la anota igual que un momento. Sirve para dictarte cosas ("mañana llevar la bata").
+- Mándale una **foto** de la pizarra, del cuaderno o de la hoja de tareas: Eco lee el texto, saca las fechas y tareas, y guarda la foto en `notas/fotos/`. Si escribes algo junto a la foto, también lo toma en cuenta.
+- Con Ollama, leer fotos necesita un modelo de visión. Instálalo una vez en PowerShell:
+  ```
+  ollama pull qwen2.5vl:3b
+  ```
+  En tu Ryzen tarda uno o dos minutos por foto. Si falta el modelo, Eco te avisa por Telegram y guarda la foto para leerla después.
+
+**Resumen de la mañana.** A las **6:30** te llega por Telegram lo de hoy, los exámenes y entregas de la semana, lo que se te pasó y lo que viene. Si la laptop estaba dormida, te llega cuando despierte (hasta el mediodía). Lo cambias con `hora_manana` en `config.toml` (`""` lo apaga). En cualquier momento: `/semana`.
+
+**Editar y borrar desde el panel.** Toca el lápiz junto al título de un momento:
+- cambia el título, el resumen y la importancia;
+- edita, cambia de tipo (tarea, para no olvidar, idea), agrega o quita renglones, y ponle fecha y hora a las tareas: el aviso se recalcula solo;
+- **Borrar momento** lo quita con sus tareas, foto y transcripción (pide confirmación).
+
+Atajos: `Ctrl + Enter` guarda, `Esc` cancela.
+
+**Widget.** Mantén presionada la pantalla de inicio › **Widgets** › **Eco**. Muestra si Eco está escuchando y tiene un botón grande de **Guardar momento** (o *Encender* / *Reanudar*, según cómo esté).
+
+**Pausa por batería.** Con **20 %** de batería y sin cargador, Eco deja de escuchar solo y te lo dice en la notificación. Vuelve solo cuando conectas el cargador (o pasa del 25 %). Si lo necesitas igual, toca **Reanudar**. El modo reunión no se corta: si lo iniciaste, sigue grabando.
+
+### 10. Classroom y Google Calendar
+
+Eco trae tus tareas de **Classroom** a tus pendientes (con su fecha, aviso y enlace para abrirlas) y pone tus pendientes con fecha en un calendario **«Eco»** de Google Calendar. Solo lee Classroom; en Calendar solo toca su propio calendario.
+
+**Una sola vez, la llave en Google Cloud (unos 5 minutos):**
+
+1. Entra a **console.cloud.google.com** con tu **Gmail personal** (las cuentas del colegio a veces no dejan crear proyectos). Arriba, **Seleccionar proyecto › Proyecto nuevo** → nombre `Eco` → **Crear**.
+2. Menú › **APIs y servicios › Biblioteca**. Busca y **habilita** estas dos:
+   - **Google Classroom API**
+   - **Google Calendar API**
+3. Menú › **Google Auth Platform** (o *Pantalla de consentimiento de OAuth*) › **Comenzar**:
+   - nombre de la app: `Eco`; correo de asistencia: tu Gmail;
+   - público: **Externo**;
+   - correo de contacto: tu Gmail → **Crear**.
+4. En **Público**, toca **Publicar app** y confirma. Si la dejas «en prueba», Google te desconecta cada 7 días.
+5. En **Clientes**, toca **Crear cliente**:
+   - tipo de aplicación: **App de escritorio**; nombre: `Eco laptop`;
+   - **Crear** → **Descargar JSON**.
+
+**Conectar:**
+
+1. En la laptop, abre el panel. En **Classroom y Calendar**, arrastra el archivo `.json` que bajaste (o tócalo para elegirlo).
+2. Toca **Conectar con Google** y entra con tu **cuenta del colegio**.
+3. Si aparece *«Google no verificó esta app»*: **Configuración avanzada › Ir a Eco**. La app es tuya y nadie más la usa.
+4. Marca todas las casillas y toca **Continuar**. Te llega un mensaje a Telegram con tus clases y tareas.
+
+A partir de ahí:
+- Eco revisa Classroom cada 20 minutos y te avisa por Telegram de cada tarea nueva. Si el profe cambia la fecha, se actualiza; cuando la entregas, se marca como hecha.
+- Las tareas de Classroom no se copian al calendario «Eco», porque Classroom ya las pone en tu calendario del colegio.
+
+> **Si el colegio lo bloquea**, Google dice que tu institución no permite la app, o el panel dice que el colegio no deja leer Classroom. Eso lo decide el administrador del colegio. Puedes conectar tu **Gmail personal** para tener al menos el calendario.
+
+### 11. La app se actualiza sola desde la laptop
+
+Cada vez que GitHub compila una versión nueva de la app, la laptop la baja sola y el teléfono te ofrece **Actualizar**. No tienes que entrar a GitHub ni pasar el APK a mano.
+
+**Una sola vez, un permiso de GitHub de solo lectura:**
+
+1. En github.com, toca tu foto › **Settings › Developer settings › Personal access tokens › Fine-grained tokens › Generate new token**.
+2. Llénalo así:
+   - nombre: `Eco laptop`; vencimiento: 1 año;
+   - **Repository access › Only select repositories** → `eco`;
+   - **Permissions › Repository permissions › Actions: Read-only**.
+3. **Generate token** y cópialo (empieza con `github_pat_`).
+4. En el panel de la laptop, en **Eco en esta laptop › App del teléfono**, pégalo y toca **Guardar**.
+
+**Así funciona:**
+
+1. Haces `git push` con cambios en la app. Actions la compila (unos 4 minutos).
+2. En menos de media hora la laptop la baja y te avisa por Telegram.
+3. En el teléfono, abre Eco (o toca el aviso) › **Actualizar**. La primera vez Android pide permitir *«instalar desde esta fuente»*: actívalo y vuelve.
+4. Confirma **Actualizar**. Si Eco estaba escuchando, te deja un aviso para volver a encenderlo con un toque.
+
+> Esta versión de la app es la que trae el botón **Actualizar**: instálala a mano una última vez, como siempre (paso 2 y 3). Las siguientes llegan solas.
 
 ---
 
@@ -171,14 +249,16 @@ La app se queda con la dirección fija de Tailscale (o la del Wi-Fi si no tienes
 - **Subida:** con Tailscale, los momentos se suben solos desde donde estés mientras la laptop esté encendida. Sin Tailscale, se suben cuando el teléfono está en el mismo Wi-Fi que la laptop. También puedes tocar *Subir ahora*.
 - **Telegram:**
   - te manda cada momento ya analizado;
-  - te avisa **1 hora antes** de lo que tiene hora, y a las **7:00** de lo que solo tiene fecha;
+  - a las **6:30** te manda el resumen de la mañana (hoy, exámenes y entregas, lo que se te pasó);
+  - te avisa **1 hora antes** de lo que tiene hora, y a las **7:00** de lo que solo tiene fecha (si no salió ya en el resumen de la mañana);
   - te manda un **resumen a las 9 pm**.
 - **Comandos del bot:**
   - `/hoy` — resumen de hoy;
+  - `/semana` — lo que viene en los próximos 7 días;
   - `/pendientes` — lo que tienes por hacer;
   - `/hecho 12` — marca como hecha la tarea número 12;
   - `/buscar examen` — busca en todo lo guardado.
-- **Notas rápidas:** escríbele cualquier cosa al bot, por ejemplo *"examen de física el martes"*, y queda anotado con su fecha.
+- **Notas rápidas:** escríbele cualquier cosa al bot, por ejemplo *"examen de física el martes"*, y queda anotado con su fecha. También sirven una **nota de voz** o una **foto** de la pizarra.
 - **Panel:** el acceso directo **Eco** o el ícono junto al reloj abren tu panel con todo lo guardado.
 - **Notas en Markdown:** quedan en `servidor/notas/`, una por día más `Pendientes.md`. Si quieres verlas en Obsidian, apunta `carpeta` en `config.toml` a tu bóveda.
 
@@ -192,7 +272,7 @@ git commit -m "Describe el cambio"
 git push
 ```
 
-Actions vuelve a compilar el APK. Lo instalas encima del anterior y tus ajustes se conservan.
+Actions vuelve a compilar el APK. Si ya pegaste el permiso de GitHub en el panel (paso 11), la app del teléfono te ofrece **Actualizar** sola. Si no, lo bajas de Actions y lo instalas encima: tus ajustes se conservan.
 
 ---
 
@@ -217,10 +297,12 @@ Actions vuelve a compilar el APK. Lo instalas encima del anterior y tus ajustes 
 | La transcripción sale con errores | Usa `modelo = "medium"` o `beam = 3`. Lleva el teléfono en la bolsa de la camisa, no en la del pantalón. |
 | Telegram no responde | Revisa `token` y `chat_id`, y ejecuta `iniciar.bat --probar`. |
 | Falla la compilación en Actions | Copia el error del log y pásamelo. |
+| Google dice `redirect_uri_mismatch` o «cliente no válido» | El cliente de Google Cloud tiene que ser de tipo **App de escritorio** (paso 10.5), no «Aplicación web». |
+| Google te desconecta cada semana | La app quedó «en prueba»: en Google Cloud › **Público** toca **Publicar app** y vuelve a conectar. |
+| La app no ofrece Actualizar | Revisa en el panel la fila **App del teléfono**. Si dice que el token no sirve, crea otro (paso 11). La versión nueva tarda hasta media hora en llegar a la laptop. |
 
 ## Lo que viene
 
-- **v2:** registro de ubicación del día, resumen con mapa y tareas directo a Google Calendar.
-- **Siguiente:** tareas de Google Classroom y Google Calendar con la cuenta del colegio.
+- **v2:** registro de ubicación del día y resumen con mapa.
 - **v3:**
   - modo *siempre escuchando* opcional;

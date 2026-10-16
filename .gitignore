@@ -1,5 +1,7 @@
 # ── Secretos y datos personales: NUNCA a GitHub ──
 servidor/config.toml
+servidor/google_cliente.json
+servidor/client_secret*.json
 servidor/datos/
 servidor/notas/
 servidor/.venv/

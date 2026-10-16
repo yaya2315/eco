@@ -1,7 +1,7 @@
 package com.blackholecode.eco
 
 /**
- * Estado en vivo que comparten el servicio, la pantalla y el botón rápido.
+ * Estado en vivo que comparten el servicio, la pantalla, el widget y el botón rápido.
  * Todo corre en el mismo proceso, así que basta con un objeto en memoria.
  */
 object EcoState {
@@ -20,6 +20,18 @@ object EcoState {
     @Volatile var reunionInicioMs = 0L
     @Volatile var reunionParte = 0
     @Volatile var reunionError: String? = null
+
+    /** Batería: Eco se pausa solo al 20 % (sin cargador) y vuelve al conectarlo. */
+    @Volatile var batteryPct = -1
+    @Volatile var charging = false
+    @Volatile var pausaBateria = false
+    /** Reanudaste a mano con la batería baja: no volvemos a pausar hasta que cargues. */
+    @Volatile var bateriaPermitida = false
+
+    /** Versión nueva de la app que ofrece tu laptop (null = estás al día). */
+    @Volatile var update: Updater.Info? = null
+    @Volatile var updateStatus: String? = null
+    @Volatile var updating = false
 
     @Volatile var lastSaved = ""
     @Volatile var lastUpload = "Todavía no se ha subido nada"

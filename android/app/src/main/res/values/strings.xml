@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Eco</string>
     <string name="tile_label">Guardar momento</string>
+    <string name="widget_desc">Guarda un momento con un toque y mira si Eco está escuchando.</string>
 </resources>

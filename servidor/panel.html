@@ -277,6 +277,149 @@ details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: 
 .acceso button:hover { background: var(--violet-deep); }
 .acceso .error { margin: var(--s3) 0 0; color: var(--rec); font-size: var(--t-sm); }
 .aviso-red { margin-top: var(--s4); padding: var(--s3) var(--s4); border-radius: var(--r-md); background: rgba(255, 92, 122, 0.08); border: 1px solid rgba(255, 92, 122, 0.3); color: var(--text); font-size: var(--t-sm); }
+
+/* ── Encabezado de cada momento y botón de editar ── */
+.momento-cabeza { display: flex; align-items: flex-start; gap: var(--s2); }
+.momento-cabeza .momento-titulo { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.boton-editar {
+  flex: none; display: inline-grid; place-items: center; width: 40px; height: 40px; margin: -9px -8px -9px 0;
+  border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--faint); cursor: pointer;
+  transition: color .15s, background-color .15s, border-color .15s;
+}
+.boton-editar svg { width: 17px; height: 17px; }
+.boton-editar:hover { color: var(--text); background: var(--surface-2); border-color: var(--line); }
+
+/* ── Editor de un momento ── */
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.editor {
+  display: grid; gap: var(--s4); padding: var(--s4); border-radius: var(--r-lg);
+  background: var(--surface); border: 1px solid rgba(184, 174, 255, 0.35); box-shadow: 0 0 0 4px rgba(107, 91, 245, 0.08);
+}
+@media (min-width: 720px) { .editor { padding: var(--s5); } }
+.campo-editor { display: grid; gap: 6px; }
+.rotulo { font-size: var(--t-xs); font-weight: 600; color: var(--muted); letter-spacing: .01em; }
+.control {
+  width: 100%; min-height: 44px; padding: 10px var(--s3); border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font: inherit;
+  transition: border-color .15s, background-color .15s;
+}
+.control::placeholder { color: var(--faint); }
+.control:hover { border-color: #3a3a52; }
+.control:focus { outline: none; border-color: var(--violet); background: #20202f; }
+.control.titulo { font: 600 var(--t-lg)/1.3 var(--display); }
+textarea.control { resize: vertical; min-height: 88px; line-height: 1.5; }
+input[type="date"].control, input[type="time"].control { color-scheme: dark; font-variant-numeric: tabular-nums; }
+select.control {
+  appearance: none; padding-right: 36px; cursor: pointer; font-size: var(--t-sm); font-weight: 600;
+  background: var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23A3A3BA' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center / 16px;
+}
+.imp-opciones { display: flex; gap: 2px; margin-left: -8px; }
+.imp-opciones label { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
+.imp-opciones label:hover { background: var(--surface-2); }
+.imp-opciones label i { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--faint); transition: background-color .12s, border-color .12s; }
+.imp-opciones label.lleno i { background: var(--violet-soft); border-color: var(--violet-soft); }
+.imp-opciones input:focus-visible + label { outline: 2px solid var(--violet-soft); outline-offset: -2px; }
+
+.filas { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.fila {
+  display: grid; gap: var(--s2); padding: var(--s3); border-radius: var(--r-md); background: var(--void); border: 1px solid var(--line);
+  grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "tipo quitar" "texto texto" "cuando cuando";
+}
+.fila select { grid-area: tipo; width: auto; justify-self: start; min-width: 150px; }
+.fila .fila-texto { grid-area: texto; }
+.fila .fila-cuando { grid-area: cuando; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: var(--s2); }
+.fila[data-tipo="dato"] .fila-cuando, .fila[data-tipo="idea"] .fila-cuando { display: none; }
+.fila .quitar { grid-area: quitar; }
+@media (min-width: 720px) {
+  .fila { grid-template-columns: 172px minmax(0, 1fr) auto; grid-template-areas: "tipo texto quitar" ". cuando ."; }
+  .fila select { width: 100%; min-width: 0; }
+  .fila .fila-cuando { grid-template-columns: 176px 132px; justify-content: start; }
+}
+.quitar {
+  display: inline-grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--faint); cursor: pointer; transition: color .15s, background-color .15s;
+}
+.quitar svg { width: 18px; height: 18px; }
+.quitar:hover { color: var(--rec); background: rgba(255, 92, 122, 0.1); }
+.filas-vacio { margin: 0; color: var(--faint); font-size: var(--t-sm); }
+.agregar { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.boton-suave {
+  min-height: 40px; padding: 0 var(--s4); border-radius: 999px; border: 1px dashed #3a3a52; background: transparent;
+  color: var(--violet-soft); font-size: var(--t-sm); font-weight: 600; cursor: pointer; transition: border-color .15s, background-color .15s;
+}
+.boton-suave:hover { border-style: solid; border-color: var(--violet); background: rgba(107, 91, 245, 0.08); }
+.acciones { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding-top: var(--s4); border-top: 1px solid var(--line); }
+.acciones .boton-principal { width: auto; margin: 0; padding: 0 var(--s5); }
+.boton-principal:disabled { opacity: .6; cursor: progress; }
+.boton-peligro {
+  margin-left: auto; min-height: 44px; padding: 0 var(--s4); border: 0; border-radius: 999px;
+  background: transparent; color: var(--rec); font-weight: 600; cursor: pointer; transition: background-color .15s;
+}
+.boton-peligro:hover { background: rgba(255, 92, 122, 0.1); }
+.editor .error-texto { margin: 0; font-size: var(--t-sm); }
+
+/* ── Fotos ── */
+.foto-boton {
+  display: block; margin-top: var(--s3); padding: 0; width: min(100%, 420px); border: 1px solid var(--line);
+  border-radius: var(--r-md); overflow: hidden; background: var(--surface); cursor: zoom-in; transition: border-color .15s;
+}
+.foto-boton:hover { border-color: var(--violet); }
+.foto-boton img { display: block; width: 100%; height: auto; max-height: 280px; object-fit: cover; }
+.foto-boton img:not([src]) { height: 180px; background: linear-gradient(100deg, var(--surface) 40%, var(--surface-2) 50%, var(--surface) 60%) 0 0 / 200% 100%; animation: brillo 1.4s linear infinite; }
+@keyframes brillo { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .foto-boton img:not([src]) { animation: none; } }
+.visor { padding: 0; border: 0; background: transparent; max-width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+.visor::backdrop { background: rgba(5, 5, 10, 0.86); }
+.visor img { display: block; max-width: 100%; max-height: calc(100vh - 96px); border-radius: var(--r-md); }
+.visor .cerrar { display: block; margin: var(--s3) auto 0; background: var(--surface); color: var(--text); }
+
+/* ── Pendientes: de dónde viene cada tarea ── */
+.tarea-info a { color: var(--violet-soft); }
+.chip-cr { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; background: rgba(61, 220, 151, 0.12); color: var(--live); font-size: 0.6875rem; font-weight: 700; letter-spacing: .04em; vertical-align: 1px; }
+
+/* ── Classroom y Calendar ── */
+.google-cuerpo > p { margin: var(--s2) 0 0; color: var(--muted); font-size: var(--t-sm); }
+.google-cuerpo p strong { color: var(--text); font-weight: 600; }
+.nota { font-size: var(--t-xs) !important; color: var(--faint) !important; }
+a.boton-principal { display: grid; place-items: center; text-decoration: none; }
+.soltar {
+  display: grid; place-items: center; gap: 2px; margin-top: var(--s3); min-height: 104px; padding: var(--s4);
+  border: 1.5px dashed #3a3a52; border-radius: var(--r-md); color: var(--muted); font-size: var(--t-sm);
+  text-align: center; cursor: pointer; transition: border-color .15s, background-color .15s;
+}
+.soltar strong { color: var(--violet-soft); font-weight: 600; }
+.soltar:hover, .soltar.encima, input:focus-visible + .soltar { border-color: var(--violet); background: rgba(107, 91, 245, 0.06); color: var(--text); }
+.soltar-nota { font-size: var(--t-xs); color: var(--faint); overflow-wrap: anywhere; }
+.lateral > * { min-width: 0; }
+/* En el teléfono, el momento que editas usa todo el ancho (sin la columna de la hora). */
+@media (max-width: 719px) {
+  .momento.editando { grid-template-columns: 1fr; }
+  .momento.editando .momento-hora { display: none; }
+  .momento.editando .momento-cuerpo { padding-left: 0; border-left-color: transparent; }
+  .momento.editando .momento-cuerpo::before { display: none; }
+}
+.fila-botones { display: flex; gap: var(--s2); margin-top: var(--s4); }
+.fila-botones .boton-texto { flex: 1; padding: 0 var(--s3); }
+.mini-form { display: flex; gap: var(--s2); margin-top: var(--s2); }
+.mini-form .control { flex: 1; min-width: 0; min-height: 40px; padding: 8px var(--s3); font-size: var(--t-sm); }
+.mini-form .copiar { margin: 0; min-height: 40px; padding: 0 var(--s3); flex: none; }
+
+/* ── Confirmación y avisos ── */
+.confirmar { text-align: left; }
+.confirmar p { margin-top: var(--s3); }
+.acciones-dialogo { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s5); }
+.acciones-dialogo .boton-principal { width: auto; margin: 0; padding: 0 var(--s5); }
+.boton-principal.peligro { background: var(--rec); color: #1a0a0f; }
+.boton-principal.peligro:hover { background: #ff7a92; }
+.aviso-flotante {
+  position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); translate: -50% 0; z-index: 30;
+  max-width: calc(100vw - 32px); padding: var(--s3) var(--s5); border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  font-size: var(--t-sm); font-weight: 600; animation: subir .2s ease-out;
+}
+.aviso-flotante::before { content: "✓"; margin-right: var(--s2); color: var(--live); }
+@keyframes subir { from { opacity: 0; translate: -50% 8px; } }
+@media (prefers-reduced-motion: reduce) { .aviso-flotante { animation: none; } }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -366,6 +509,12 @@ details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: 
         <p class="panel-vacio" id="pend-vacio" hidden>Nada pendiente. Cuando Eco escuche una tarea, aparece aquí.</p>
       </section>
 
+      <section class="panel" id="google" aria-labelledby="google-titulo" hidden>
+        <h3 class="seccion-titulo" id="google-titulo">Classroom y Calendar</h3>
+        <div class="google-cuerpo" id="google-cuerpo"></div>
+        <p class="error-texto" id="google-error" role="alert" hidden></p>
+      </section>
+
       <section class="panel" aria-labelledby="sis-titulo">
         <h3 class="seccion-titulo" id="sis-titulo">Eco en esta laptop</h3>
         <button class="boton-principal" type="button" id="abrir-qr" hidden>Conectar el teléfono con un QR</button>
@@ -383,6 +532,22 @@ details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: 
   <p class="conectar-nota">El código lleva tu token de Eco: no le tomes foto ni lo compartas.</p>
   <button class="boton-principal" type="button" id="cerrar-qr">Listo</button>
 </dialog>
+
+<dialog class="conectar confirmar" id="confirmar" aria-labelledby="confirmar-titulo" aria-describedby="confirmar-texto">
+  <h2 id="confirmar-titulo"></h2>
+  <p id="confirmar-texto"></p>
+  <div class="acciones-dialogo">
+    <button class="boton-texto" type="button" id="confirmar-no">Cancelar</button>
+    <button class="boton-principal peligro" type="button" id="confirmar-si"></button>
+  </div>
+</dialog>
+
+<dialog class="visor" id="visor" aria-label="Foto">
+  <img id="visor-img" alt="">
+  <button class="cerrar" type="button" id="visor-cerrar">Cerrar</button>
+</dialog>
+
+<div class="aviso-flotante" id="aviso" role="status" aria-live="polite" hidden></div>
 
 <form class="acceso" id="acceso" hidden>
   <h2>Abre tu panel de Eco</h2>
@@ -405,7 +570,8 @@ const guardado = {
   quitar(k) { try { localStorage.removeItem(k); } catch {} },
 };
 
-const ui = { fecha: null, hoy: null, dias: [], busqueda: "", firma: "", seleccion: null };
+const ui = { fecha: null, hoy: null, dias: [], busqueda: "", firma: "", seleccion: null, momentos: new Map(), editando: null };
+const fotos = new Map(); // id del momento → imagen ya descargada
 
 function esc(t) {
   return String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -447,7 +613,39 @@ const ICONO = {
   nota: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg>',
   clase: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
   reunion: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c0-3 3-5 6-5s6 2 6 5M15 14.5c3 0 6 1.5 6 4.5"/></svg>',
+  voz: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+  foto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  editar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/></svg>',
+  quitar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/></svg>',
 };
+
+async function post(ruta, datos) {
+  return api(ruta, { method: "POST", headers: { "Content-Type": "application/json", "X-Eco-Panel": "1" }, body: JSON.stringify(datos) });
+}
+
+function avisar(texto) {
+  const a = $("aviso");
+  a.textContent = texto;
+  a.hidden = false;
+  clearTimeout(avisar.t);
+  avisar.t = setTimeout(() => (a.hidden = true), 2800);
+}
+
+/** Ventanita de confirmación propia (no la del navegador). Devuelve true si confirmas. */
+function confirmar({ titulo, texto, boton }) {
+  const d = $("confirmar");
+  $("confirmar-titulo").textContent = titulo;
+  $("confirmar-texto").textContent = texto;
+  $("confirmar-si").textContent = boton;
+  return new Promise((listo) => {
+    const fin = (valor) => { d.close(); $("confirmar-si").onclick = $("confirmar-no").onclick = d.oncancel = null; listo(valor); };
+    $("confirmar-si").onclick = () => fin(true);
+    $("confirmar-no").onclick = () => fin(false);
+    d.oncancel = (ev) => { ev.preventDefault(); fin(false); };
+    d.showModal();
+    $("confirmar-no").focus();
+  });
+}
 
 function duracionTexto(seg) {
   const s = Math.round(seg);
@@ -505,11 +703,105 @@ function pintarEstado(e) {
     dd += ` <button class="copiar" type="button" id="respaldar">Respaldar ahora</button>`;
     fila("Respaldo diario", dd);
   }
-  $("sistema").innerHTML = filas.join("");
+  if (e.app) {
+    const a = e.app;
+    let dd;
+    if (!a.token) {
+      dd = `Para que el teléfono se actualice solo, pega aquí un token de GitHub (README, sección 11).
+        <form class="mini-form" id="github-form"><label class="oculto" for="github-token">Token de GitHub</label>
+        <input class="control" id="github-token" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false">
+        <button class="copiar" type="submit">Guardar</button></form><span class="no" id="github-error" hidden></span>`;
+    } else {
+      dd = a.error ? `<span class="no">${esc(a.error)}</span>`
+        : a.version ? `Versión ${esc(a.version)} lista · el teléfono la ofrece sola`
+        : "Esperando la primera versión que compile GitHub";
+      dd += ` <button class="copiar" type="button" id="app-revisar">Revisar ahora</button>`;
+    }
+    fila("App del teléfono", dd);
+  }
+  // No se repinta mientras escribes el token (el panel se actualiza solo cada 15 s).
+  const html = filas.join("");
+  const escribiendo = $("github-token") && ($("github-token").value || document.activeElement === $("github-token"));
+  if (!escribiendo && $("sistema").dataset.html !== html) { $("sistema").innerHTML = html; $("sistema").dataset.html = html; }
   $("abrir-qr").hidden = !e.es_local;
   if (e.es_local && location.hash === "#conectar" && !ui.qrAbierto) { ui.qrAbierto = true; abrirQr(); }
   pintarClase(e);
+  pintarGoogle(e);
 }
+
+/* ── Classroom y Calendar ── */
+function pintarGoogle(e) {
+  const caja = $("google");
+  caja.hidden = !e.es_local || !e.google;
+  if (caja.hidden) return;
+  const g = e.google;
+  let h;
+  if (!g.cliente) {
+    h = `<p>Trae tus tareas de Classroom y pone tus pendientes con fecha en un calendario <strong>«Eco»</strong> de Google Calendar.</p>
+      <p>Primero crea tu llave en Google Cloud (unos 5 minutos, una sola vez): <strong>README, sección 10</strong>. Luego suelta aquí el archivo que bajaste.</p>
+      <input class="oculto" type="file" id="google-archivo" accept=".json,application/json">
+      <label class="soltar" id="google-soltar" for="google-archivo"><span><strong>Elegir el archivo .json</strong> o arrástralo aquí</span><span class="soltar-nota">client_secret_….apps.googleusercontent.com.json</span></label>`;
+  } else if (!g.conectado) {
+    h = (g.error ? `<p class="error-texto">${esc(g.error)}</p>` : `<p>La llave está lista. Inicia sesión con tu <strong>cuenta del colegio</strong>.</p>`) +
+      `<a class="boton-principal" href="/google/conectar">Conectar con Google</a>
+      <p class="nota">Si Google dice «Google no verificó esta app», toca Configuración avanzada → Ir a Eco. La app es tuya: nadie más la usa.</p>`;
+  } else {
+    const c = g.classroom, k = g.calendar;
+    const cr = !c.activo ? "Apagado en config.toml" : c.error ? `<span class="no">${esc(c.error)}</span>`
+      : c.ultimo ? `${plural(c.cursos, "clase", "clases")} · ${plural(c.pendientes, "tarea pendiente", "tareas pendientes")}<br><span style="color:var(--faint)">revisado ${esc(hace(c.ultimo))}</span>`
+      : "Revisando por primera vez…";
+    const ca = !k.activo ? "Apagado en config.toml" : k.error ? `<span class="no">${esc(k.error)}</span>`
+      : k.ultimo ? `Calendario «Eco» · ${plural(k.eventos, "evento", "eventos")}` : "Preparando el calendario…";
+    h = `<dl class="datos"><div><dt>Cuenta</dt><dd>${esc(g.email || "conectada")}</dd></div>
+      <div><dt>Classroom</dt><dd>${cr}</dd></div><div><dt>Google Calendar</dt><dd>${ca}</dd></div></dl>
+      <div class="fila-botones"><button class="boton-texto" type="button" id="google-revisar">Revisar ahora</button>
+      <button class="boton-texto" type="button" id="google-salir">Desconectar</button></div>`;
+  }
+  const cuerpo = $("google-cuerpo");
+  if (cuerpo.dataset.html !== h) { cuerpo.innerHTML = h; cuerpo.dataset.html = h; }
+  if (location.hash === "#google" && !ui.googleVisto) {
+    ui.googleVisto = true;
+    caja.scrollIntoView({ block: "center" });
+    if (g.conectado) avisar("Google conectado");
+  }
+}
+
+async function subirLlaveGoogle(archivo) {
+  const error = $("google-error");
+  error.hidden = true;
+  if (!archivo) return;
+  try {
+    const r = await post("/api/google/cliente", { contenido: await archivo.text() });
+    if (!r.ok) { error.textContent = r.error; error.hidden = false; return; }
+    avisar("Llave de Google guardada");
+    refrescar(true);
+  } catch { error.textContent = "No pude guardar el archivo. Revisa que Eco siga encendido."; error.hidden = false; }
+}
+document.addEventListener("change", (ev) => { if (ev.target.id === "google-archivo") subirLlaveGoogle(ev.target.files[0]); });
+document.addEventListener("dragover", (ev) => {
+  const zona = ev.target.closest?.("#google-soltar");
+  if (zona) { ev.preventDefault(); zona.classList.add("encima"); }
+});
+document.addEventListener("dragleave", (ev) => ev.target.closest?.("#google-soltar")?.classList.remove("encima"));
+document.addEventListener("drop", (ev) => {
+  const zona = ev.target.closest?.("#google-soltar");
+  if (!zona) return;
+  ev.preventDefault();
+  zona.classList.remove("encima");
+  subirLlaveGoogle(ev.dataTransfer.files[0]);
+});
+document.addEventListener("submit", async (ev) => {
+  if (ev.target.id !== "github-form") return;
+  ev.preventDefault();
+  const campo = $("github-token"), error = $("github-error");
+  try {
+    const r = await post("/api/github", { token: campo.value });
+    if (!r.ok) { error.textContent = " " + r.error; error.hidden = false; return; }
+    campo.value = "";
+    avisar("Token guardado: Eco revisa si hay app nueva");
+    refrescar(true);
+  } catch { error.textContent = " No se pudo guardar."; error.hidden = false; }
+});
 
 async function abrirQr() {
   const dialogo = $("conectar");
@@ -529,6 +821,8 @@ async function abrirQr() {
 }
 $("abrir-qr").addEventListener("click", abrirQr);
 $("cerrar-qr").addEventListener("click", () => $("conectar").close());
+$("visor-cerrar").addEventListener("click", () => $("visor").close());
+$("visor").addEventListener("click", (ev) => { if (ev.target === $("visor")) $("visor").close(); });
 
 function pintarClase(e) {
   const caja = $("clase");
@@ -583,10 +877,12 @@ function pintarLinea(momentos, esHoy) {
 function tareaHTML(t, conOrigen) {
   let info = "";
   if (t.cuando) info = `<span class="${t.vencida ? "vencida" : t.hoy ? "hoy" : ""}">${t.vencida ? "Venció " : ""}${esc(t.cuando)}</span>`;
-  if (conOrigen && t.de) info += `${info ? ", " : ""}de “${esc(t.de)}”`;
+  if (conOrigen && t.origen === "classroom" && t.enlace) info += `${info ? " · " : ""}<a href="${esc(t.enlace)}" target="_blank" rel="noopener">Abrir en Classroom</a>`;
+  else if (conOrigen && t.de) info += `${info ? ", " : ""}de <a href="#m${t.captura_id}" data-fuente="${t.captura_id}" data-fecha="${esc(t.de_fecha || "")}">“${esc(t.de)}”</a>`;
+  const marca = t.origen === "classroom" ? `<span class="chip-cr" aria-label="De Classroom:">CLASSROOM</span>` : "";
   return `<li class="tarea${t.hecho ? " hecha" : ""}" data-tarea="${t.id}">
     <label><input type="checkbox" ${t.hecho ? "checked" : ""} data-marcar="${t.id}">
-      <span><span class="tarea-texto">${esc(t.texto)}</span>${info ? `<span class="tarea-info">${info}</span>` : ""}</span>
+      <span><span class="tarea-texto">${marca}${esc(t.texto)}</span>${info ? `<span class="tarea-info">${info}</span>` : ""}</span>
     </label></li>`;
 }
 
@@ -598,6 +894,8 @@ function momentoHTML(m, conFecha) {
   else if (m.lat != null) chips.push(`<a class="chip" href="https://maps.google.com/?q=${m.lat.toFixed(5)},${m.lon.toFixed(5)}" target="_blank" rel="noopener">${ICONO.lugar}Ver en el mapa</a>`);
   if (m.duracion) chips.push(`<span class="chip">${ICONO.tiempo}${duracionTexto(m.duracion)}</span>`);
   if (m.origen === "texto") chips.push(`<span class="chip">${ICONO.nota}Nota escrita</span>`);
+  if (m.origen === "voz") chips.push(`<span class="chip">${ICONO.voz}Nota de voz</span>`);
+  if (m.origen === "foto") chips.push(`<span class="chip">${ICONO.foto}Foto</span>`);
   if (m.origen === "clase") chips.push(`<span class="chip">${ICONO.clase}Clase</span>`);
   if (m.origen === "reunion") chips.push(`<span class="chip">${ICONO.reunion}Reunión</span>`);
   chips.push(`<span class="chip"><span class="importancia" role="img" aria-label="Importancia ${m.importancia} de 5">${imp}</span></span>`);
@@ -607,22 +905,204 @@ function momentoHTML(m, conFecha) {
   if (m.tareas.length) grupos += `<div class="grupo"><h4>Por hacer</h4><ul class="tareas">${m.tareas.map((t) => tareaHTML(t, false)).join("")}</ul></div>`;
   if (m.datos.length) grupos += `<div class="grupo"><h4>Para no olvidar</h4><ul>${m.datos.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>`;
   if (m.ideas.length) grupos += `<div class="grupo"><h4>Ideas</h4><ul>${m.ideas.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>`;
-  if (m.transcripcion) grupos += `<details><summary>Ver lo que se dijo</summary><p>${esc(m.transcripcion)}</p></details>`;
+  if (m.transcripcion) grupos += `<details><summary>${m.origen === "foto" ? "Ver lo que se leyó en la foto" : "Ver lo que se dijo"}</summary><p>${esc(m.transcripcion)}</p></details>`;
+  const foto = m.foto ? `<button class="foto-boton" type="button" data-ver-foto="${m.id}" aria-label="Ver la foto completa"><img data-foto="${m.id}" alt="Foto: ${esc(m.titulo)}"${fotos.has(String(m.id)) ? ` src="${fotos.get(String(m.id))}"` : ""}></button>` : "";
 
   return `<li class="momento${ui.seleccion === m.id ? " destacado" : ""}" id="m${m.id}" data-imp="${m.importancia}">
     <div class="momento-hora">${esc(m.hora)}</div>
     <article class="momento-cuerpo">
-      <h4 class="momento-titulo">${esc(m.titulo)}</h4>
+      <div class="momento-cabeza">
+        <h4 class="momento-titulo">${esc(m.titulo)}</h4>
+        <button class="boton-editar" type="button" data-editar="${m.id}" aria-label="Editar «${esc(m.titulo)}»" title="Editar o borrar">${ICONO.editar}</button>
+      </div>
       <div class="momento-meta">${chips.join("")}</div>
+      ${foto}
       ${m.resumen ? `<p class="momento-resumen">${esc(m.resumen)}</p>` : ""}
       ${grupos}
     </article></li>`;
 }
 
+/* ── Editar un momento ── */
+const TIPOS = { tarea: "Tarea", dato: "Para no olvidar", idea: "Idea" };
+
+function filaHTML(it) {
+  const tipo = it.tipo || "tarea";
+  const opciones = Object.entries(TIPOS).map(([v, t]) => `<option value="${v}"${v === tipo ? " selected" : ""}>${t}</option>`).join("");
+  return `<li class="fila" data-id="${it.id ?? ""}" data-tipo="${tipo}">
+    <select class="control" data-campo="tipo" aria-label="Tipo">${opciones}</select>
+    <input class="control fila-texto" data-campo="texto" type="text" maxlength="300" value="${esc(it.texto || "")}"
+      aria-label="Texto" placeholder="${tipo === "tarea" ? "Qué hay que hacer" : "Qué no hay que olvidar"}" autocomplete="off">
+    <span class="fila-cuando">
+      <input class="control" data-campo="fecha" type="date" value="${esc(it.fecha || "")}" aria-label="Fecha">
+      <input class="control" data-campo="hora" type="time" value="${esc(it.hora || "")}" aria-label="Hora (opcional)">
+    </span>
+    <button class="quitar" type="button" data-quitar aria-label="Quitar «${esc(it.texto || "renglón nuevo")}»" title="Quitar">${ICONO.quitar}</button>
+  </li>`;
+}
+
+function editorHTML(m) {
+  const imp = [1, 2, 3, 4, 5].map((n) =>
+    `<input class="oculto" type="radio" name="imp" id="imp-${m.id}-${n}" value="${n}"${n === m.importancia ? " checked" : ""}>` +
+    `<label for="imp-${m.id}-${n}" class="${n <= m.importancia ? "lleno" : ""}" title="${n} de 5"><i></i><span class="oculto">${n} de 5</span></label>`).join("");
+  return `<form class="editor" data-editor="${m.id}" aria-label="Editar momento" novalidate>
+    <div class="campo-editor"><label class="rotulo" for="ed-titulo-${m.id}">Título</label>
+      <input class="control titulo" id="ed-titulo-${m.id}" name="titulo" maxlength="90" value="${esc(m.titulo)}" autocomplete="off"></div>
+    <div class="campo-editor"><label class="rotulo" for="ed-resumen-${m.id}">Resumen</label>
+      <textarea class="control" id="ed-resumen-${m.id}" name="resumen" rows="3" maxlength="1500">${esc(m.resumen || "")}</textarea></div>
+    <fieldset class="campo-editor"><legend class="rotulo">Importancia</legend><div class="imp-opciones">${imp}</div></fieldset>
+    <div class="campo-editor"><span class="rotulo" id="ed-items-${m.id}">Tareas, datos e ideas</span>
+      <ul class="filas" aria-labelledby="ed-items-${m.id}">${m.items.map(filaHTML).join("")}</ul>
+      <p class="filas-vacio"${m.items.length ? " hidden" : ""}>Sin nada anotado todavía.</p>
+      <div class="agregar">
+        <button class="boton-suave" type="button" data-agregar="tarea">+ Tarea</button>
+        <button class="boton-suave" type="button" data-agregar="dato">+ Para no olvidar</button>
+        <button class="boton-suave" type="button" data-agregar="idea">+ Idea</button>
+      </div></div>
+    <p class="error-texto" data-error role="alert" hidden></p>
+    <div class="acciones">
+      <button class="boton-principal" type="submit">Guardar cambios</button>
+      <button class="boton-texto" type="button" data-cancelar>Cancelar</button>
+      <button class="boton-peligro" type="button" data-borrar="${m.id}">Borrar momento</button>
+    </div>
+  </form>`;
+}
+
+function abrirEditor(id) {
+  if (ui.editando && ui.editando !== id) cerrarEditor(false);
+  const m = ui.momentos.get(id);
+  const cuerpo = document.querySelector(`#m${id} .momento-cuerpo`);
+  if (!m || !cuerpo) return;
+  ui.editando = id;
+  cuerpo.innerHTML = editorHTML(m);
+  cuerpo.parentElement.classList.add("editando");
+  const titulo = cuerpo.querySelector("input[name=titulo]");
+  titulo.focus();
+  titulo.setSelectionRange(titulo.value.length, titulo.value.length);
+}
+
+function cerrarEditor(enfocar = true) {
+  const id = ui.editando;
+  ui.editando = null;
+  const li = $("m" + id), m = ui.momentos.get(id);
+  if (li && m) {
+    li.outerHTML = momentoHTML(m, Boolean(ui.busqueda));
+    cargarFotos();
+    if (enfocar) document.querySelector(`[data-editar="${id}"]`)?.focus();
+  }
+}
+
+function leerEditor(form) {
+  const items = [...form.querySelectorAll(".fila")].map((f) => ({
+    id: f.dataset.id ? Number(f.dataset.id) : null,
+    tipo: f.querySelector("[data-campo=tipo]").value,
+    texto: f.querySelector("[data-campo=texto]").value.trim(),
+    fecha: f.querySelector("[data-campo=fecha]").value || null,
+    hora: f.querySelector("[data-campo=hora]").value || null,
+  })).filter((it) => it.texto);
+  return {
+    id: Number(form.dataset.editor),
+    titulo: form.titulo.value.trim(),
+    resumen: form.resumen.value.trim(),
+    importancia: Number(form.querySelector("input[name=imp]:checked")?.value || 3),
+    items,
+  };
+}
+
+async function guardarEditor(form) {
+  const datos = leerEditor(form), error = form.querySelector("[data-error]");
+  error.hidden = true;
+  if (!datos.titulo) {
+    error.textContent = "Ponle un título al momento.";
+    error.hidden = false;
+    form.titulo.focus();
+    return;
+  }
+  const boton = form.querySelector("[type=submit]");
+  boton.disabled = true;
+  boton.textContent = "Guardando…";
+  try {
+    const r = await post("/api/momento", datos);
+    ui.momentos.set(datos.id, r.momento);
+    cerrarEditor();
+    avisar("Cambios guardados");
+    refrescar(true);
+  } catch (err) {
+    if (err.token) { mostrar("acceso"); return; }
+    error.textContent = "No se pudo guardar. Revisa que Eco siga encendido e inténtalo otra vez.";
+    error.hidden = false;
+    boton.disabled = false;
+    boton.textContent = "Guardar cambios";
+  }
+}
+
+async function borrarMomento(id) {
+  const m = ui.momentos.get(id);
+  const ok = await confirmar({
+    titulo: "¿Borrar este momento?",
+    texto: `Se borra «${m?.titulo || "este momento"}» con sus tareas, datos${m?.foto ? ", la foto" : ""} y lo que se dijo. No se puede deshacer.`,
+    boton: "Borrar",
+  });
+  if (!ok) { document.querySelector(`[data-borrar="${id}"]`)?.focus(); return; }
+  try {
+    await post("/api/momento/borrar", { id });
+    ui.editando = null;
+    ui.momentos.delete(id);
+    avisar("Momento borrado");
+    await refrescar(true);
+    $("momentos").focus();
+  } catch (err) {
+    if (err.token) mostrar("acceso");
+    else avisar("No se pudo borrar. Inténtalo otra vez.");
+  }
+}
+
+document.addEventListener("submit", (ev) => {
+  if (!ev.target.matches("form.editor")) return;
+  ev.preventDefault();
+  guardarEditor(ev.target);
+});
+document.addEventListener("keydown", (ev) => {
+  const form = ev.target.closest?.("form.editor");
+  if (!form) return;
+  if (ev.key === "Escape" && !$("confirmar").open) { ev.preventDefault(); cerrarEditor(); }
+  if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); guardarEditor(form); }
+});
+document.addEventListener("change", (ev) => {
+  const form = ev.target.closest?.("form.editor");
+  if (!form) return;
+  if (ev.target.name === "imp") {
+    const n = Number(ev.target.value);
+    form.querySelectorAll(".imp-opciones label").forEach((l, i) => l.classList.toggle("lleno", i < n));
+  }
+  if (ev.target.dataset.campo === "tipo") {
+    const fila = ev.target.closest(".fila");
+    fila.dataset.tipo = ev.target.value;
+    fila.querySelector("[data-campo=texto]").placeholder = ev.target.value === "tarea" ? "Qué hay que hacer" : "Qué no hay que olvidar";
+  }
+});
+
+/* ── Fotos (se piden con el token, por eso no van en un <img src> directo) ── */
+async function cargarFotos() {
+  for (const img of document.querySelectorAll("img[data-foto]:not([src])")) {
+    const id = img.dataset.foto;
+    try {
+      if (!fotos.has(id)) {
+        const token = guardado.leer("eco-token");
+        const r = await fetch(`/api/foto?id=${id}`, { headers: token ? { "X-Eco-Token": token } : {} });
+        if (!r.ok) continue;
+        fotos.set(id, URL.createObjectURL(await r.blob()));
+      }
+      img.src = fotos.get(id);
+    } catch {}
+  }
+}
+
 async function cargarMomentos() {
+  ui.editando = null; // repintar la lista descarta una edición a medias
   const buscando = Boolean(ui.busqueda);
   const ruta = buscando ? `/api/momentos?q=${encodeURIComponent(ui.busqueda)}` : `/api/momentos?fecha=${ui.fecha}`;
   const momentos = await api(ruta);
+  ui.momentos = new Map(momentos.map((m) => [m.id, m]));
   const esHoy = ui.fecha === ui.hoy;
 
   $("dia-titulo").innerHTML = buscando ? `Búsqueda <span>“${esc(ui.busqueda)}”</span>` : esc(nombreDia(ui.fecha));
@@ -648,6 +1128,7 @@ async function cargarMomentos() {
     return;
   }
   lista.innerHTML = momentos.map((m) => momentoHTML(m, buscando)).join("");
+  cargarFotos();
 }
 
 async function cargarPendientes() {
@@ -671,9 +1152,13 @@ async function refrescar(forzar = false) {
     const firma = [e.momentos_hoy, e.pendientes, e.ultimo_audio, e.procesando, e.en_cola, e.hoy,
       JSON.stringify(e.sesiones || [])].join("|");
     if (forzar || firma !== ui.firma) {
-      ui.firma = firma;
       await cargarDias();
-      await Promise.all([cargarMomentos(), cargarPendientes()]);
+      if (ui.editando) {
+        await cargarPendientes(); // la lista de momentos espera a que termines de editar
+      } else {
+        ui.firma = firma;
+        await Promise.all([cargarMomentos(), cargarPendientes()]);
+      }
     }
     mostrar("app");
   } catch (err) {
@@ -715,7 +1200,61 @@ document.addEventListener("change", async (ev) => {
 
 document.addEventListener("click", async (ev) => {
   const fuente = ev.target.closest("[data-fuente]");
-  if (fuente) { irAMomento(fuente.dataset.fuente, fuente.dataset.fecha); return; }
+  if (fuente) { ev.preventDefault(); irAMomento(fuente.dataset.fuente, fuente.dataset.fecha); return; }
+
+  // Editor de momentos
+  const editar = ev.target.closest("[data-editar]");
+  if (editar) { abrirEditor(Number(editar.dataset.editar)); return; }
+  if (ev.target.closest("[data-cancelar]")) { cerrarEditor(); return; }
+  const borrar = ev.target.closest("[data-borrar]");
+  if (borrar) { borrarMomento(Number(borrar.dataset.borrar)); return; }
+  const quitar = ev.target.closest("[data-quitar]");
+  if (quitar) {
+    const fila = quitar.closest(".fila"), lista = fila.parentElement;
+    const siguiente = fila.nextElementSibling || fila.previousElementSibling;
+    fila.remove();
+    lista.nextElementSibling.hidden = lista.children.length > 0;
+    (siguiente?.querySelector("[data-campo=texto]") || lista.closest("form").querySelector("[data-agregar]")).focus();
+    return;
+  }
+  const agregar = ev.target.closest("[data-agregar]");
+  if (agregar) {
+    const lista = agregar.closest("form").querySelector(".filas");
+    lista.insertAdjacentHTML("beforeend", filaHTML({ tipo: agregar.dataset.agregar }));
+    lista.nextElementSibling.hidden = true;
+    lista.lastElementChild.querySelector("[data-campo=texto]").focus();
+    return;
+  }
+  const verFoto = ev.target.closest("[data-ver-foto]");
+  if (verFoto) {
+    const src = fotos.get(verFoto.dataset.verFoto);
+    if (!src) return;
+    $("visor-img").src = src;
+    $("visor-img").alt = verFoto.querySelector("img")?.alt || "Foto";
+    $("visor").showModal();
+    return;
+  }
+
+  // Google y actualizaciones
+  if (ev.target.id === "google-revisar" || ev.target.id === "app-revisar") {
+    const boton = ev.target;
+    boton.disabled = true;
+    boton.textContent = "Revisando…";
+    try { await post(boton.id === "google-revisar" ? "/api/google" : "/api/github", { accion: "revisar" }); } catch {}
+    setTimeout(() => refrescar(true), 4000);
+    return;
+  }
+  if (ev.target.id === "google-salir") {
+    const ok = await confirmar({
+      titulo: "¿Desconectar Google?",
+      texto: "Eco deja de leer Classroom y de actualizar el calendario «Eco». Lo que ya está en tu calendario se queda ahí.",
+      boton: "Desconectar",
+    });
+    if (!ok) return;
+    try { await post("/api/google", { accion: "desconectar" }); avisar("Google desconectado"); } catch {}
+    refrescar(true);
+    return;
+  }
   if (ev.target.id === "respaldar") {
     ev.target.textContent = "Respaldando…"; ev.target.disabled = true;
     try {

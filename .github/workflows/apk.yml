@@ -1,6 +1,7 @@
 name: Construir APK de Eco
 
 # Se ejecuta cada vez que haces push con cambios en la app, o a mano desde la pestaña Actions.
+# La laptop baja este APK sola y se lo ofrece al teléfono (sección 11 del README).
 on:
   push:
     paths:
@@ -21,15 +22,29 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Número de versión
+        run: |
+          echo "ECO_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "ECO_VERSION_NAME=1.3.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
       - name: Compilar
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
+      - name: Datos de la versión (los lee la laptop)
+        run: |
+          printf '{"versionCode": %s, "versionName": "%s", "commit": "%s"}\n' \
+            "$ECO_VERSION_CODE" "$ECO_VERSION_NAME" "${GITHUB_SHA::7}" \
+            > android/app/build/outputs/apk/debug/version.json
+          cat android/app/build/outputs/apk/debug/version.json
+
       - name: Publicar el APK
         uses: actions/upload-artifact@v4
         with:
           name: Eco-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/debug/version.json
           retention-days: 30

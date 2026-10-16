@@ -13,8 +13,10 @@ android {
         applicationId = "com.blackholecode.eco"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        // GitHub Actions pone el número de cada compilación; así la laptop y el teléfono
+        // saben cuál es más nueva (las versiones de antes llegaban hasta el 3).
+        versionCode = System.getenv("ECO_VERSION_CODE")?.toIntOrNull() ?: 100
+        versionName = System.getenv("ECO_VERSION_NAME") ?: "1.3-local"
     }
 
     // Llave fija: así cada APK nuevo se instala encima del anterior sin borrar tus ajustes.
