@@ -33,6 +33,17 @@ object EcoState {
     @Volatile var updateStatus: String? = null
     @Volatile var updating = false
 
+    /**
+     * Doble toque a subir volumen: "listo", "musica", "llamada", "espera" (Eco no escucha),
+     * "apagado" o "sin_audio" (el teléfono no dejó preparar el silencio).
+     */
+    @Volatile var volumenEstado = "apagado"
+    /** Último toque a subir volumen que vio Eco y cuántos llevaba seguidos (para la prueba). */
+    @Volatile var volumenToqueMs = 0L
+    @Volatile var volumenToques = 0
+    /** Último doble toque que guardó un momento. */
+    @Volatile var volumenDobleMs = 0L
+
     @Volatile var lastSaved = ""
     @Volatile var lastUpload = "Todavía no se ha subido nada"
     @Volatile var lastUploadOk = true

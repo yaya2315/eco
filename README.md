@@ -184,7 +184,7 @@ Atajos: `Ctrl + Enter` guarda, `Esc` cancela.
 
 **Widget.** Mantén presionada la pantalla de inicio › **Widgets** › **Eco**. Muestra si Eco está escuchando y tiene un botón grande de **Guardar momento** (o *Encender* / *Reanudar*, según cómo esté).
 
-**Doble toque a subir volumen.** Con Eco escuchando, dos toques rápidos a **subir volumen** guardan un momento, aunque la pantalla esté apagada y el teléfono en la bolsa. Sientes la misma vibración corta. Un toque suelto sube el volumen como siempre. Mientras suena música (y 10 minutos después), los botones vuelven a ser solo de la música. Se apaga en la app, en *Duración del momento*.
+**Doble toque a subir volumen.** Con Eco escuchando, exactamente dos toques rápidos a **subir volumen** guardan un momento, aunque la pantalla esté apagada y el teléfono en la bolsa. Sientes la misma vibración corta y el volumen vuelve a donde estaba. Un toque, tres o el botón sostenido suben el volumen como siempre. Para que Android le pase los botones con la pantalla apagada, Eco reproduce silencio absoluto mientras escucha (gasta un poquito más de batería). Si el volumen multimedia está al máximo, Eco lo baja 2 pasos mientras no suena nada y te los devuelve apenas pones música. Mientras suena música o un video, y durante llamadas, se pausa. Se apaga en la app, en el ícono del cronómetro; debajo del interruptor te dice qué vio cuando lo pruebas.
 
 **Alertas de salud.** Cada 5 minutos Eco revisa sus piezas y te avisa por Telegram (una vez, y otra si sigue igual 12 horas después) cuando:
 - Ollama no responde o le falta un modelo;

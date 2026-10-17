@@ -36,6 +36,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(K_DOBLE_VOLUMEN, true)
         set(value) = sp.edit().putBoolean(K_DOBLE_VOLUMEN, value).apply()
 
+    /** Pasos de volumen multimedia que Eco bajó para ver el doble toque (se devuelven al sonar música). */
+    var volumenPrestado: Int
+        get() = sp.getInt(K_PRESTADO, 0)
+        set(value) = sp.edit().putInt(K_PRESTADO, value.coerceAtLeast(0)).apply()
+
     /** Última versión nueva de la que ya avisamos (para no repetir el aviso). */
     var avisoVersion: Long
         get() = sp.getLong(K_AVISO, 0L)
@@ -54,5 +59,6 @@ class Prefs(context: Context) {
         private const val K_ACTIVO = "activo"
         private const val K_AVISO = "aviso_version"
         private const val K_DOBLE_VOLUMEN = "doble_volumen"
+        private const val K_PRESTADO = "volumen_prestado"
     }
 }

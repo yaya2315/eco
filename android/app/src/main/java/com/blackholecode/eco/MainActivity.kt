@@ -9,11 +9,13 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -26,15 +28,21 @@ import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.animation.DecelerateInterpolator
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -66,7 +74,20 @@ class MainActivity : Activity() {
         private const val C_LIVE = 0xFF3DDC97.toInt()
         private const val C_REC = 0xFFFF5C7A.toInt()
         private const val C_WARN = 0xFFFFB547.toInt()
+
+        // Secciones de abajo: botones con ícono que despliegan su panel (una a la vez).
+        private const val S_LAPTOP = 0
+        private const val S_MOMENTO = 1
+        private const val S_PERMISOS = 2
+        private const val S_BATERIA = 3
+        private val SECCIONES = arrayOf("Tu laptop", "Duración del momento", "Permisos", "Batería")
+
+        /** "Antes" va de 15 s a 5 min y "después" de 0 a 5 min, de 15 en 15 segundos. */
+        private const val PASO_SEG = 15
     }
+
+    /** Una fila de estado: punto de color, nombre y "Listo"/"Falta". */
+    private class Fila(val fila: View, val punto: View, val nombre: String, val estado: TextView)
 
     private lateinit var prefs: Prefs
     private val ui = Handler(Looper.getMainLooper())
@@ -86,13 +107,36 @@ class MainActivity : Activity() {
     private lateinit var serverInput: EditText
     private lateinit var tokenInput: EditText
     private lateinit var connResult: TextView
-    private lateinit var beforeInput: EditText
-    private lateinit var afterInput: EditText
-    private lateinit var permsText: TextView
     private lateinit var updateCard: View
     private lateinit var updateTitle: TextView
     private lateinit var updateStatus: TextView
     private lateinit var updateButton: Button
+
+    private lateinit var scroll: ScrollView
+    private val seccionBotones = ArrayList<View>()
+    private val seccionIconos = ArrayList<ImageView>()
+    private val seccionAvisos = ArrayList<View>()
+    private val seccionPaneles = ArrayList<View>()
+    private var seccionAbierta = -1
+    private var seccionPintada = -2
+
+    // Duración del momento
+    private lateinit var antesSeek: SeekBar
+    private lateinit var despuesSeek: SeekBar
+    private lateinit var antesValor: TextView
+    private lateinit var despuesValor: TextView
+    private lateinit var barraAntes: View
+    private lateinit var barraDespues: View
+    private lateinit var volumenEstado: TextView
+
+    // Permisos y batería
+    private lateinit var filaMic: Fila
+    private lateinit var filaNotif: Fila
+    private lateinit var filaUbicacion: Fila
+    private lateinit var permsButton: Button
+    private lateinit var filaSinLimite: Fila
+    private lateinit var filaCarga: Fila
+    private lateinit var batteryButton: Button
 
     private var haloAnim: AnimatorSet? = null
     private var haloColor = 0
@@ -106,6 +150,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         setContentView(buildUi())
+        // Primera vez: abre "Tu laptop", que es lo único que hay que configurar.
+        if (savedInstanceState == null && prefs.server.isBlank()) seccionAbierta = S_LAPTOP
+        paintSections()
         autostartPending = intent?.getBooleanExtra(EXTRA_AUTOSTART, false) == true
         installWhenFound = intent?.getBooleanExtra(EXTRA_ACTUALIZAR, false) == true
         ensurePermissions()
@@ -140,6 +187,11 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         ui.removeCallbacks(tick)
+        // Si moviste la duración y te fuiste antes de que se aplicara, se aplica ya.
+        if (aplicarPendiente) {
+            ui.removeCallbacks(aplicarMomento)
+            applyMomentSettings()
+        }
         super.onPause()
     }
 
@@ -198,16 +250,19 @@ class MainActivity : Activity() {
         ui.postDelayed({ render() }, 300)
     }
 
+    private fun sinLimiteDeBateria() = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+
     private fun refreshPerms() {
-        if (!::permsText.isInitialized) return
-        fun line(ok: Boolean, label: String) = (if (ok) "✓  " else "✕  ") + label
-        val pm = getSystemService(PowerManager::class.java)
-        permsText.text = listOf(
-            line(hasMic(), "Micrófono"),
-            line(hasNotifications(), "Notificaciones"),
-            line(hasLocation(), "Ubicación (opcional, para saber dónde pasó)"),
-            line(pm.isIgnoringBatteryOptimizations(packageName), "Sin optimización de batería"),
-        ).joinToString("\n")
+        if (!::filaMic.isInitialized) return
+        paintRow(filaMic, hasMic())
+        paintRow(filaNotif, hasNotifications())
+        paintRow(filaUbicacion, hasLocation(), opcional = true)
+        permsButton.visibility = if (missingPerms().isEmpty()) View.GONE else View.VISIBLE
+        permsButton.text = if (hasMic() && hasNotifications()) "Activar ubicación" else "Dar permisos"
+        val sinLimite = sinLimiteDeBateria()
+        paintRow(filaSinLimite, sinLimite)
+        batteryButton.visibility = if (sinLimite) View.GONE else View.VISIBLE
+        paintSections()
     }
 
     private fun openBatterySettings() {
@@ -313,6 +368,43 @@ class MainActivity : Activity() {
         powerButton.text = if (s.running) "Apagar Eco" else "Encender Eco"
         styleButton(powerButton, primary = !s.running)
         renderUpdate()
+        renderVolumen()
+        renderCarga()
+        paintSections()
+    }
+
+    /** Debajo del interruptor: si el doble toque está listo, en pausa, o qué vio en la prueba. */
+    private fun renderVolumen() {
+        val s = EcoState
+        val ahora = System.currentTimeMillis()
+        val (texto, color) = when {
+            !prefs.dobleVolumen -> "Apagado." to C_MUTED
+            !s.running || s.paused || s.volumenEstado == "espera" -> "Se activa cuando Eco está escuchando." to C_MUTED
+            s.volumenEstado == "llamada" -> "En pausa durante la llamada." to C_MUTED
+            s.volumenEstado == "musica" -> "En pausa mientras suena música o un video." to C_MUTED
+            s.volumenEstado == "sin_audio" -> "Este teléfono no dejó preparar el audio en silencio." to C_WARN
+            ahora - s.volumenDobleMs < 60_000 ->
+                "✓ Funcionó: momento guardado a las ${SimpleDateFormat("HH:mm", Locale.US).format(Date(s.volumenDobleMs))}." to C_LIVE
+            ahora - s.volumenToqueMs < 6_000 -> when (s.volumenToques) {
+                1 -> "Vi 1 toque. Para guardar son 2 seguidos."
+                2 -> "Vi 2 toques, pero separados. Hazlos un poco más rápido."
+                else -> "Vi ${s.volumenToques} toques: eso es subir el volumen. Para guardar son solo 2."
+            } to C_WARN
+            else -> "Listo, también con la pantalla apagada. Pruébalo: dos toques rápidos." to C_MUTED
+        }
+        volumenEstado.text = texto
+        volumenEstado.setTextColor(color)
+    }
+
+    private fun renderCarga() {
+        val bm = getSystemService(BatteryManager::class.java)
+        val pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val cargando = bm.isCharging
+        if (pct !in 0..100) {
+            paintRow(filaCarga, true, siTexto = "—")
+            return
+        }
+        paintRow(filaCarga, cargando || pct > 20, siTexto = "$pct %" + if (cargando) " · cargando" else "", noTexto = "$pct %")
     }
 
     // ───────────────────────── Actualización desde la laptop ─────────────────────────
@@ -507,6 +599,7 @@ class MainActivity : Activity() {
      */
     private fun applyPairing(raw: String?, fromScanner: Boolean) {
         val datos = Net.parsePairing(raw)
+        openSection(S_LAPTOP)
         if (datos == null) {
             connResult.setTextColor(C_WARN)
             connResult.text = "✕  Ese código no es de Eco. Ábrelo desde el panel de tu laptop."
@@ -540,19 +633,33 @@ class MainActivity : Activity() {
         connResult.text = "Subiendo lo pendiente…"
     }
 
+    private var aplicarPendiente = false
+    private val aplicarMomento = Runnable { applyMomentSettings() }
+
+    /** Se aplica un momento después de que sueltas el control, no en cada movimiento. */
+    private fun scheduleMomentSettings() {
+        aplicarPendiente = true
+        ui.removeCallbacks(aplicarMomento)
+        ui.postDelayed(aplicarMomento, 900)
+    }
+
     private fun applyMomentSettings() {
-        val before = beforeInput.text.toString().toIntOrNull()
-        val after = afterInput.text.toString().toIntOrNull()
-        if (before == null || after == null) {
-            toast("Escribe los segundos con números")
-            return
-        }
+        aplicarPendiente = false
+        val before = Prefs.MIN_BEFORE + antesSeek.progress * PASO_SEG
+        val after = despuesSeek.progress * PASO_SEG
+        if (before == prefs.beforeSec && after == prefs.afterSec) return
         prefs.beforeSec = before
         prefs.afterSec = after
-        beforeInput.setText(prefs.beforeSec.toString())
-        afterInput.setText(prefs.afterSec.toString())
-        if (EcoState.running && !EcoState.paused) EcoService.send(this, EcoService.ACTION_RELOAD)
-        toast("Listo: ${formatDuration(prefs.beforeSec)} antes y ${formatDuration(prefs.afterSec)} después")
+        // Reinicia la escucha con el tamaño nuevo (lo que había en memoria empieza de cero).
+        if (EcoState.running && !EcoState.paused && EcoState.reunionInicioMs == 0L) EcoService.send(this, EcoService.ACTION_RELOAD)
+        toast("Listo: ${humano(prefs.beforeSec)} antes y ${humano(prefs.afterSec)} después")
+    }
+
+    /** 45 -> "45 s", 180 -> "3 min", 90 -> "1 min 30 s" */
+    private fun humano(seg: Int): String = when {
+        seg < 60 -> "$seg s"
+        seg % 60 == 0 -> "${seg / 60} min"
+        else -> "${seg / 60} min ${seg % 60} s"
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
@@ -562,7 +669,7 @@ class MainActivity : Activity() {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
 
     private fun buildUi(): View {
-        val scroll = ScrollView(this).apply {
+        scroll = ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(C_BG)
             clipToPadding = false
@@ -604,19 +711,156 @@ class MainActivity : Activity() {
         row.addView(pauseButton, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
         col.addView(row, lp(top = 4))
 
-        col.addView(buildConnectionCard(), lp(top = 24))
-        col.addView(buildMomentCard(), lp(top = 16))
-        col.addView(buildPermsCard(), lp(top = 16))
-
-        col.addView(
-            label(
-                "🔒  El audio vive solo en la memoria del teléfono y se sobrescribe cada pocos minutos. " +
-                    "Solo se crea un archivo cuando tú tocas Guardar, y se borra del teléfono apenas llega a tu laptop.",
-                13f, C_MUTED
-            ).apply { setLineSpacing(0f, 1.25f) },
-            lp(top = 24)
-        )
+        col.addView(buildSections(), lp(top = 24))
         return scroll
+    }
+
+    // ───────────────────────── Secciones con ícono ─────────────────────────
+
+    /** Fila de cuatro íconos; cada uno abre su panel justo debajo (solo uno a la vez). */
+    private fun buildSections(): View {
+        val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dock = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(C_SURFACE, 20, C_BORDER)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        val iconos = intArrayOf(
+            R.drawable.ic_seccion_laptop, R.drawable.ic_seccion_momento,
+            R.drawable.ic_seccion_permisos, R.drawable.ic_seccion_bateria,
+        )
+        for (i in SECCIONES.indices) {
+            dock.addView(sectionButton(i, iconos[i]), LinearLayout.LayoutParams(0, dp(56), 1f).apply {
+                if (i > 0) marginStart = dp(6)
+            })
+        }
+        wrap.addView(dock)
+        listOf(buildConnectionCard(), buildMomentCard(), buildPermsCard(), buildBatteryCard()).forEach {
+            it.visibility = View.GONE
+            seccionPaneles += it
+            wrap.addView(it, lp(top = 10))
+        }
+        refreshPerms()
+        return wrap
+    }
+
+    private fun sectionButton(i: Int, icono: Int): View {
+        val boton = FrameLayout(this).apply {
+            isClickable = true
+            isFocusable = true
+            if (Build.VERSION.SDK_INT >= 26) tooltipText = SECCIONES[i]
+            setOnClickListener { v ->
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(70).withEndAction {
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(140).start()
+                }.start()
+                toggleSection(i)
+            }
+            // Para TalkBack: es un botón que despliega o recoge su sección.
+            accessibilityDelegate = object : View.AccessibilityDelegate() {
+                override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+                    super.onInitializeAccessibilityNodeInfo(host, info)
+                    info.className = Button::class.java.name
+                    info.addAction(
+                        if (seccionAbierta == i) AccessibilityNodeInfo.AccessibilityAction.ACTION_COLLAPSE
+                        else AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND
+                    )
+                }
+
+                override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
+                    if (action == AccessibilityNodeInfo.ACTION_EXPAND || action == AccessibilityNodeInfo.ACTION_COLLAPSE) {
+                        toggleSection(i)
+                        return true
+                    }
+                    return super.performAccessibilityAction(host, action, args)
+                }
+            }
+        }
+        val img = ImageView(this).apply {
+            setImageResource(icono)
+            imageTintList = ColorStateList.valueOf(C_MUTED)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        boton.addView(img, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        // Puntito ámbar arriba a la derecha del ícono: "aquí falta algo".
+        val aviso = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(C_WARN)
+                setStroke(dp(2), C_SURFACE)
+            }
+            visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        boton.addView(aviso, FrameLayout.LayoutParams(dp(10), dp(10), Gravity.CENTER).apply {
+            leftMargin = dp(12)
+            bottomMargin = dp(12)
+        })
+        seccionBotones += boton
+        seccionIconos += img
+        seccionAvisos += aviso
+        return boton
+    }
+
+    private fun toggleSection(i: Int) {
+        seccionAbierta = if (seccionAbierta == i) -1 else i
+        paintSections()
+        if (seccionAbierta >= 0) bringIntoView(seccionPaneles[seccionAbierta])
+    }
+
+    private fun openSection(i: Int) {
+        if (seccionAbierta == i) return
+        seccionAbierta = i
+        paintSections()
+        bringIntoView(seccionPaneles[i])
+    }
+
+    /** Pinta qué sección está abierta y qué íconos llevan aviso. Se llama cada segundo: solo cambia lo necesario. */
+    private fun paintSections() {
+        if (seccionBotones.isEmpty()) return
+        val avisos = booleanArrayOf(
+            prefs.server.isBlank() || !EcoState.lastUploadOk,
+            prefs.dobleVolumen && EcoState.volumenEstado == "sin_audio",
+            !hasMic() || !hasNotifications(),
+            !sinLimiteDeBateria(),
+        )
+        val cambio = seccionPintada != seccionAbierta
+        for (i in seccionBotones.indices) {
+            val abierta = i == seccionAbierta
+            val boton = seccionBotones[i]
+            seccionAvisos[i].visibility = if (avisos[i]) View.VISIBLE else View.GONE
+            val descripcion = SECCIONES[i] + if (avisos[i]) ", revisa esto" else ""
+            if (boton.contentDescription != descripcion) boton.contentDescription = descripcion
+            if (!cambio) continue
+            boton.background = ripple(
+                if (abierta) rounded(0x266B5BF5, 14, 0x8C6B5BF5.toInt()) else rounded(0x00000000, 14), 14
+            )
+            seccionIconos[i].imageTintList = ColorStateList.valueOf(if (abierta) C_ACCENT_SOFT else C_MUTED)
+            if (Build.VERSION.SDK_INT >= 30) boton.stateDescription = if (abierta) "Abierta" else "Cerrada"
+            val panel = seccionPaneles[i]
+            if (abierta && panel.visibility != View.VISIBLE) {
+                panel.alpha = 0f
+                panel.translationY = -dp(8).toFloat()
+                panel.visibility = View.VISIBLE
+                panel.animate().alpha(1f).translationY(0f).setDuration(200).setInterpolator(DecelerateInterpolator()).start()
+            } else if (!abierta && panel.visibility != View.GONE) {
+                panel.animate().cancel()
+                panel.visibility = View.GONE
+            }
+        }
+        seccionPintada = seccionAbierta
+    }
+
+    /** Si el panel recién abierto queda fuera de la pantalla, baja lo justo para verlo. */
+    private fun bringIntoView(panel: View) {
+        panel.post {
+            val r = Rect(0, 0, panel.width, panel.height)
+            scroll.offsetDescendantRectToMyCoords(panel, r)
+            var destino = r.bottom - scroll.height + dp(24)
+            val conIconos = r.top - dp(88) // que se sigan viendo los íconos
+            if (destino > conIconos) destino = conIconos
+            if (destino > scroll.scrollY) scroll.smoothScrollTo(0, destino)
+        }
     }
 
     private fun buildUpdateCard(): View {
@@ -729,12 +973,11 @@ class MainActivity : Activity() {
     }
 
     private fun buildConnectionCard(): View {
-        val card = card()
-        card.addView(label("Tu laptop", 17f, C_TEXT, medium = true))
+        val card = panelCard(S_LAPTOP)
         card.addView(
-            label("En el panel de la laptop toca \"Conectar el teléfono con un QR\" y escanéalo aquí. " +
-                "También puedes escribir los datos a mano.", 13f, C_MUTED).apply { setLineSpacing(0f, 1.2f) },
-            lp(top = 4)
+            label("Escanea el QR del panel de tu laptop, o escribe los datos a mano.", 13f, C_MUTED)
+                .apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 6)
         )
         card.addView(button("Escanear código QR", primary = true) { scanQr() }, lp(top = 14))
         card.addView(overline("DIRECCIÓN"), lp(top = 16))
@@ -760,27 +1003,57 @@ class MainActivity : Activity() {
         return card
     }
 
+    /**
+     * Cuánto audio entra en un momento. Eco siempre tiene en memoria lo último que escuchó
+     * ("antes"); al guardar, se queda con eso y sigue grabando "después".
+     */
     private fun buildMomentCard(): View {
-        val card = card()
-        card.addView(label("Duración del momento", 17f, C_TEXT, medium = true))
-        card.addView(label("Entre 15 y 300 segundos. Más largo = más contexto, más batería y más proceso.", 13f, C_MUTED), lp(top = 4))
+        val card = panelCard(S_MOMENTO)
 
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        left.addView(overline("ANTES (SEG)"))
-        beforeInput = input("180", InputType.TYPE_CLASS_NUMBER).apply { setText(prefs.beforeSec.toString()) }
-        left.addView(beforeInput, lp(top = 6))
-        val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        right.addView(overline("DESPUÉS (SEG)"))
-        afterInput = input("60", InputType.TYPE_CLASS_NUMBER).apply { setText(prefs.afterSec.toString()) }
-        right.addView(afterInput, lp(top = 6))
-        row.addView(left, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        row.addView(right, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
-        card.addView(row, lp(top = 16))
-        card.addView(button("Aplicar", primary = false) { applyMomentSettings() }, lp(top = 14))
+        // Línea de tiempo: lo que ya escuchó | el toque | lo que sigue.
+        val r = dp(4).toFloat()
+        val linea = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        }
+        barraAntes = View(this).apply {
+            background = GradientDrawable().apply {
+                setColor(0xFF8E83F0.toInt())
+                cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+            }
+        }
+        val toque = View(this).apply { background = rounded(0xFFFFFFFF.toInt(), 2) }
+        barraDespues = View(this).apply {
+            background = GradientDrawable().apply {
+                setColor(C_ACCENT)
+                cornerRadii = floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+            }
+        }
+        linea.addView(barraAntes, LinearLayout.LayoutParams(0, dp(8), 1f))
+        linea.addView(toque, LinearLayout.LayoutParams(dp(3), dp(22)).apply { marginStart = dp(3); marginEnd = dp(3) })
+        linea.addView(barraDespues, LinearLayout.LayoutParams(0, dp(8), 1f))
+        card.addView(linea, lp(top = 16))
+        card.addView(
+            label("Al guardar, Eco se queda con lo que ya escuchó y sigue grabando un poco más.", 13f, C_MUTED)
+                .apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 12)
+        )
+
+        val pasosAntes = (Prefs.MAX_SECONDS - Prefs.MIN_BEFORE) / PASO_SEG
+        val pasosDespues = Prefs.MAX_SECONDS / PASO_SEG
+        antesValor = label("", 15f, C_TEXT, medium = true)
+        antesSeek = slider("Lo que ya escuchó", pasosAntes, ((prefs.beforeSec - Prefs.MIN_BEFORE) / PASO_SEG.toFloat()).roundToInt())
+        card.addView(sliderHead("ANTES", antesValor), lp(top = 18))
+        card.addView(antesSeek, lp(top = 2))
+        despuesValor = label("", 15f, C_TEXT, medium = true)
+        despuesSeek = slider("Lo que sigue", pasosDespues, (prefs.afterSec / PASO_SEG.toFloat()).roundToInt())
+        card.addView(sliderHead("DESPUÉS", despuesValor), lp(top = 10))
+        card.addView(despuesSeek, lp(top = 2))
+        paintMomentLine()
 
         card.addView(View(this).apply { setBackgroundColor(C_BORDER) }, LinearLayout.LayoutParams(MATCH_PARENT, 1).apply {
-            topMargin = dp(18); bottomMargin = dp(14)
+            topMargin = dp(16); bottomMargin = dp(10)
         })
         val estados = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
         val dobleVolumen = Switch(this).apply {
@@ -794,44 +1067,143 @@ class MainActivity : Activity() {
             trackTintList = ColorStateList(estados, intArrayOf(C_ACCENT, C_BORDER))
             setOnCheckedChangeListener { _, activo ->
                 prefs.dobleVolumen = activo
-                toast(if (activo) "Listo: dos toques a subir volumen guardan un momento" else "Doble toque apagado")
+                render()
             }
         }
         card.addView(dobleVolumen, lp())
-        card.addView(
-            label("Guarda un momento sin sacar el teléfono, aunque la pantalla esté apagada. Un toque suelto sube el " +
-                "volumen como siempre. Mientras suena música, los botones son solo para la música.", 13f, C_MUTED)
-                .apply { setLineSpacing(0f, 1.2f) },
-            lp(top = 2)
-        )
+        volumenEstado = label("", 13f, C_MUTED).apply {
+            setLineSpacing(0f, 1.2f)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        card.addView(volumenEstado, lp(top = 2))
         return card
     }
 
+    private fun sliderHead(nombre: String, valor: TextView): View {
+        val fila = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fila.addView(overline(nombre), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        fila.addView(valor)
+        return fila
+    }
+
+    private fun slider(descripcion: String, pasos: Int, valor: Int) = SeekBar(this).apply {
+        max = pasos
+        progress = valor.coerceIn(0, pasos)
+        contentDescription = descripcion
+        progressTintList = ColorStateList.valueOf(C_ACCENT)
+        progressBackgroundTintList = ColorStateList.valueOf(C_BORDER)
+        thumbTintList = ColorStateList.valueOf(C_ACCENT_SOFT)
+        minimumHeight = dp(44)
+        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
+                paintMomentLine()
+                if (fromUser) scheduleMomentSettings()
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
+    }
+
+    private fun paintMomentLine() {
+        if (!::despuesSeek.isInitialized) return
+        val antes = Prefs.MIN_BEFORE + antesSeek.progress * PASO_SEG
+        val despues = despuesSeek.progress * PASO_SEG
+        antesValor.text = humano(antes)
+        despuesValor.text = humano(despues)
+        if (Build.VERSION.SDK_INT >= 30) {
+            antesSeek.stateDescription = humano(antes)
+            despuesSeek.stateDescription = humano(despues)
+        }
+        (barraAntes.layoutParams as LinearLayout.LayoutParams).weight = antes.toFloat()
+        (barraDespues.layoutParams as LinearLayout.LayoutParams).weight = despues.toFloat()
+        barraDespues.visibility = if (despues == 0) View.GONE else View.VISIBLE
+        barraAntes.requestLayout()
+    }
+
     private fun buildPermsCard(): View {
-        val card = card()
-        card.addView(label("Permisos y batería", 17f, C_TEXT, medium = true))
-        permsText = label("", 14f, C_TEXT).apply { setLineSpacing(0f, 1.45f) }
-        card.addView(permsText, lp(top = 10))
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(button("Permisos", primary = false) {
-            if (missingPerms().isEmpty()) toast("Ya tiene todos los permisos")
-            else if (Build.VERSION.SDK_INT >= 23 && missingPerms().any { shouldShowRequestPermissionRationale(it) }) ensurePermissions()
-            else openAppSettings()
-        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        row.addView(
-            button("Batería", primary = false) { openBatterySettings() },
-            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(12) }
+        val card = panelCard(S_PERMISOS)
+        filaMic = statusRow(card, "Micrófono", top = 8)
+        filaNotif = statusRow(card, "Notificaciones")
+        filaUbicacion = statusRow(card, "Ubicación")
+        card.addView(
+            label("La ubicación es opcional: sirve para saber dónde pasó cada momento.", 13f, C_MUTED)
+                .apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 6)
         )
-        card.addView(row, lp(top = 14))
+        permsButton = button("Dar permisos", primary = true) {
+            if (missingPerms().isEmpty()) toast("Ya tiene todos los permisos")
+            else if (missingPerms().any { shouldShowRequestPermissionRationale(it) }) ensurePermissions()
+            else openAppSettings()
+        }
+        card.addView(permsButton, lp(top = 14))
+        return card
+    }
+
+    private fun buildBatteryCard(): View {
+        val card = panelCard(S_BATERIA)
+        filaSinLimite = statusRow(card, "Sin límite de Android", top = 8)
+        filaCarga = statusRow(card, "Batería ahora")
+        batteryButton = button("Quitar el límite", primary = true) { openBatterySettings() }
+        card.addView(batteryButton, lp(top = 12))
         card.addView(
             label(
                 "En tu Honor, además: Ajustes › Batería › Inicio de aplicaciones › Eco → apaga " +
-                    "\"Gestionar automáticamente\" y deja activas las tres opciones. Si no, MagicOS cierra Eco a media mañana.",
+                    "«Gestionar automáticamente» y deja las tres opciones activas.",
                 13f, C_MUTED
             ).apply { setLineSpacing(0f, 1.25f) },
             lp(top = 14)
         )
+        card.addView(
+            label("Con 20 % o menos y sin cargador, Eco se pausa solo y vuelve al conectarlo.", 13f, C_MUTED)
+                .apply { setLineSpacing(0f, 1.25f) },
+            lp(top = 8)
+        )
         return card
+    }
+
+    /** Panel de una sección: tarjeta con su nombre arriba, en pequeño. */
+    private fun panelCard(seccion: Int) = card().apply {
+        addView(overline(SECCIONES[seccion].uppercase(Locale.ROOT)).apply { setTextColor(C_ACCENT_SOFT) })
+    }
+
+    private fun statusRow(parent: LinearLayout, nombre: String, top: Int = 0): Fila {
+        val fila = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(44)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            isFocusable = true
+        }
+        val punto = View(this).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C_MUTED) }
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        fila.addView(punto, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(12) })
+        fila.addView(
+            label(nombre, 15f, C_TEXT).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO },
+            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+        )
+        val estado = label("", 13f, C_MUTED, medium = true).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        fila.addView(estado)
+        parent.addView(fila, lp(top))
+        return Fila(fila, punto, nombre, estado)
+    }
+
+    private fun paintRow(f: Fila, ok: Boolean, opcional: Boolean = false, siTexto: String = "Listo", noTexto: String? = null) {
+        val texto = if (ok) siTexto else noTexto ?: if (opcional) "Opcional" else "Falta"
+        val color = when {
+            ok -> C_LIVE
+            opcional -> C_MUTED
+            else -> C_WARN
+        }
+        (f.punto.background as GradientDrawable).setColor(color)
+        if (f.estado.text.toString() != texto) f.estado.text = texto
+        f.estado.setTextColor(if (ok || opcional) C_MUTED else C_WARN)
+        f.fila.contentDescription = "${f.nombre}: $texto"
     }
 
     // ───────────────────────── Piezas reutilizables ─────────────────────────
