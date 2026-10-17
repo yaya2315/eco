@@ -570,12 +570,18 @@ Extrae SOLO lo que le sirve a {nombre}:
 Reglas:
 - Todo lo que {nombre} tenga que hacer (comprar, mandar, llevar, estudiar, pagar, llamar…) es una TAREA,
   aunque lo diga como "acordarme de…". Cada cosa va en UNA sola lista: no la repitas en datos ni en ideas.
+- Las deudas y préstamos de {nombre} SON TAREAS, con el monto y el nombre: "le debo 10 dólares a Steven"
+  → "Pagarle $10 a Steven"; "Ana me debe 5" → "Cobrarle $5 a Ana"; "le presté mi cargador a Luis"
+  → "Pedirle a Luis que devuelva el cargador".
+- Si dice una fecha, ponla siempre en la tarea (va a su calendario). Si solo dice el mes o el año
+  ("en diciembre", "en 2030"), deja fecha vacía y escríbelo en el texto: "Comprar una PS5 (en 2030)".
 - Horas en formato 24 h. Si no dicen "de la mañana" o "de la madrugada", "a las 1" hasta "a las 6"
   son de la tarde: "a las 3" = 15:00. "a las 8" sin más = 08:00.
 - titulo: concreto, de qué trata ("Entrega del proyecto de física"). Nunca genérico como "Tareas" o "Recuerdos".
 - No inventes nada. Si no hay nada útil, deja las listas vacías y dilo en el resumen.
 - De otras personas anota solo lo necesario para la tarea o el dato ("Mandarle el archivo a Carlos").
-  No anotes detalles íntimos, de salud, de dinero o de la vida privada de terceros.
+  No anotes detalles íntimos, de salud o de la vida privada de terceros (lo que {nombre} debe o le
+  deben sí se anota, como tarea).
 - Nunca anotes contraseñas, códigos de verificación ni números de tarjeta.
 - Español claro y corto. Tareas en infinitivo ("Enviar el informe al profe").
 - importancia: 1 (trivial) a 5 (no se puede olvidar).
@@ -765,6 +771,18 @@ def _quitar_recordar(t: str) -> str:
     return t[:1].upper() + t[1:]
 
 
+# Deudas, préstamos y compras son algo por hacer aunque el modelo los ponga en "datos"
+# ("Deudas con Steven (10 dólares)" tiene que quedar pendiente hasta que lo pagues).
+_PARECE_TAREA = re.compile(
+    r"\b(le debo|debo|me debe|me deben|deuda|deudas|prestamo|le preste|prestarle|devolverle|pagarle|cobrarle)\b"
+    r"|^(la |el |una |un )?(compra|pago|devolucion|entrega) de\b")
+
+
+def parece_tarea(texto: str) -> bool:
+    t = _sin_acentos(texto).strip()
+    return _clave(texto).startswith(VERBOS_DE_TAREA) or bool(_RECORDAR.match(t)) or bool(_PARECE_TAREA.search(t))
+
+
 def pulir(info: dict, texto: str) -> dict:
     base = _sin_acentos(texto)
     madrugada = re.search(r"madrugada|(de|en|por) la manana|\ba\.?\s?m\b", base)
@@ -776,14 +794,14 @@ def pulir(info: dict, texto: str) -> dict:
 
     datos = []
     for d in info["datos"]:
-        if _clave(d).startswith(VERBOS_DE_TAREA) or _RECORDAR.match(_sin_acentos(d)):
+        if parece_tarea(d):
             info["tareas"].append({"texto": _quitar_recordar(d), "fecha": None, "hora": None})
         else:
             datos.append(d)
     info["datos"] = datos
     ideas = []
     for i in info["ideas"]:
-        if _RECORDAR.match(_sin_acentos(i)):
+        if _RECORDAR.match(_sin_acentos(i)) or _PARECE_TAREA.search(_sin_acentos(i)):
             info["tareas"].append({"texto": _quitar_recordar(i), "fecha": None, "hora": None})
         else:
             ideas.append(i)
@@ -3252,25 +3270,104 @@ def api_momentos(fecha: str | None, q: str | None) -> list:
     return resultado
 
 
+# Lo que dijiste tú (en un momento, nota, voz o foto). Lo de clases, reuniones y anuncios se queda
+# en su momento: son muchos datos y no son recordatorios tuyos.
+ORIGENES_PERSONALES = ("audio", "voz", "texto", "foto")
+
+
 def api_pendientes() -> list:
+    """Todo lo que tienes por hacer, de cualquier día, hasta que lo marques como hecho."""
+    with closing(db()) as con:
+        filas = con.execute(
+            "SELECT i.*, c.titulo AS de, c.inicio AS de_inicio, g.evento AS en_calendar FROM items i "
+            "LEFT JOIN capturas c ON c.id=i.captura_id LEFT JOIN google_eventos g ON g.item_id=i.id "
+            "WHERE i.tipo='tarea' AND i.hecho=0 "
+            "ORDER BY i.fecha IS NULL, i.fecha, i.hora IS NULL, i.hora, i.id LIMIT 200").fetchall()
+    return [{**_tarea_json(f, f["de"]), "de_fecha": (f["de_inicio"] or "")[:10] or None,
+             "en_calendar": bool(f["en_calendar"])} for f in filas]
+
+
+def api_recordar() -> list:
+    """Lo que dijiste para no olvidar (datos e ideas): se queda hasta que lo marques como listo."""
+    marcas = ",".join("?" * len(ORIGENES_PERSONALES))
     with closing(db()) as con:
         filas = con.execute(
             "SELECT i.*, c.titulo AS de, c.inicio AS de_inicio FROM items i LEFT JOIN capturas c ON c.id=i.captura_id "
-            "WHERE i.tipo='tarea' AND i.hecho=0 "
-            "ORDER BY i.fecha IS NULL, i.fecha, i.hora IS NULL, i.hora, i.id LIMIT 200").fetchall()
-    return [{**_tarea_json(f, f["de"]), "de_fecha": (f["de_inicio"] or "")[:10] or None} for f in filas]
+            f"WHERE i.tipo IN ('dato', 'idea') AND i.hecho=0 AND (i.captura_id IS NULL OR c.origen IN ({marcas})) "
+            "ORDER BY coalesce(c.inicio, '') DESC, i.id DESC LIMIT 200", ORIGENES_PERSONALES).fetchall()
+    return [{**_tarea_json(f, f["de"]), "tipo": f["tipo"], "de_fecha": (f["de_inicio"] or "")[:10] or None}
+            for f in filas]
 
 
-def api_marcar_tarea(tarea_id: int, hecho: bool) -> dict | None:
+def api_marcar_tarea(item_id: int, hecho: bool) -> dict | None:
+    """Marca como hecha una tarea, o como "listo" algo de Para recordar (no se borra: se archiva)."""
     with closing(db()) as con, con:
         fila = con.execute("SELECT i.*, c.inicio FROM items i LEFT JOIN capturas c ON c.id=i.captura_id "
-                           "WHERE i.id=? AND i.tipo='tarea'", (tarea_id,)).fetchone()
+                           "WHERE i.id=?", (item_id,)).fetchone()
         if not fila:
             return None
-        con.execute("UPDATE items SET hecho=? WHERE id=?", (int(hecho), tarea_id))
+        con.execute("UPDATE items SET hecho=? WHERE id=?", (int(hecho), item_id))
     actualizar_notas(datetime.fromisoformat(fila["inicio"]).date() if fila["inicio"] else None)
     with closing(db()) as con:
-        return _tarea_json(con.execute("SELECT * FROM items WHERE id=?", (tarea_id,)).fetchone())
+        return _tarea_json(con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
+
+
+def api_nuevo_pendiente(datos: dict) -> dict | None:
+    """Pendiente escrito a mano en el panel. Con fecha, va a tu Google Calendar."""
+    texto = re.sub(r"\s+", " ", str(datos.get("texto") or "")).strip()[:300]
+    if not texto:
+        return None
+    fecha = _fecha_valida(datos.get("fecha")) if datos.get("fecha") else None
+    hora = _hora_valida(datos.get("hora")) if datos.get("hora") else None
+    f, h, ts = calcular_recordatorio(fecha, hora, ahora())
+    with closing(db()) as con, con:
+        iid = con.execute("INSERT INTO items(captura_id, tipo, texto, fecha, hora, recordar_ts, origen) "
+                          "VALUES(NULL, 'tarea', ?, ?, ?, ?, 'panel')", (texto, f, h, ts)).lastrowid
+    actualizar_notas(None)
+    log.info("Pendiente #%d agregado desde el panel", iid)
+    with closing(db()) as con:
+        return _tarea_json(con.execute("SELECT * FROM items WHERE id=?", (iid,)).fetchone())
+
+
+def api_fecha_item(datos: dict) -> dict | None:
+    """Ponerle (o quitarle) fecha y hora a algo. Lo de Para recordar pasa a ser tarea: así va al calendario."""
+    item_id = int(datos["id"])
+    fecha = _fecha_valida(datos.get("fecha")) if datos.get("fecha") else None
+    hora = _hora_valida(datos.get("hora")) if datos.get("hora") and fecha else None
+    with closing(db()) as con, con:
+        fila = con.execute("SELECT i.*, c.inicio FROM items i LEFT JOIN capturas c ON c.id=i.captura_id "
+                           "WHERE i.id=?", (item_id,)).fetchone()
+        if not fila or fila["origen"] == "classroom":  # las fechas de Classroom las pone el profe
+            return None
+        f, h, ts = calcular_recordatorio(fecha, hora, ahora())
+        con.execute("UPDATE items SET tipo='tarea', fecha=?, hora=?, recordar_ts=?, recordado=0 WHERE id=?",
+                    (f, h, ts, item_id))
+    actualizar_notas(datetime.fromisoformat(fila["inicio"]).date() if fila["inicio"] else None)
+    with closing(db()) as con:
+        return _tarea_json(con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
+
+
+def migrar_recordar() -> None:
+    """Una sola vez: lo que ya habías guardado como "dato" pero es una deuda o algo por hacer
+    pasa a Pendientes (por ejemplo, "Deudas con Steven")."""
+    if estado_get("migracion_recordar") == "1":
+        return
+    marcas = ",".join("?" * len(ORIGENES_PERSONALES))
+    with closing(db()) as con, con:
+        filas = con.execute(
+            "SELECT i.id, i.texto FROM items i JOIN capturas c ON c.id=i.captura_id "
+            f"WHERE i.tipo IN ('dato', 'idea') AND i.hecho=0 AND c.origen IN ({marcas})",
+            ORIGENES_PERSONALES).fetchall()
+        movidas = [f["id"] for f in filas if parece_tarea(f["texto"])]
+        for iid in movidas:
+            con.execute("UPDATE items SET tipo='tarea' WHERE id=?", (iid,))
+    estado_set("migracion_recordar", "1")
+    if movidas:
+        log.info("Pasé %d cosas de 'datos' a Pendientes (deudas y cosas por hacer)", len(movidas))
+        try:
+            render_pendientes()
+        except OSError:
+            pass
 
 
 # ── Editar y borrar desde el panel ──
@@ -3519,6 +3616,8 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 return self._json(200, api_momentos(params.get("fecha"), (params.get("q") or "").strip()[:80]))
             if ruta == "/api/pendientes":
                 return self._json(200, api_pendientes())
+            if ruta == "/api/recordar":
+                return self._json(200, api_recordar())
             if ruta == "/api/foto":
                 try:
                     foto = ruta_foto(int(params.get("id") or 0))
@@ -3621,6 +3720,15 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
         if ruta == "/api/tarea":
             try:
                 tarea = api_marcar_tarea(int(datos["id"]), bool(datos.get("hecho", True)))
+            except (ValueError, KeyError, TypeError):
+                return self._json(400, {"ok": False})
+            return self._json(200 if tarea else 404, {"ok": bool(tarea), "tarea": tarea})
+        if ruta == "/api/pendiente":
+            tarea = api_nuevo_pendiente(datos)
+            return self._json(200 if tarea else 400, {"ok": bool(tarea), "tarea": tarea})
+        if ruta == "/api/item/fecha":
+            try:
+                tarea = api_fecha_item(datos)
             except (ValueError, KeyError, TypeError):
                 return self._json(400, {"ok": False})
             return self._json(200 if tarea else 404, {"ok": bool(tarea), "tarea": tarea})
@@ -3796,6 +3904,7 @@ def arrancar(consola: bool = True) -> ServidorEco:
         if f.suffix.lower() in EXT_AUDIO + EXT_IMAGEN:
             COLA.put(f)
     threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
+    migrar_recordar()
     for destino in (trabajador, bot, reloj, google_hilo, actualizaciones_hilo, vectores_hilo):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
     log.info("Eco encendido (puerto %d)", puerto)

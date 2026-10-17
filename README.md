@@ -128,7 +128,9 @@ Haz doble clic en **`instalar_inicio.bat`** y acepta el permiso de administrador
 
 Eco vive junto al reloj (ícono de anillos). Clic → abre tu **panel**; clic derecho → carpeta de notas, registro o **Apagar Eco**.
 
-**El panel** (`http://localhost:8765`) muestra la línea de tu día, cada momento con sus tareas, datos e ideas, tus pendientes (los marcas como hechos ahí mismo), una búsqueda en todo lo guardado y el estado de Eco. También lo puedes abrir desde el celular con Tailscale: `http://100.x.y.z:8765` y tu token.
+**El panel** (`http://localhost:8765`) muestra la línea de tu día, cada momento con sus tareas, datos e ideas, tus pendientes, una búsqueda en todo lo guardado y el estado de Eco. También lo puedes abrir desde el celular con Tailscale: `http://100.x.y.z:8765` y tu token.
+
+**Pendientes que no se borran.** La columna *Pendientes* junta lo que tienes por hacer de **todos** los días, y abajo, en *Para recordar*, lo que dijiste para no olvidar (de tus momentos, notas de voz y fotos; lo de clases y anuncios se queda en su momento). Nada se va al cambiar el día: solo cuando lo marcas. Puedes escribir un pendiente nuevo arriba y, con el ícono del calendario, ponerle fecha y hora a cualquiera; con fecha, va a tu Google Calendar y te llega el aviso por Telegram. Las deudas ("le debo 10 dólares a Steven") cuentan como pendientes.
 
 > Si la laptop está **dormida o apagada**, no puede recibir nada: los momentos esperan en el teléfono y se suben solos cuando la enciendes.
 

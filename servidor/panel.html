@@ -373,6 +373,43 @@ select.control {
 .visor img { display: block; max-width: 100%; max-height: calc(100vh - 96px); border-radius: var(--r-md); }
 .visor .cerrar { display: block; margin: var(--s3) auto 0; background: var(--surface); color: var(--text); }
 
+/* ── Pendientes: se quedan hasta que los marques ── */
+.pend-nota { margin: 0 0 var(--s3); color: var(--faint); font-size: var(--t-xs); line-height: 1.45; }
+.agregar { display: grid; gap: var(--s2); margin-bottom: var(--s2); }
+.agregar-fila { display: flex; gap: var(--s2); }
+.agregar-fila .control { flex: 1; min-width: 0; }
+.agregar-boton {
+  flex: none; width: 44px; min-height: 44px; display: grid; place-items: center; border: 0; border-radius: var(--r-sm);
+  background: var(--violet); color: #fff; cursor: pointer; transition: background-color .15s, opacity .15s;
+}
+.agregar-boton:hover { background: var(--violet-deep); }
+.agregar-boton:disabled { opacity: .5; cursor: progress; }
+.agregar-boton svg { width: 18px; height: 18px; }
+.agregar-cuando { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: var(--s2); }
+.tarea .tarea-fecha {
+  flex: none; align-self: center; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%;
+  border: 1px solid transparent; background: transparent; color: var(--faint); cursor: pointer; opacity: .55;
+  transition: opacity .15s, color .15s, border-color .15s, background-color .15s;
+}
+.tarea:hover .tarea-fecha, .tarea .tarea-fecha:focus-visible, .tarea .tarea-fecha[aria-expanded="true"] { opacity: 1; }
+.tarea .tarea-fecha:hover, .tarea .tarea-fecha[aria-expanded="true"] { color: var(--violet-soft); border-color: var(--line); background: var(--surface-2); }
+.tarea .tarea-fecha svg { width: 17px; height: 17px; }
+@media (hover: none) { .tarea .tarea-fecha { opacity: 1; } }
+.en-calendar { display: inline-flex; align-items: center; gap: 3px; color: var(--live); }
+.en-calendar svg { width: 12px; height: 12px; }
+.fecha-editor { list-style: none; margin: 2px 0 var(--s2); }
+.fecha-editor form { display: grid; gap: var(--s2); padding: var(--s3); border-radius: var(--r-md); background: var(--void); border: 1px solid rgba(184, 174, 255, 0.35); }
+.fecha-editor .campos { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s2); }
+.fecha-editor .botones { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.fecha-editor .boton-principal { width: auto; min-height: 40px; margin: 0; padding: 0 var(--s4); }
+.fecha-editor .boton-texto { min-height: 40px; }
+.fecha-editor .quitar-fecha { margin-left: auto; background: transparent; border: 0; color: var(--faint); font-size: var(--t-xs); cursor: pointer; min-height: 40px; padding: 0 var(--s2); text-decoration: underline; }
+.fecha-editor .quitar-fecha:hover { color: var(--text); }
+.recordar { margin-top: var(--s4); padding-top: var(--s4); border-top: 1px solid var(--line); }
+.sub-titulo { margin: 0 0 var(--s1); font-size: var(--t-xs); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.sub-titulo small { margin-left: var(--s1); color: var(--faint); font-weight: 400; letter-spacing: 0; }
+.chip-idea { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; background: rgba(184, 174, 255, 0.12); color: var(--violet-soft); font-size: 0.6875rem; font-weight: 700; letter-spacing: .04em; vertical-align: 1px; }
+
 /* ── Pendientes: de dónde viene cada tarea ── */
 .tarea-info a { color: var(--violet-soft); }
 .chip-cr { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; background: rgba(61, 220, 151, 0.12); color: var(--live); font-size: 0.6875rem; font-weight: 700; letter-spacing: .04em; vertical-align: 1px; }
@@ -518,8 +555,28 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
 
       <section class="panel" aria-labelledby="pend-titulo">
         <h3 class="seccion-titulo" id="pend-titulo">Pendientes <small id="pend-n"></small></h3>
+        <p class="pend-nota" id="pend-nota">Se quedan aquí hasta que los marques. Los que tienen fecha van a tu Google Calendar.</p>
+        <form class="agregar" id="agregar" autocomplete="off">
+          <label for="agregar-texto" class="oculto">Agregar un pendiente</label>
+          <div class="agregar-fila">
+            <input class="control" id="agregar-texto" type="text" maxlength="300" placeholder="Agregar un pendiente…" enterkeyhint="done">
+            <button class="agregar-boton" type="submit" aria-label="Agregar">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </div>
+          <div class="agregar-cuando" id="agregar-cuando" hidden>
+            <label class="oculto" for="agregar-fecha">Fecha (opcional)</label>
+            <input class="control" id="agregar-fecha" type="date">
+            <label class="oculto" for="agregar-hora">Hora (opcional)</label>
+            <input class="control" id="agregar-hora" type="time">
+          </div>
+        </form>
         <ul class="tareas" id="lista-pendientes"></ul>
-        <p class="panel-vacio" id="pend-vacio" hidden>Nada pendiente. Cuando Eco escuche una tarea, aparece aquí.</p>
+        <p class="panel-vacio" id="pend-vacio" hidden>Nada pendiente. Cuando digas algo que tengas que hacer, aparece aquí.</p>
+        <div class="recordar" id="recordar" hidden>
+          <h4 class="sub-titulo">Para recordar <small id="rec-n"></small></h4>
+          <ul class="tareas" id="lista-recordar"></ul>
+        </div>
       </section>
 
       <section class="panel" id="google" aria-labelledby="google-titulo" hidden>
@@ -583,7 +640,8 @@ const guardado = {
   quitar(k) { try { localStorage.removeItem(k); } catch {} },
 };
 
-const ui = { fecha: null, hoy: null, dias: [], busqueda: "", firma: "", seleccion: null, momentos: new Map(), editando: null };
+const ui = { fecha: null, hoy: null, dias: [], busqueda: "", firma: "", seleccion: null, momentos: new Map(), editando: null,
+  fechaItem: null, items: new Map() };
 const fotos = new Map(); // id del momento → imagen ya descargada
 
 function esc(t) {
@@ -631,6 +689,7 @@ const ICONO = {
   anuncio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg>',
   editar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/></svg>',
   quitar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/></svg>',
+  calendario: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
 };
 
 async function post(ruta, datos) {
@@ -669,6 +728,11 @@ function duracionTexto(seg) {
 
 /* ── Estado de Eco ── */
 function pintarEstado(e) {
+  const g = e.google;
+  ui.calendar = Boolean(g?.conectado && g.calendar?.activo && g.calendar?.permiso);
+  $("pend-nota").textContent = g && !ui.calendar
+    ? "Se quedan aquí hasta que los marques. Conecta Google para que los que tienen fecha vayan a tu Calendar."
+    : "Se quedan aquí hasta que los marques. Los que tienen fecha van a tu Google Calendar.";
   const caja = $("estado");
   let texto;
   if (e.clase?.grabando) {
@@ -923,16 +987,27 @@ function pintarLinea(momentos, esHoy) {
 }
 
 /* ── Momentos ── */
+/** conOrigen: en la columna de Pendientes (dice de qué momento viene y deja ponerle fecha). */
 function tareaHTML(t, conOrigen) {
   let info = "";
   if (t.cuando) info = `<span class="${t.vencida ? "vencida" : t.hoy ? "hoy" : ""}">${t.vencida ? "Venció " : ""}${esc(t.cuando)}</span>`;
+  if (conOrigen && t.en_calendar) info += ` <span class="en-calendar">${ICONO.calendario}en Calendar</span>`;
   if (conOrigen && t.origen === "classroom" && t.enlace) info += `${info ? " · " : ""}<a href="${esc(t.enlace)}" target="_blank" rel="noopener">Abrir en Classroom</a>`;
-  else if (conOrigen && t.de) info += `${info ? ", " : ""}de <a href="#m${t.captura_id}" data-fuente="${t.captura_id}" data-fecha="${esc(t.de_fecha || "")}">“${esc(t.de)}”</a>`;
-  const marca = t.origen === "classroom" ? `<span class="chip-cr" aria-label="De Classroom:">CLASSROOM</span>` : "";
+  else if (conOrigen && t.de) {
+    const dia = t.de_fecha && t.de_fecha !== ui.hoy ? ` · ${esc(nombreDia(t.de_fecha).toLowerCase())}` : "";
+    info += `${info ? " · " : ""}de <a href="#m${t.captura_id}" data-fuente="${t.captura_id}" data-fecha="${esc(t.de_fecha || "")}">“${esc(t.de)}”</a>${dia}`;
+  }
+  const marca = t.origen === "classroom" ? `<span class="chip-cr" aria-label="De Classroom:">CLASSROOM</span>`
+    : t.tipo === "idea" ? `<span class="chip-idea" aria-label="Idea:">IDEA</span>` : "";
+  const queEs = t.tipo === "dato" || t.tipo === "idea" ? "Marcar como listo" : "Marcar como hecho";
+  const fecha = conOrigen && t.origen !== "classroom"
+    ? `<button class="tarea-fecha" type="button" data-fecha-item="${t.id}" aria-expanded="${ui.fechaItem === t.id}"
+         aria-label="${t.fecha ? "Cambiar la fecha" : "Ponerle fecha"}: ${esc(t.texto)}" title="${t.fecha ? "Cambiar la fecha" : "Ponerle fecha"}">${ICONO.calendario}</button>` : "";
+  if (conOrigen) ui.items.set(t.id, t);
   return `<li class="tarea${t.hecho ? " hecha" : ""}" data-tarea="${t.id}">
-    <label><input type="checkbox" ${t.hecho ? "checked" : ""} data-marcar="${t.id}">
+    <label><input type="checkbox" ${t.hecho ? "checked" : ""} data-marcar="${t.id}" aria-label="${queEs}: ${esc(t.texto)}">
       <span><span class="tarea-texto">${marca}${esc(t.texto)}</span>${info ? `<span class="tarea-info">${info}</span>` : ""}</span>
-    </label></li>`;
+    </label>${fecha}</li>`;
 }
 
 function momentoHTML(m, conFecha) {
@@ -1182,12 +1257,110 @@ async function cargarMomentos() {
   cargarFotos();
 }
 
+/** Pendientes y Para recordar: de todos los días, hasta que los marques. */
 async function cargarPendientes() {
-  const tareas = await api("/api/pendientes");
+  if (ui.fechaItem) return; // no se repinta mientras le pones fecha a algo
+  const [tareas, recordar] = await Promise.all([api("/api/pendientes"), api("/api/recordar").catch(() => [])]);
+  ui.items.clear();
   $("pend-n").textContent = tareas.length ? `${tareas.length}` : "";
   $("lista-pendientes").innerHTML = tareas.map((t) => tareaHTML(t, true)).join("");
   $("pend-vacio").hidden = tareas.length > 0;
+  $("recordar").hidden = recordar.length === 0;
+  $("rec-n").textContent = recordar.length ? `${recordar.length}` : "";
+  $("lista-recordar").innerHTML = recordar.map((t) => tareaHTML(t, true)).join("");
 }
+
+/* ── Ponerle fecha a un pendiente (o a algo de Para recordar: pasa a Pendientes y a tu Calendar) ── */
+function cerrarFecha(volverAlBoton = true) {
+  const id = ui.fechaItem;
+  document.querySelector(".fecha-editor")?.remove();
+  ui.fechaItem = null;
+  const boton = id && document.querySelector(`[data-fecha-item="${id}"]`);
+  if (boton) {
+    boton.setAttribute("aria-expanded", "false");
+    if (volverAlBoton) boton.focus();
+  }
+}
+
+function abrirFecha(id) {
+  const abierto = ui.fechaItem === id;
+  cerrarFecha(false);
+  if (abierto) return;
+  const t = ui.items.get(id), li = document.querySelector(`#lista-pendientes [data-tarea="${id}"], #lista-recordar [data-tarea="${id}"]`);
+  if (!t || !li) return;
+  ui.fechaItem = id;
+  li.querySelector("[data-fecha-item]").setAttribute("aria-expanded", "true");
+  const nota = t.tipo === "dato" || t.tipo === "idea" ? `<p class="pend-nota" style="margin:0">Con fecha pasa a Pendientes.</p>` : "";
+  li.insertAdjacentHTML("afterend", `<li class="fecha-editor"><form data-fecha-form="${id}" aria-label="Fecha de: ${esc(t.texto)}">
+    <div class="campos">
+      <label class="oculto" for="fe-fecha">Fecha</label><input class="control" id="fe-fecha" type="date" value="${esc(t.fecha || "")}" required>
+      <label class="oculto" for="fe-hora">Hora (opcional)</label><input class="control" id="fe-hora" type="time" value="${esc(t.hora || "")}">
+    </div>${nota}
+    <div class="botones">
+      <button class="boton-principal" type="submit">Guardar</button>
+      <button class="boton-texto" type="button" data-fecha-cancelar>Cancelar</button>
+      ${t.fecha ? `<button class="quitar-fecha" type="button" data-fecha-quitar>Quitar fecha</button>` : ""}
+    </div></form></li>`);
+  const campo = $("fe-fecha");
+  if (!campo.value) campo.value = ui.hoy;
+  campo.focus();
+}
+
+async function guardarFecha(id, fecha, hora) {
+  const form = document.querySelector(`[data-fecha-form="${id}"]`);
+  form?.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  try {
+    const r = await post("/api/item/fecha", { id, fecha: fecha || null, hora: hora || null });
+    if (!r.ok) throw new Error();
+    cerrarFecha(false);
+    avisar(fecha ? `Listo: ${r.tarea.cuando}${ui.calendar ? " · va a tu Calendar" : ""}` : "Le quité la fecha");
+    await refrescar(true);
+  } catch (err) {
+    if (err.token) { mostrar("acceso"); return; }
+    form?.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    avisar("No se pudo guardar la fecha. Inténtalo otra vez.");
+  }
+}
+
+document.addEventListener("submit", (ev) => {
+  const form = ev.target.closest("[data-fecha-form]");
+  if (!form) return;
+  ev.preventDefault();
+  guardarFecha(Number(form.dataset.fechaForm), $("fe-fecha").value, $("fe-hora").value);
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && ev.target.closest?.(".fecha-editor")) { ev.preventDefault(); cerrarFecha(); }
+});
+
+/* ── Agregar un pendiente a mano ── */
+$("agregar-texto").addEventListener("focus", () => ($("agregar-cuando").hidden = false));
+$("agregar").addEventListener("focusout", () => {
+  setTimeout(() => {
+    if (!$("agregar").contains(document.activeElement) && !$("agregar-texto").value.trim()
+        && !$("agregar-fecha").value) $("agregar-cuando").hidden = true;
+  }, 150);
+});
+$("agregar").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const texto = $("agregar-texto").value.trim();
+  if (!texto) { $("agregar-texto").focus(); return; }
+  const fecha = $("agregar-fecha").value, hora = $("agregar-hora").value;
+  const boton = ev.target.querySelector(".agregar-boton");
+  boton.disabled = true;
+  try {
+    const r = await post("/api/pendiente", { texto, fecha: fecha || null, hora: hora || null });
+    if (!r.ok) throw new Error();
+    $("agregar-texto").value = ""; $("agregar-fecha").value = ""; $("agregar-hora").value = "";
+    avisar(fecha ? `Agregado para ${r.tarea.cuando}${ui.calendar ? " · va a tu Calendar" : ""}` : "Agregado a Pendientes");
+    await refrescar(true);
+    $("agregar-texto").focus();
+  } catch (err) {
+    if (err.token) mostrar("acceso");
+    else avisar("No se pudo agregar. Inténtalo otra vez.");
+  } finally {
+    boton.disabled = false;
+  }
+});
 
 async function cargarDias() {
   ui.dias = (await api("/api/dias")).map((d) => d.fecha);
@@ -1252,6 +1425,12 @@ document.addEventListener("change", async (ev) => {
 document.addEventListener("click", async (ev) => {
   const fuente = ev.target.closest("[data-fuente]");
   if (fuente) { ev.preventDefault(); irAMomento(fuente.dataset.fuente, fuente.dataset.fecha); return; }
+
+  // Fecha de un pendiente
+  const botonFecha = ev.target.closest("[data-fecha-item]");
+  if (botonFecha) { abrirFecha(Number(botonFecha.dataset.fechaItem)); return; }
+  if (ev.target.closest("[data-fecha-cancelar]")) { cerrarFecha(); return; }
+  if (ev.target.closest("[data-fecha-quitar]")) { guardarFecha(ui.fechaItem, null, null); return; }
 
   // Editor de momentos
   const editar = ev.target.closest("[data-editar]");
