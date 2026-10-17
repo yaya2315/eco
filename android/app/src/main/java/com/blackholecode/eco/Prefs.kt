@@ -31,6 +31,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(K_ACTIVO, false)
         set(value) = sp.edit().putBoolean(K_ACTIVO, value).apply()
 
+    /** Doble toque a "subir volumen" guarda un momento. */
+    var dobleVolumen: Boolean
+        get() = sp.getBoolean(K_DOBLE_VOLUMEN, true)
+        set(value) = sp.edit().putBoolean(K_DOBLE_VOLUMEN, value).apply()
+
     /** Última versión nueva de la que ya avisamos (para no repetir el aviso). */
     var avisoVersion: Long
         get() = sp.getLong(K_AVISO, 0L)
@@ -48,5 +53,6 @@ class Prefs(context: Context) {
         private const val K_AFTER = "after_sec"
         private const val K_ACTIVO = "activo"
         private const val K_AVISO = "aviso_version"
+        private const val K_DOBLE_VOLUMEN = "doble_volumen"
     }
 }

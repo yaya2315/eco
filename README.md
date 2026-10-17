@@ -184,6 +184,25 @@ Atajos: `Ctrl + Enter` guarda, `Esc` cancela.
 
 **Widget.** Mantén presionada la pantalla de inicio › **Widgets** › **Eco**. Muestra si Eco está escuchando y tiene un botón grande de **Guardar momento** (o *Encender* / *Reanudar*, según cómo esté).
 
+**Doble toque a subir volumen.** Con Eco escuchando, dos toques rápidos a **subir volumen** guardan un momento, aunque la pantalla esté apagada y el teléfono en la bolsa. Sientes la misma vibración corta. Un toque suelto sube el volumen como siempre. Mientras suena música (y 10 minutos después), los botones vuelven a ser solo de la música. Se apaga en la app, en *Duración del momento*.
+
+**Alertas de salud.** Cada 5 minutos Eco revisa sus piezas y te avisa por Telegram (una vez, y otra si sigue igual 12 horas después) cuando:
+- Ollama no responde o le falta un modelo;
+- Google se desconectó o Classroom/Calendar fallan;
+- el teléfono lleva 3 horas sin reportarse (salvo que lo hayas apagado tú);
+- hay audios sin procesar desde hace más de 2 horas;
+- queda poco espacio en la laptop o el respaldo lleva días fallando.
+
+Cuando se arregla, te dice «✅». De 22:00 a 6:30 las alertas esperan a la mañana. Las mismas alertas salen arriba en el panel.
+
+**Whisper más preciso con corriente.** Con la laptop enchufada, Eco transcribe con el modelo `medium` (más preciso, más lento); con batería, o si hay mucho en cola, usa el rápido (`small`). La primera vez baja `medium` solo (~1.5 GB).
+
+**Preguntas por significado.** «Pregúntale a Eco» busca por palabras y también por significado: si preguntas por «energía», encuentra la clase de «trabajo y potencia». Necesita un modelo chico de Ollama (una vez, en PowerShell):
+```
+ollama pull embeddinggemma
+```
+En la búsqueda del panel, si hay pocos resultados exactos, salen también los parecidos (con la etiqueta *Parecido*).
+
 **Pausa por batería.** Con **20 %** de batería y sin cargador, Eco deja de escuchar solo y te lo dice en la notificación. Vuelve solo cuando conectas el cargador (o pasa del 25 %). Si lo necesitas igual, toca **Reanudar**. El modo reunión no se corta: si lo iniciaste, sigue grabando.
 
 ### 10. Classroom y Google Calendar
@@ -215,6 +234,7 @@ Eco trae tus tareas de **Classroom** a tus pendientes (con su fecha, aviso y enl
 A partir de ahí:
 - Eco revisa Classroom cada 20 minutos y te avisa por Telegram de cada tarea nueva. Si el profe cambia la fecha, se actualiza; cuando la entregas, se marca como hecha.
 - Las tareas de Classroom no se copian al calendario «Eco», porque Classroom ya las pone en tu calendario del colegio.
+- **Anuncios:** Eco lee los anuncios de la última semana de cada clase, descarta los saludos y saca las fechas de exámenes y entregas que el profe avisa ahí (también en inglés). Cada anuncio útil queda como un momento «Anuncio de Classroom» y te llega por Telegram. Si al conectar no diste ese permiso, el panel te pide volver a conectar.
 
 > **Si el colegio lo bloquea**, Google dice que tu institución no permite la app, o el panel dice que el colegio no deja leer Classroom. Eso lo decide el administrador del colegio. Puedes conectar tu **Gmail personal** para tener al menos el calendario.
 

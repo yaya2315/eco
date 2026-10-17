@@ -19,6 +19,10 @@ modelo = "small"
 idioma = "es"
 beam = 1        # 1 = rápido. 3-5 = un poco más preciso y más lento.
 hilos = 0       # 0 = automático
+# Con la laptop enchufada usa un modelo más preciso (se baja solo la primera vez, ~1.5 GB).
+# "" = usar siempre el de arriba.
+modelo_corriente = "medium"
+beam_corriente = 2
 
 [ia]
 # "claude" (mejor calidad, necesita internet y una API key)
@@ -28,6 +32,7 @@ claude_modelo = "claude-haiku-5-5"
 claude_api_key = ""             # o deja vacío y usa la variable de entorno ANTHROPIC_API_KEY
 ollama_modelo = "qwen2.5:3b"
 ollama_vision = "qwen2.5vl:3b"  # lee las fotos que le mandas al bot (ollama pull qwen2.5vl:3b)
+ollama_embed = "embeddinggemma" # entiende el significado al preguntarle a Eco (ollama pull embeddinggemma)
 ollama_url = "http://localhost:11434"
 
 [telegram]
@@ -60,8 +65,14 @@ activo = true
 carpeta = ""        # vacío = tu OneDrive\Eco respaldos
 conservar = 14      # cuántas copias diarias guardar
 
+[salud]
+alertas = true            # avisos por Telegram cuando algo deja de funcionar
+telefono_horas = 3        # avisar si el teléfono no se reporta en este tiempo
+silencio = "22:00-06:30"  # de noche las alertas esperan a la mañana
+
 [google]
 # Se conecta desde el panel (README, sección 10). Aquí solo eliges qué usar.
+anuncios = true     # leer los anuncios de Classroom y sacar fechas y tareas
 classroom = true    # traer las tareas de Classroom
 calendar = true     # poner tus pendientes con fecha en el calendario "Eco"
 cada_min = 20       # cada cuánto revisar Classroom

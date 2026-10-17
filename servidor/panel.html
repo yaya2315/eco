@@ -420,6 +420,17 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
 .aviso-flotante::before { content: "✓"; margin-right: var(--s2); color: var(--live); }
 @keyframes subir { from { opacity: 0; translate: -50% 8px; } }
 @media (prefers-reduced-motion: reduce) { .aviso-flotante { animation: none; } }
+/* ── Alertas de salud ── */
+.alertas { display: grid; gap: var(--s2); margin-top: var(--s4); max-width: 820px; }
+.alerta {
+  display: grid; grid-template-columns: auto 1fr; gap: var(--s3); align-items: start;
+  padding: var(--s3) var(--s4); border-radius: var(--r-md); font-size: var(--t-sm);
+  background: rgba(255, 181, 71, 0.08); border: 1px solid rgba(255, 181, 71, 0.32); color: var(--text);
+}
+.alerta::before { content: ""; width: 8px; height: 8px; margin-top: 0.5em; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 4px rgba(255, 181, 71, 0.16); }
+.alerta strong { font-weight: 600; }
+.alerta code { font-size: 0.8125rem; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); }
+.chip-parecido { color: var(--violet-soft); border-color: rgba(184, 174, 255, 0.35); }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -461,6 +472,8 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
     <p class="respuesta-texto" id="respuesta-texto"></p>
     <div class="respuesta-fuentes" id="respuesta-fuentes"></div>
   </section>
+
+  <div class="alertas" id="alertas" aria-live="polite"></div>
 
   <div id="aviso-red" class="aviso-red" role="alert" hidden>Eco no responde. Revisa que siga encendido en la laptop; esta página se actualiza sola cuando vuelva.</div>
 
@@ -615,6 +628,7 @@ const ICONO = {
   reunion: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c0-3 3-5 6-5s6 2 6 5M15 14.5c3 0 6 1.5 6 4.5"/></svg>',
   voz: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   foto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  anuncio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg>',
   editar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/></svg>',
   quitar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/></svg>',
 };
@@ -690,7 +704,23 @@ function pintarEstado(e) {
   else fila("Dirección para la app", `${esc(e.direccion_wifi)} <span class="no">cambia si cambias de red</span>`);
   if (e.direccion_fija) fila("En tu Wi-Fi", esc(e.direccion_wifi));
   fila("Inteligencia", esc(e.ia));
-  fila("Whisper", `${esc(e.whisper)} · ${e.whisper_cargado ? '<span class="ok">listo</span>' : "se carga con el primer audio"}`);
+  fila("Whisper", `${esc(e.whisper)}${e.whisper_cargado ? "" : " · se carga con el primer audio"}`);
+  if (e.telefono) {
+    const t = e.telefono;
+    const estados = { escuchando: "escuchando", pausa: "en pausa", pausa_bateria: "en pausa por batería", reunion: "grabando reunión", apagado: "apagado" };
+    const bat = t.bateria != null && t.bateria >= 0 ? ` · ${t.bateria} %${t.cargando ? " (cargando)" : ""}` : "";
+    const hace = t.hace_min < 1 ? "hace un momento" : t.hace_min < 60 ? `hace ${t.hace_min} min` : `desde las ${t.hora}`;
+    fila("Teléfono", `${esc(estados[t.estado] || t.estado)}${esc(bat)} · <span${t.hace_min > 180 && t.estado !== "apagado" ? ' class="no"' : ""}>${esc(hace)}</span>${t.version ? ` · app ${esc(t.version)}` : ""}`);
+  } else {
+    fila("Teléfono", '<span style="color:var(--faint)">Se reporta cuando instales la versión nueva de la app</span>');
+  }
+  if (e.semantica) {
+    const sm = e.semantica;
+    fila("Preguntas por significado", !sm.modelo ? "Apagado en config.toml"
+      : sm.error ? `<span class="no">${esc(sm.error)}</span>`
+      : sm.listos >= sm.total ? `<span class="ok">listo</span> · ${plural(sm.total, "momento", "momentos")}`
+      : `preparando… ${sm.listos} de ${sm.total}`);
+  }
   fila("Telegram", e.telegram ? '<span class="ok">conectado</span>' : '<span class="no">sin configurar</span>');
   if (e.inicio) fila("Encendido", esc(hace(e.inicio)));
   if (e.notas) fila("Tus notas", `${esc(e.notas)} <button class="copiar" type="button" data-copiar="${esc(e.notas)}">Copiar</button>`);
@@ -723,10 +753,23 @@ function pintarEstado(e) {
   const html = filas.join("");
   const escribiendo = $("github-token") && ($("github-token").value || document.activeElement === $("github-token"));
   if (!escribiendo && $("sistema").dataset.html !== html) { $("sistema").innerHTML = html; $("sistema").dataset.html = html; }
+  pintarAlertas(e.alertas || []);
   $("abrir-qr").hidden = !e.es_local;
   if (e.es_local && location.hash === "#conectar" && !ui.qrAbierto) { ui.qrAbierto = true; abrirQr(); }
   pintarClase(e);
   pintarGoogle(e);
+}
+
+/* ── Alertas de salud (las mismas que llegan por Telegram) ── */
+function textoAlerta(html) {
+  // Del formato de Telegram solo se conservan negritas y código; el resto se escapa.
+  return esc(html.replace(/<(?!\/?(b|code)>)[^>]+>/g, ""))
+    .replace(/&lt;(\/?)b&gt;/g, "<$1strong>").replace(/&lt;(\/?)code&gt;/g, "<$1code>")
+    .replace(/\n/g, "<br>");
+}
+function pintarAlertas(lista) {
+  const html = lista.map((a) => `<p class="alerta"><span>${textoAlerta(a.texto)}</span></p>`).join("");
+  if ($("alertas").dataset.html !== html) { $("alertas").innerHTML = html; $("alertas").dataset.html = html; }
 }
 
 /* ── Classroom y Calendar ── */
@@ -752,8 +795,14 @@ function pintarGoogle(e) {
       : "Revisando por primera vez…";
     const ca = !k.activo ? "Apagado en config.toml" : k.error ? `<span class="no">${esc(k.error)}</span>`
       : k.ultimo ? `Calendario «Eco» · ${plural(k.eventos, "evento", "eventos")}` : "Preparando el calendario…";
+    const an = g.anuncios || {};
+    const anu = !an.activo ? "Apagado en config.toml" : !an.permiso ? '<span class="no">Vuelve a conectar Google para leer los anuncios</span>'
+      : an.error ? `<span class="no">${esc(an.error)}</span>`
+      : an.ultimo ? `${plural(an.guardados, "anuncio con fechas o tareas", "anuncios con fechas o tareas")} · revisado ${esc(hace(an.ultimo))}`
+      : "Revisando por primera vez…";
     h = `<dl class="datos"><div><dt>Cuenta</dt><dd>${esc(g.email || "conectada")}</dd></div>
-      <div><dt>Classroom</dt><dd>${cr}</dd></div><div><dt>Google Calendar</dt><dd>${ca}</dd></div></dl>
+      <div><dt>Classroom</dt><dd>${cr}</dd></div><div><dt>Anuncios de Classroom</dt><dd>${anu}</dd></div>
+      <div><dt>Google Calendar</dt><dd>${ca}</dd></div></dl>
       <div class="fila-botones"><button class="boton-texto" type="button" id="google-revisar">Revisar ahora</button>
       <button class="boton-texto" type="button" id="google-salir">Desconectar</button></div>`;
   }
@@ -896,6 +945,8 @@ function momentoHTML(m, conFecha) {
   if (m.origen === "texto") chips.push(`<span class="chip">${ICONO.nota}Nota escrita</span>`);
   if (m.origen === "voz") chips.push(`<span class="chip">${ICONO.voz}Nota de voz</span>`);
   if (m.origen === "foto") chips.push(`<span class="chip">${ICONO.foto}Foto</span>`);
+  if (m.origen === "anuncio") chips.push(`<span class="chip">${ICONO.anuncio}Anuncio de Classroom</span>`);
+  if (m.parecido) chips.push(`<span class="chip chip-parecido" title="No dice la palabra exacta, pero habla de lo mismo">Parecido</span>`);
   if (m.origen === "clase") chips.push(`<span class="chip">${ICONO.clase}Clase</span>`);
   if (m.origen === "reunion") chips.push(`<span class="chip">${ICONO.reunion}Reunión</span>`);
   chips.push(`<span class="chip"><span class="importancia" role="img" aria-label="Importancia ${m.importancia} de 5">${imp}</span></span>`);

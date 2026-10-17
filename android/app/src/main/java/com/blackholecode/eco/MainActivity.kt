@@ -32,6 +32,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -301,7 +302,8 @@ class MainActivity : Activity() {
             !s.running -> "Enciende Eco para usar el botón."
             s.paused -> "Reanuda para volver a guardar momentos."
             else -> "Guarda los últimos ${formatDuration(s.beforeSec)} y lo que sigue. " +
-                "También desde la notificación o el botón rápido del panel."
+                (if (prefs.dobleVolumen) "También con dos toques a subir volumen, el widget o la notificación."
+                else "También desde el widget, la notificación o el botón rápido.")
         }
         setHalo(listening || enReunion, if (s.savingRemainingSec >= 0 || enReunion) C_REC else C_ACCENT)
         meetingButton.visibility = if (enReunion) View.GONE else View.VISIBLE
@@ -776,6 +778,32 @@ class MainActivity : Activity() {
         row.addView(right, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
         card.addView(row, lp(top = 16))
         card.addView(button("Aplicar", primary = false) { applyMomentSettings() }, lp(top = 14))
+
+        card.addView(View(this).apply { setBackgroundColor(C_BORDER) }, LinearLayout.LayoutParams(MATCH_PARENT, 1).apply {
+            topMargin = dp(18); bottomMargin = dp(14)
+        })
+        val estados = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        val dobleVolumen = Switch(this).apply {
+            text = "Doble toque a subir volumen"
+            textSize = 15f
+            setTextColor(C_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            isChecked = prefs.dobleVolumen
+            minHeight = dp(48)
+            thumbTintList = ColorStateList(estados, intArrayOf(0xFFFFFFFF.toInt(), C_MUTED))
+            trackTintList = ColorStateList(estados, intArrayOf(C_ACCENT, C_BORDER))
+            setOnCheckedChangeListener { _, activo ->
+                prefs.dobleVolumen = activo
+                toast(if (activo) "Listo: dos toques a subir volumen guardan un momento" else "Doble toque apagado")
+            }
+        }
+        card.addView(dobleVolumen, lp())
+        card.addView(
+            label("Guarda un momento sin sacar el teléfono, aunque la pantalla esté apagada. Un toque suelto sube el " +
+                "volumen como siempre. Mientras suena música, los botones son solo para la música.", 13f, C_MUTED)
+                .apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 2)
+        )
         return card
     }
 

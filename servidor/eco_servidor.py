@@ -68,13 +68,18 @@ log = logging.getLogger("eco")
 DEFAULTS: dict = {
     "usuario": {"nombre": "el usuario"},
     "servidor": {"puerto": 8765, "token": TOKEN_DE_EJEMPLO},
-    "whisper": {"modelo": "small", "idioma": "es", "beam": 1, "hilos": 0},
+    "whisper": {
+        "modelo": "small", "idioma": "es", "beam": 1, "hilos": 0,
+        # Con la laptop enchufada usa un modelo más preciso (más lento). "" = siempre el mismo.
+        "modelo_corriente": "medium", "beam_corriente": 2,
+    },
     "ia": {
         "proveedor": "claude",
         "claude_modelo": "claude-haiku-5-5",
         "claude_api_key": "",
         "ollama_modelo": "qwen2.5:3b",
         "ollama_vision": "qwen2.5vl:3b",   # lee las fotos que mandas por Telegram
+        "ollama_embed": "embeddinggemma",  # entiende el significado para "pregúntale a Eco" ("" = apagado)
         "ollama_url": "http://localhost:11434",
     },
     "telegram": {"token": "", "chat_id": ""},
@@ -99,7 +104,13 @@ DEFAULTS: dict = {
         "carpeta": "",      # vacío = OneDrive\Eco respaldos
         "conservar": 14,    # cuántas copias guardar
     },
+    "salud": {
+        "alertas": True,          # avisos por Telegram cuando algo deja de funcionar
+        "telefono_horas": 3,      # avisar si el teléfono no se reporta en este tiempo (de día)
+        "silencio": "22:00-06:30",  # en este horario las alertas esperan a la mañana
+    },
     "google": {
+        "anuncios": True,    # leer los anuncios de Classroom y sacar fechas y tareas
         "classroom": True,   # traer las tareas de Classroom
         "calendar": True,    # poner las tareas con fecha en el calendario "Eco"
         "cada_min": 20,      # cada cuánto revisar Classroom
@@ -251,6 +262,23 @@ CREATE TABLE IF NOT EXISTS google_eventos (
     evento        TEXT NOT NULL,           -- su evento en el calendario "Eco"
     firma         TEXT
 );
+CREATE TABLE IF NOT EXISTS classroom_anuncios (
+    id            TEXT PRIMARY KEY,        -- id del anuncio en Classroom
+    curso         TEXT,
+    texto         TEXT,
+    creado        TEXT,
+    enlace        TEXT,
+    estado        TEXT NOT NULL DEFAULT 'nuevo',   -- nuevo | ignorado | sin_nada | guardado
+    captura_id    INTEGER
+);
+CREATE TABLE IF NOT EXISTS vectores (     -- "significado" de cada pedazo, para preguntar
+    captura_id    INTEGER NOT NULL,
+    n             INTEGER NOT NULL,
+    texto         TEXT NOT NULL,
+    vector        BLOB NOT NULL,
+    modelo        TEXT,
+    PRIMARY KEY (captura_id, n)
+);
 """
 
 # Columnas que se agregaron después: se añaden solas a una base de datos vieja.
@@ -351,8 +379,79 @@ def ubicacion_de(meta: dict) -> tuple[float | None, float | None]:
 
 # ════════════════════════════ Whisper ════════════════════════════
 
-_whisper = None
+_modelos: dict = {}            # modelos de Whisper ya cargados (nombre → modelo)
 _whisper_lock = threading.Lock()
+_modelo_listo: dict[str, bool] = {}
+_bajando: set[str] = set()
+
+
+def con_corriente() -> bool | None:
+    """¿La laptop está enchufada? None si no se puede saber (no es Windows)."""
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    class _Estado(ctypes.Structure):
+        _fields_ = [("ACLineStatus", ctypes.c_ubyte), ("BatteryFlag", ctypes.c_ubyte),
+                    ("BatteryLifePercent", ctypes.c_ubyte), ("SystemStatusFlag", ctypes.c_ubyte),
+                    ("BatteryLifeTime", ctypes.c_ulong), ("BatteryFullLifeTime", ctypes.c_ulong)]
+
+    e = _Estado()
+    if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(e)):
+        return None
+    return {0: False, 1: True}.get(e.ACLineStatus)
+
+
+def _modelo_descargado(nombre: str) -> bool:
+    if _modelo_listo.get(nombre):
+        return True
+    try:
+        from faster_whisper.utils import download_model
+        download_model(nombre, local_files_only=True)
+        _modelo_listo[nombre] = True
+    except Exception:
+        return False
+    return True
+
+
+def _bajar_en_segundo_plano(nombre: str) -> None:
+    if nombre in _bajando:
+        return
+    _bajando.add(nombre)
+
+    def bajar():
+        from faster_whisper.utils import download_model
+        for intento in range(1, 6):
+            try:
+                log.info("Bajando el Whisper '%s' para cuando la laptop esté enchufada (intento %d)…", nombre, intento)
+                download_model(nombre)
+                _modelo_listo[nombre] = True
+                log.info("Whisper '%s' listo", nombre)
+                return
+            except Exception as ex:
+                log.warning("No pude bajar Whisper '%s' (%s)", nombre, ex)
+                time.sleep(120 * intento)
+        _bajando.discard(nombre)
+
+    threading.Thread(target=bajar, name="bajar-whisper", daemon=True).start()
+
+
+def elegir_modelo() -> tuple[str, int, str]:
+    """(modelo, beam, por qué). Enchufada = el preciso; con batería o con mucha cola = el rápido."""
+    w = CFG["whisper"]
+    rapido = (str(w["modelo"]), int(w.get("beam") or 1))
+    mejor = str(w.get("modelo_corriente") or "").strip()
+    if not mejor or mejor == rapido[0]:
+        return (*rapido, "")
+    enchufada = con_corriente()
+    if not enchufada:
+        return (*rapido, "con batería" if enchufada is False else "")
+    if COLA.qsize() >= 4:
+        return (*rapido, "hay mucho en cola")
+    if not _modelo_descargado(mejor):
+        _bajar_en_segundo_plano(mejor)
+        return (*rapido, f"bajando {mejor}")
+    return mejor, int(w.get("beam_corriente") or rapido[1]), "con corriente"
 
 
 def leer_audio(ruta: Path):
@@ -418,22 +517,29 @@ def _segmento_valido(s) -> bool:
 
 
 def transcribir(ruta: Path) -> str:
-    global _whisper
     w = CFG["whisper"]
+    nombre, beam, motivo = elegir_modelo()
     with _whisper_lock:
-        if _whisper is None:
+        modelo = _modelos.get(nombre)
+        if modelo is None:
             from faster_whisper import WhisperModel  # import lento: solo cuando hace falta
-            log.info("Cargando Whisper '%s'…", w["modelo"])
-            _whisper = WhisperModel(w["modelo"], device="cpu", compute_type="int8",
-                                    cpu_threads=int(w.get("hilos") or 0))
+            log.info("Cargando Whisper '%s'%s…", nombre, f" ({motivo})" if motivo else "")
+            modelo = WhisperModel(nombre, device="cpu", compute_type="int8", cpu_threads=int(w.get("hilos") or 0))
+            _modelos[nombre] = modelo
+        ESTADO["whisper_usado"] = nombre
         audio = leer_audio(ruta)
         if not isinstance(audio, str) and len(audio) < 1600:  # menos de 0.1 s: nada que escuchar
             return ""
-        segmentos, _info = _whisper.transcribe(
-            audio, language=w.get("idioma") or None, beam_size=int(w.get("beam") or 1),
+        segmentos, _info = modelo.transcribe(
+            audio, language=w.get("idioma") or None, beam_size=beam,
             vad_filter=True, condition_on_previous_text=False,
         )
         return " ".join(s.text.strip() for s in segmentos if _segmento_valido(s)).strip()
+
+
+def estado_whisper() -> str:
+    nombre, _beam, motivo = elegir_modelo()
+    return nombre + (f" · {motivo}" if motivo else "")
 
 
 # ════════════════════════════ IA: qué es importante ════════════════════════════
@@ -496,6 +602,7 @@ def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str
         "texto": "Nota escrita por él mismo",
         "voz": "Nota de voz que grabó él mismo para acordarse (transcripción automática)",
         "foto": "Lo que se lee en la foto",
+        "anuncio": "Anuncio del profesor",
     }.get(origen, "Transcripción del audio")
     partes = [
         f"Fecha y hora del fragmento: {fecha_larga(cuando.date())}, {cuando:%H:%M} ({CFG['notas']['zona_horaria']}).",
@@ -520,6 +627,13 @@ def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str
             "dilo en el resumen.")
     elif origen == "voz":
         partes.append(f"{nombre} se lo dictó a sí mismo: casi todo lo que dice es algo que quiere recordar o hacer.")
+    elif origen == "anuncio":
+        partes.append(
+            f"Es un ANUNCIO que un profesor publicó en Google Classroom para toda la clase de {nombre}. "
+            f"Tareas = lo que {nombre} tiene que entregar, estudiar, llevar o hacer, con su fecha (resuelve 'el "
+            "viernes', 'mañana', '23/10' con la fecha del anuncio). Datos = fechas de exámenes, cambios de horario o "
+            "aula, temas e instrucciones. Ignora saludos y frases de cortesía. El título debe decir de qué trata "
+            "(por ejemplo 'Examen de química el jueves').")
     if contexto:
         partes.append(contexto)
     if lugar:
@@ -899,7 +1013,7 @@ def mensaje_captura(cid: int) -> str:
         its = items_de(con, cid)
     ini = datetime.fromisoformat(c["inicio"])
     meta = [f"{ini:%H:%M}"]
-    if c["origen"] in ("voz", "foto"):
+    if c["origen"] in ("voz", "foto", "anuncio"):
         meta.append(ETIQUETA_ORIGEN[c["origen"]].lower())
     if c["lugar"]:
         meta.append(c["lugar"])
@@ -1358,7 +1472,8 @@ def procesar_foto(ruta: Path, meta: dict) -> int:
 # Cada parte se transcribe apenas llega; cuando llega la última, se analiza todo junto.
 
 TIPOS_SESION = {"clase": "Clase", "reunion": "Reunión"}
-ETIQUETA_ORIGEN = {"texto": "Nota escrita", "voz": "Nota de voz", "foto": "Foto", **TIPOS_SESION}
+ETIQUETA_ORIGEN = {"texto": "Nota escrita", "voz": "Nota de voz", "foto": "Foto",
+                   "anuncio": "Anuncio de Classroom", **TIPOS_SESION}
 PALABRAS_POR_BLOQUE = 1100  # lo que la IA analiza de una vez (~8 min de habla)
 
 
@@ -1670,6 +1785,7 @@ def reloj() -> None:
             revisar_resumen()
             revisar_sesiones_abandonadas()
             revisar_respaldo()
+            revisar_salud()
         except Exception:
             log.exception("Error en el reloj")
         time.sleep(30)
@@ -1786,6 +1902,7 @@ CAMPOS_INDICE = ("ficha", "transcripcion")
 
 
 def indexar(cid: int) -> None:
+    _vec_cola.put(cid)  # el "significado" se calcula aparte, sin frenar lo demás
     if not HAY_INDICE:
         return
     with closing(db()) as con, con:
@@ -1822,33 +1939,199 @@ def _palabras_clave(pregunta: str) -> list[str]:
 
 
 def buscar_para_pregunta(pregunta: str, limite: int = 6) -> list[tuple[sqlite3.Row, str]]:
+    """Junta dos búsquedas: por palabras (índice) y por significado (vectores). Lo que sale
+    arriba en las dos gana (fusión por posición), con máximo 2 pedazos del mismo momento."""
     claves = _palabras_clave(pregunta)
-    if not claves:
-        return []
+    por_palabras: list[tuple[int, str]] = []
     with closing(db()) as con:
-        if HAY_INDICE:
+        if claves and HAY_INDICE:
             consulta = " OR ".join(f'"{w}"*' for w in claves)
             filas = con.execute("SELECT captura_id, texto FROM indice WHERE indice MATCH ? "
                                 "ORDER BY bm25(indice) LIMIT 24", (consulta,)).fetchall()
-        else:
+            por_palabras = [(int(f["captura_id"]), f["texto"]) for f in filas]
+        elif claves:
             condicion = " OR ".join(["titulo LIKE ? OR resumen LIKE ? OR transcripcion LIKE ?"] * len(claves))
             valores = [f"%{w}%" for w in claves for _ in range(3)]
             filas = con.execute(f"SELECT id AS captura_id, coalesce(resumen,'') AS texto FROM capturas "
                                 f"WHERE {condicion} ORDER BY inicio DESC LIMIT 24", valores).fetchall()
-        elegidos: list[tuple[sqlite3.Row, str]] = []
-        por_captura: dict[int, int] = {}
-        for f in filas:
-            cid = int(f["captura_id"])
+            por_palabras = [(int(f["captura_id"]), f["texto"]) for f in filas]
+    try:
+        por_significado = [(cid, texto) for cid, texto, _ in buscar_semantico(pregunta, k=16)]
+    except Exception as ex:  # sin Ollama o sin el modelo: queda la búsqueda por palabras
+        log.debug("Búsqueda por significado no disponible (%s)", ex)
+        por_significado = []
+
+    puntaje: dict[tuple[int, str], float] = {}
+    for lista in (por_palabras, por_significado):
+        for puesto, (cid, texto) in enumerate(lista):
+            clave = (cid, texto[:120])
+            puntaje[clave] = puntaje.get(clave, 0.0) + 1.0 / (60 + puesto)
+    textos = {(cid, t[:120]): t for lista in (por_palabras, por_significado) for cid, t in lista}
+
+    elegidos: list[tuple[sqlite3.Row, str]] = []
+    por_captura: dict[int, int] = {}
+    with closing(db()) as con:
+        for clave in sorted(puntaje, key=lambda k: -puntaje[k]):
+            cid = clave[0]
             if por_captura.get(cid, 0) >= 2:
                 continue
             c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
             if not c:
                 continue
             por_captura[cid] = por_captura.get(cid, 0) + 1
-            elegidos.append((c, f["texto"]))
+            elegidos.append((c, textos[clave]))
             if len(elegidos) >= limite:
                 break
     return elegidos
+
+
+# ── Búsqueda por significado (embeddings locales con Ollama) ──
+# Cada momento se parte en pedazos; cada pedazo se vuelve una lista de números que representa
+# su significado. Preguntar "¿qué dijo de energía?" encuentra también "trabajo y potencia".
+
+_vec_cola: "queue.Queue[int]" = queue.Queue()
+_vec_version = [0]
+_vec_cache: dict = {"version": -1, "ids": [], "textos": [], "m": None, "modelo": None}
+SEMANTICA: dict = {"error": None, "vectores": None}
+
+
+def _modelo_embed() -> str:
+    return str(CFG["ia"].get("ollama_embed") or "").strip()
+
+
+def embeber(textos: list[str], consulta: bool = False) -> list[list[float]]:
+    modelo = _modelo_embed()
+    if not modelo:
+        raise RuntimeError("búsqueda por significado apagada")
+    if "gemma" in modelo:
+        prefijo = "task: search result | query: " if consulta else "title: none | text: "
+    elif "nomic" in modelo:
+        prefijo = "search_query: " if consulta else "search_document: "
+    else:
+        prefijo = ""
+    pedido = {"model": modelo, "input": [prefijo + t for t in textos], "keep_alive": "10m"}
+    req = urllib.request.Request(CFG["ia"]["ollama_url"].rstrip("/") + "/api/embed", data=json.dumps(pedido).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            return json.load(r)["embeddings"]
+    except urllib.error.HTTPError as ex:
+        detalle = ex.read().decode("utf-8", "replace")
+        if ex.code == 404 or "not found" in detalle:
+            raise ModeloFaltante(modelo) from ex
+        raise
+
+
+def _pedazos(c, its) -> list[str]:
+    ficha = "\n".join(x for x in [c["titulo"], c["resumen"], c["lugar"]] + [i["texto"] for i in its] if x)
+    pedazos = [ficha[:2500]]
+    if c["transcripcion"]:
+        pedazos += _bloques(c["transcripcion"], 120)[:300]
+    return [p for p in pedazos if p.strip()]
+
+
+def vectorizar(cid: int) -> int:
+    import numpy as np
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        its = items_de(con, cid) if c else []
+    if not c:
+        with closing(db()) as con, con:
+            con.execute("DELETE FROM vectores WHERE captura_id=?", (cid,))
+        _vec_version[0] += 1
+        return 0
+    pedazos = _pedazos(c, its)
+    vectores: list[list[float]] = []
+    for i in range(0, len(pedazos), 16):
+        vectores += embeber(pedazos[i:i + 16])
+    filas = []
+    for n, (texto, v) in enumerate(zip(pedazos, vectores)):
+        a = np.asarray(v, dtype=np.float32)
+        a /= (np.linalg.norm(a) or 1.0)
+        filas.append((cid, n, texto, a.tobytes(), _modelo_embed()))
+    with closing(db()) as con, con:
+        con.execute("DELETE FROM vectores WHERE captura_id=?", (cid,))
+        con.executemany("INSERT INTO vectores(captura_id, n, texto, vector, modelo) VALUES(?,?,?,?,?)", filas)
+    _vec_version[0] += 1
+    return len(filas)
+
+
+def _faltan_vectores() -> list[int]:
+    with closing(db()) as con:
+        return [r[0] for r in con.execute(
+            "SELECT id FROM capturas WHERE id NOT IN (SELECT DISTINCT captura_id FROM vectores WHERE modelo=?) "
+            "ORDER BY inicio DESC", (_modelo_embed(),)).fetchall()]
+
+
+def vectores_hilo() -> None:
+    time.sleep(30)
+    for cid in _faltan_vectores():  # lo que se guardó antes de tener esto
+        _vec_cola.put(cid)
+    while True:
+        try:
+            cid = _vec_cola.get(timeout=3600)
+        except queue.Empty:
+            for cid in _faltan_vectores()[:200]:
+                _vec_cola.put(cid)
+            continue
+        if not _modelo_embed():
+            continue
+        try:
+            vectorizar(cid)
+            SEMANTICA["error"] = None
+        except ModeloFaltante as ex:
+            SEMANTICA["error"] = f"falta el modelo {ex.args[0]}"
+            _vaciar(_vec_cola)  # se reintenta en una hora, no uno por uno
+        except Exception as ex:
+            if SEMANTICA["error"] is None:
+                log.info("Todavía no puedo calcular el significado de los momentos (%s)", ex)
+            SEMANTICA["error"] = "Ollama no responde"
+            _vaciar(_vec_cola)
+
+
+def _vaciar(cola: queue.Queue) -> None:
+    try:
+        while True:
+            cola.get_nowait()
+    except queue.Empty:
+        pass
+
+
+def _matriz_vectores():
+    import numpy as np
+    modelo = _modelo_embed()
+    if _vec_cache["version"] != _vec_version[0] or _vec_cache["modelo"] != modelo:
+        with closing(db()) as con:
+            filas = con.execute("SELECT captura_id, texto, vector FROM vectores WHERE modelo=?", (modelo,)).fetchall()
+        vecs = [np.frombuffer(f["vector"], dtype=np.float32) for f in filas]
+        dim = max((len(v) for v in vecs), default=0)
+        buenos = [(f, v) for f, v in zip(filas, vecs) if len(v) == dim and dim]
+        _vec_cache.update(version=_vec_version[0], modelo=modelo,
+                          ids=[int(f["captura_id"]) for f, _ in buenos], textos=[f["texto"] for f, _ in buenos],
+                          m=np.vstack([v for _, v in buenos]) if buenos else None)
+    return _vec_cache
+
+
+def buscar_semantico(pregunta: str, k: int = 12, minimo: float = 0.3) -> list[tuple[int, str, float]]:
+    import numpy as np
+    cache = _matriz_vectores()
+    if cache["m"] is None:
+        return []
+    q = np.asarray(embeber([pregunta], consulta=True)[0], dtype=np.float32)
+    q /= (np.linalg.norm(q) or 1.0)
+    if q.shape[0] != cache["m"].shape[1]:
+        return []
+    puntajes = cache["m"] @ q
+    orden = np.argsort(-puntajes)[:k]
+    return [(cache["ids"][i], cache["textos"][i], float(puntajes[i])) for i in orden if puntajes[i] >= minimo]
+
+
+def estado_semantica() -> dict:
+    with closing(db()) as con:
+        total = con.execute("SELECT count(*) FROM capturas").fetchone()[0]
+        con_vec = con.execute("SELECT count(DISTINCT captura_id) FROM vectores WHERE modelo=?",
+                              (_modelo_embed(),)).fetchone()[0]
+    return {"modelo": _modelo_embed() or None, "listos": con_vec, "total": total, "error": SEMANTICA["error"]}
 
 
 def responder_pregunta(pregunta: str) -> dict:
@@ -1967,6 +2250,7 @@ GOOGLE_ALCANCES = " ".join((
     "openid", "email",
     "https://www.googleapis.com/auth/classroom.courses.readonly",
     "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+    "https://www.googleapis.com/auth/classroom.announcements.readonly",
     "https://www.googleapis.com/auth/calendar.app.created",
 ))
 GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -2124,7 +2408,7 @@ def google_callback(params: dict) -> tuple[bool, str]:
         "expira": time.time() + int(r.get("expires_in") or 3600), "email": email,
         "alcances": r.get("scope", ""), "conectado": ahora().isoformat(timespec="seconds"),
     })
-    for k in ("google_error", "classroom_error", "calendar_error"):
+    for k in ("google_error", "classroom_error", "calendar_error", "anuncios_error"):
         estado_set(k, "")
     estado_set("google_primera", "1")
     log.info("Google conectado (%s)", email)
@@ -2306,8 +2590,114 @@ def sincronizar_classroom() -> dict:
     estado_set("classroom_ultimo", ahora().isoformat(timespec="seconds"))
     estado_set("classroom_cursos", len(cursos))
     estado_set("classroom_error", "")
+    _cursos_cache[:] = [(c["id"], (c.get("name") or "Clase").strip()) for c in cursos]
     log.info("Classroom: %d clases, %d tareas nuevas, %d cambios", len(cursos), len(nuevas), cambiadas)
     return {"cursos": len(cursos), "nuevas": len(nuevas), "cambios": cambiadas}
+
+
+# ── Anuncios de Classroom → fechas y tareas ──
+# Muchos profes avisan exámenes y cambios en un anuncio, no como tarea. Eco lee los anuncios
+# de la última semana, descarta los que no traen nada (saludos, recordatorios sin fecha) y saca
+# lo importante con la misma IA de los momentos.
+
+_cursos_cache: list[tuple[str, str]] = []
+POR_VUELTA_ANUNCIOS = 12
+_UTIL = re.compile(
+    r"examen|prueba|parcial|quiz|entrega|entreg|tarea|fecha|plazo|lunes|martes|miercoles|jueves|viernes|sabado|"
+    r"domingo|manana|proxim|semana|recuerd|traer|llevar|evaluaci|exposici|laboratorio|proyecto|guia|aula|horario|"
+    r"suspend|cancel|cambio|\b\d{1,2}\s*/\s*\d{1,2}\b|\b\d{1,2} de (enero|febrero|marzo|abril|mayo|junio|julio|"
+    r"agosto|septiembre|octubre|noviembre|diciembre)|"
+    # La clase de inglés anuncia en inglés
+    r"\bexam|\btest\b|homework|assignment|\bdue\b|deadline|monday|tuesday|wednesday|thursday|friday|saturday|"
+    r"sunday|tomorrow|next week|\bbring\b|presentation|project|essay|reminder")
+
+
+def _parece_util(texto: str) -> bool:
+    return bool(_UTIL.search(_sin_acentos(texto or "")))
+
+
+def _rfc3339(texto: str) -> datetime:
+    t = str(texto or "").replace("Z", "+00:00")
+    t = re.sub(r"\.(\d{6})\d+", r".\1", t)  # Classroom manda hasta 9 decimales
+    return datetime.fromisoformat(t).astimezone(TZ)
+
+
+def _repetida_de_classroom(curso: str, texto: str) -> bool:
+    """¿Esta tarea ya está como tarea de Classroom de la misma clase? (evita duplicados)."""
+    nuevas = set(_clave(texto).split()) - PALABRAS_VACIAS
+    if len(nuevas) < 2:
+        return False
+    with closing(db()) as con:
+        filas = con.execute("SELECT texto FROM items WHERE origen='classroom' AND detalle=? AND hecho=0",
+                            (curso,)).fetchall()
+    for f in filas:
+        previas = set(_clave(f["texto"]).split()) - PALABRAS_VACIAS
+        if previas and len(nuevas & previas) / min(len(nuevas), len(previas)) >= 0.6:
+            return True
+    return False
+
+
+def sincronizar_anuncios() -> dict:
+    desde = ahora() - timedelta(days=7)
+    for curso_id, curso in _cursos_cache:
+        try:
+            r = google_api("GET", f"{CLASSROOM}/courses/{curso_id}/announcements",
+                           params={"announcementStates": "PUBLISHED", "orderBy": "updateTime desc", "pageSize": 15})
+        except GoogleError as ex:
+            if ex.codigo in (403, 404):
+                continue
+            raise
+        with closing(db()) as con, con:
+            for a in r.get("announcements") or []:
+                try:
+                    creado = _rfc3339(a.get("creationTime"))
+                except ValueError:
+                    continue
+                if creado < desde:
+                    continue
+                con.execute("INSERT OR IGNORE INTO classroom_anuncios(id, curso, texto, creado, enlace) VALUES(?,?,?,?,?)",
+                            (a["id"], curso, (a.get("text") or "").strip()[:6000], creado.isoformat(timespec="seconds"),
+                             a.get("alternateLink")))
+    with closing(db()) as con:
+        nuevos = con.execute("SELECT * FROM classroom_anuncios WHERE estado='nuevo' ORDER BY creado").fetchall()
+    primera = estado_get("anuncios_listos") != "1"
+    guardados = []
+    for a in nuevos[:POR_VUELTA_ANUNCIOS]:
+        estado, cid = "ignorado", None
+        if _parece_util(a["texto"]):
+            creado = datetime.fromisoformat(a["creado"])
+            info = extraer(a["texto"], creado, None, "anuncio", contexto=f"Clase: {a['curso']}.")
+            info["tareas"] = [t for t in info["tareas"] if not _repetida_de_classroom(a["curso"], t["texto"])]
+            if info["tareas"] or info["datos"]:
+                if not _sin_acentos(info["titulo"]).startswith(_sin_acentos(a["curso"])):
+                    info["titulo"] = f"{a['curso']}: {info['titulo']}"[:90]
+                cid = guardar_captura(archivo=f"anuncio:{a['id']}", origen="anuncio", inicio=creado, dur=None,
+                                      lat=None, lon=None, lugar=None, info=info, transcripcion=a["texto"], ia_ok=True)
+                actualizar_notas(creado.date())
+                guardados.append(cid)
+                estado = "guardado"
+                if not primera:
+                    enviar_o_guardar("📣 " + mensaje_captura(cid)
+                                     + (f'\n<a href="{e(a["enlace"])}">Ver el anuncio</a>' if a["enlace"] else ""))
+            else:
+                estado = "sin_nada"
+        with closing(db()) as con, con:
+            con.execute("UPDATE classroom_anuncios SET estado=?, captura_id=? WHERE id=?", (estado, cid, a["id"]))
+    quedan = max(0, len(nuevos) - POR_VUELTA_ANUNCIOS)
+    if primera and not quedan:
+        estado_set("anuncios_listos", "1")
+        with closing(db()) as con:
+            total = con.execute("SELECT count(*) FROM classroom_anuncios WHERE estado='guardado'").fetchone()[0]
+        if total:
+            enviar_o_guardar(f"📣 <b>Revisé los anuncios de Classroom de la última semana</b>\n"
+                             f"{plural(total, 'anuncio traía', 'anuncios traían')} fechas o tareas: ya están en tu panel "
+                             "y en tus pendientes. Desde ahora te aviso de cada anuncio nuevo que importe.")
+    estado_set("anuncios_ultimo", ahora().isoformat(timespec="seconds"))
+    estado_set("anuncios_error", "")
+    if nuevos:
+        log.info("Anuncios de Classroom: %d revisados, %d con fechas o tareas, %d en espera",
+                 min(len(nuevos), POR_VUELTA_ANUNCIOS), len(guardados), quedan)
+    return {"revisados": min(len(nuevos), POR_VUELTA_ANUNCIOS), "guardados": len(guardados), "quedan": quedan}
 
 
 # ── Tareas de Eco → calendario "Eco" ──
@@ -2436,6 +2826,22 @@ def google_hilo() -> None:
                 except Exception as ex:  # sin internet: se reintenta en la próxima vuelta
                     ultimo_classroom = 0.0
                     log.warning("Classroom no respondió (%s)", ex)
+                if g.get("anuncios", True) and _cursos_cache:
+                    if "classroom.announcements" not in alcances:
+                        estado_set("anuncios_error", "Para leer los anuncios, vuelve a conectar Google "
+                                                     "(Desconectar → Conectar con Google).")
+                    else:
+                        try:
+                            if sincronizar_anuncios()["quedan"]:
+                                ultimo_classroom = time.time() - cada + 120  # sigue en 2 min con el resto
+                                siguiente = threading.Timer(125, _google_evento.set)
+                                siguiente.daemon = True
+                                siguiente.start()
+                        except GoogleError as ex:
+                            estado_set("anuncios_error", _error_google(ex, "classroom"))
+                            log.warning("Anuncios de Classroom: %s", ex)
+                        except Exception as ex:  # IA apagada o sin internet: se reintenta en la próxima vuelta
+                            log.warning("No pude revisar los anuncios (%s)", ex)
         if g.get("calendar", True):
             if "calendar" not in alcances:
                 estado_set("calendar_error", "No diste permiso para Calendar. Vuelve a conectar y deja marcada "
@@ -2456,12 +2862,16 @@ def estado_google() -> dict:
     with closing(db()) as con:
         tareas_cr = con.execute("SELECT count(*) FROM items WHERE origen='classroom' AND hecho=0").fetchone()[0]
         eventos = con.execute("SELECT count(*) FROM google_eventos").fetchone()[0]
+        anuncios_ok = con.execute("SELECT count(*) FROM classroom_anuncios WHERE estado='guardado'").fetchone()[0]
     return {
         "cliente": google_cliente() is not None, "conectado": bool(t), "email": t.get("email"),
         "error": estado_get("google_error") or None,
         "classroom": {"activo": bool(CFG["google"].get("classroom", True)), "permiso": "classroom" in alcances,
                       "ultimo": estado_get("classroom_ultimo"), "cursos": int(estado_get("classroom_cursos") or 0),
                       "pendientes": tareas_cr, "error": estado_get("classroom_error") or None},
+        "anuncios": {"activo": bool(CFG["google"].get("anuncios", True)),
+                     "permiso": "classroom.announcements" in alcances, "ultimo": estado_get("anuncios_ultimo"),
+                     "guardados": anuncios_ok, "error": estado_get("anuncios_error") or None},
         "calendar": {"activo": bool(CFG["google"].get("calendar", True)), "permiso": "calendar" in alcances,
                      "ultimo": estado_get("calendar_ultimo"), "eventos": eventos,
                      "error": estado_get("calendar_error") or None},
@@ -2576,6 +2986,144 @@ def actualizaciones_hilo() -> None:
             log.warning("No pude revisar si hay app nueva (%s)", ex)
 
 
+# ════════════════════════════ Salud: avisar cuando algo deja de funcionar ════════════════════════════
+# Cada 5 minutos Eco revisa sus piezas. Si algo falla, te avisa UNA vez por Telegram (y otra vez
+# si sigue igual 12 horas después), y te dice cuando se arregla. De noche espera a la mañana.
+
+ALERTAS: dict[str, str] = {}      # clave → texto de lo que está fallando ahora
+_salud = {"ultimo": 0.0}
+
+
+def _en_silencio(actual: datetime) -> bool:
+    m = re.fullmatch(r"\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*", str(CFG["salud"].get("silencio") or ""))
+    if not m:
+        return False
+    ini, fin = _hhmm(m.group(1), (22, 0)), _hhmm(m.group(2), (6, 30))
+    hm = (actual.hour, actual.minute)
+    return (hm >= ini or hm < fin) if ini > fin else (ini <= hm < fin)
+
+
+def alerta(clave: str, activa: bool, texto: str = "", resuelto: str | None = None, repetir_h: float = 12) -> None:
+    previo = estado_get(f"alerta_{clave}") or ""
+    if not activa:
+        ALERTAS.pop(clave, None)
+        if previo:
+            estado_set(f"alerta_{clave}", "")
+            if resuelto and CFG["salud"].get("alertas", True):
+                enviar_o_guardar(resuelto)
+        return
+    ALERTAS[clave] = texto
+    actual = ahora()
+    if not CFG["salud"].get("alertas", True) or _en_silencio(actual):
+        return
+    if previo and actual - datetime.fromisoformat(previo) < timedelta(hours=repetir_h):
+        return
+    if enviar(texto):
+        estado_set(f"alerta_{clave}", actual.isoformat(timespec="seconds"))
+
+
+def _ollama_modelos() -> list[str] | None:
+    try:
+        with urllib.request.urlopen(CFG["ia"]["ollama_url"].rstrip("/") + "/api/tags", timeout=5) as r:
+            return [m.get("name", "") for m in json.load(r).get("models", [])]
+    except Exception:
+        return None
+
+
+def _tiene(modelos: list[str], nombre: str) -> bool:
+    nombre = nombre.strip()
+    return any(m == nombre or m == f"{nombre}:latest" or m.split(":")[0] == nombre for m in modelos)
+
+
+def revisar_salud(forzar: bool = False) -> None:
+    if not forzar and time.time() - _salud["ultimo"] < 300:
+        return
+    _salud["ultimo"] = time.time()
+    ia = CFG["ia"]
+    usa_ollama = str(ia.get("proveedor")).lower() == "ollama"
+
+    # Ollama y sus modelos
+    if usa_ollama or _modelo_embed():
+        modelos = _ollama_modelos()
+        alerta("ollama", usa_ollama and modelos is None,
+               "🔴 <b>Ollama no responde</b>\nLos momentos siguen llegando, pero no se pueden analizar. "
+               "Abre <b>Ollama</b> en la laptop (ícono de la llama junto al reloj) o reinicia la laptop.",
+               resuelto="✅ Ollama volvió a responder. Lo que quedó pendiente se procesa solo.")
+        if modelos is not None:
+            falta = ia["ollama_modelo"] if usa_ollama and not _tiene(modelos, ia["ollama_modelo"]) else None
+            alerta("modelo_ia", bool(falta),
+                   f"🔴 <b>Falta el modelo de IA</b> {e(falta)}\nEn PowerShell: <code>ollama pull {e(falta)}</code>")
+            emb = _modelo_embed()
+            alerta("modelo_embed", bool(emb) and not _tiene(modelos, emb),
+                   f"💡 Para que «pregúntale a Eco» entienda el significado y no solo palabras exactas, instala "
+                   f"un modelo chico (unos 600 MB). En PowerShell:\n<code>ollama pull {e(emb)}</code>",
+                   resuelto="✅ Listo: las preguntas ya buscan por significado.", repetir_h=24 * 7)
+
+    # Google
+    g = estado_google()
+    if g["cliente"]:
+        alerta("google", bool(g["error"]) and not g["conectado"],
+               f"🔴 <b>Google se desconectó</b>\n{e(g['error'])}\nEn Chrome: http://localhost:8765 → Conectar con Google.",
+               resuelto="✅ Google volvió a conectarse.")
+        problema = g["classroom"]["error"] or g["calendar"]["error"] if g["conectado"] else None
+        alerta("google_parcial", bool(problema), f"⚠️ <b>Classroom o Calendar con problemas</b>\n{e(problema)}",
+               repetir_h=24)
+
+    # Teléfono: la app se reporta cada 10 minutos
+    tel = estado_telefono()
+    horas = float(CFG["salud"].get("telefono_horas") or 3)
+    perdido = bool(tel and tel["estado"] != "apagado" and tel["hace_min"] is not None and tel["hace_min"] > horas * 60)
+    alerta("telefono", perdido,
+           f"📵 <b>Tu teléfono no se reporta</b> desde las {e(tel['hora'] if tel else '')}.\nRevisa que Eco siga "
+           "encendido en el teléfono y que Tailscale esté activo. Si Android lo cerró, ábrelo y toca Encender.",
+           resuelto="✅ El teléfono volvió a reportarse.")
+
+    # Audios atascados
+    viejos = [f for f in ENTRADA.iterdir() if f.suffix.lower() in EXT_AUDIO + EXT_IMAGEN
+              and time.time() - f.stat().st_mtime > 2 * 3600] if ENTRADA.exists() else []
+    alerta("cola", bool(viejos),
+           f"⚠️ <b>Hay {len(viejos)} {'archivo' if len(viejos) == 1 else 'archivos'} sin procesar</b> desde hace más de "
+           "2 horas. Revisa el registro en el panel (o reinicia Eco desde el ícono junto al reloj).",
+           resuelto="✅ Ya se procesó todo lo que estaba en espera.")
+
+    # Espacio en disco
+    import shutil
+    libre = shutil.disk_usage(DATOS).free / 1024 ** 3
+    alerta("disco", libre < 2, f"⚠️ <b>Queda poco espacio en la laptop</b> ({libre:.1f} GB). "
+                               "Si se llena, Eco no puede guardar audios ni notas.", repetir_h=24)
+
+    # Respaldo
+    if CFG["respaldo"].get("activo", True):
+        ultimo = estado_get("ultimo_respaldo")
+        viejo = not ultimo or ahora() - datetime.fromisoformat(ultimo) > timedelta(days=3)
+        alerta("respaldo", viejo and bool(estado_get("respaldo_error")),
+               f"⚠️ <b>El respaldo diario lleva días fallando</b>\n{e(estado_get('respaldo_error'))}",
+               resuelto="✅ El respaldo volvió a funcionar.", repetir_h=48)
+
+
+# ── El teléfono se reporta ("latido") ──
+
+def registrar_latido(datos: dict) -> None:
+    info = {
+        "estado": str(datos.get("estado") or "?")[:20],
+        "bateria": datos.get("bateria"), "cargando": bool(datos.get("cargando")),
+        "version": str(datos.get("version") or "")[:20], "pendientes": datos.get("pendientes"),
+        "visto": ahora().isoformat(timespec="seconds"),
+    }
+    estado_set("telefono", json.dumps(info))
+
+
+def estado_telefono() -> dict | None:
+    try:
+        info = json.loads(estado_get("telefono") or "")
+    except ValueError:
+        return None
+    visto = datetime.fromisoformat(info["visto"])
+    info["hace_min"] = int((ahora() - visto).total_seconds() // 60)
+    info["hora"] = f"{visto:%H:%M}" + ("" if visto.date() == ahora().date() else f" del {fecha_corta(visto.date())}")
+    return info
+
+
 def estado_app() -> dict:
     info = info_app() or {}
     return {"token": bool(_github_token()), "version": info.get("versionName"), "codigo": info.get("versionCode"),
@@ -2649,7 +3197,9 @@ def api_estado(es_local: bool) -> dict:
         "direccion_fija": f"{fija}:{puerto}" if fija else None,
         "direccion_wifi": f"{ip_local()}:{puerto}",
         "ia": f"{ia['proveedor']} · {ia['ollama_modelo'] if ia['proveedor'] == 'ollama' else ia['claude_modelo']}",
-        "whisper": str(CFG["whisper"]["modelo"]), "whisper_cargado": _whisper is not None,
+        "whisper": estado_whisper(), "whisper_cargado": bool(_modelos),
+        "telefono": estado_telefono(), "alertas": [{"clave": k, "texto": t} for k, t in ALERTAS.items()],
+        "semantica": estado_semantica() if es_local else None,
         "telegram": bool(CFG["telegram"].get("token") and CFG["telegram"].get("chat_id")),
         "momentos_hoy": momentos_hoy, "pendientes": pendientes_n,
         "proximo": _tarea_json(prox) if prox else None,
@@ -2682,7 +3232,24 @@ def api_momentos(fecha: str | None, q: str | None) -> list:
             dia = _fecha_valida(fecha) or ahora().date().isoformat()
             filas = con.execute("SELECT * FROM capturas WHERE substr(inicio,1,10)=? ORDER BY inicio",
                                 (dia,)).fetchall()
-        return [_captura_json(con, c) for c in filas]
+        resultado = [_captura_json(con, c) for c in filas]
+    if q and len(resultado) < 5:
+        # Pocas coincidencias exactas: se suman las que hablan de lo mismo con otras palabras.
+        try:
+            ya = {m["id"] for m in resultado}
+            extra = []
+            for cid, _texto, _p in buscar_semantico(q, k=20, minimo=0.45):
+                if cid not in ya:
+                    ya.add(cid)
+                    extra.append(cid)
+            with closing(db()) as con:
+                for cid in extra[:10]:
+                    c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+                    if c:
+                        resultado.append({**_captura_json(con, c), "parecido": True})
+        except Exception:
+            pass
+    return resultado
 
 
 def api_pendientes() -> list:
@@ -2782,6 +3349,8 @@ def api_borrar_momento(cid: int) -> bool:
         if not c:
             return False
         con.execute("DELETE FROM items WHERE captura_id=?", (cid,))
+        con.execute("DELETE FROM vectores WHERE captura_id=?", (cid,))
+        con.execute("UPDATE classroom_anuncios SET captura_id=NULL WHERE captura_id=?", (cid,))
         if HAY_INDICE:
             con.execute("DELETE FROM indice WHERE captura_id=?", (cid,))
         # La sesión queda marcada como lista (sin momento), así una parte que llegue tarde no la revive.
@@ -2793,6 +3362,7 @@ def api_borrar_momento(cid: int) -> bool:
         _limpiar(archivo_transcripcion(c))
     if c["adjunto"]:
         _limpiar(NOTAS / c["adjunto"])
+    _vec_version[0] += 1
     actualizar_notas(datetime.fromisoformat(c["inicio"]).date())
     log.info("Momento #%d borrado desde el panel", cid)
     return True
@@ -2968,6 +3538,15 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
         ruta = self.path.split("?")[0]
         if ruta == "/subir":
             return self._subir()
+        if ruta == "/latido":  # la app del teléfono avisa que sigue viva (cada 10 min)
+            if not self._autorizado():
+                return self._json(401, {"ok": False, "error": "token"})
+            try:
+                largo = min(int(self.headers.get("Content-Length") or 0), 4096)
+                registrar_latido(json.loads(self.rfile.read(largo) or b"{}"))
+            except (ValueError, AttributeError):
+                return self._json(400, {"ok": False})
+            return self._json(200, {"ok": True})
         if ruta.startswith("/api/"):
             # La cabecera propia impide que otra página web mande esto a tus espaldas.
             if self.headers.get("X-Eco-Panel") != "1" or not self._puede_ver_panel():
@@ -3217,7 +3796,7 @@ def arrancar(consola: bool = True) -> ServidorEco:
         if f.suffix.lower() in EXT_AUDIO + EXT_IMAGEN:
             COLA.put(f)
     threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
-    for destino in (trabajador, bot, reloj, google_hilo, actualizaciones_hilo):
+    for destino in (trabajador, bot, reloj, google_hilo, actualizaciones_hilo, vectores_hilo):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
     log.info("Eco encendido (puerto %d)", puerto)
     return servidor

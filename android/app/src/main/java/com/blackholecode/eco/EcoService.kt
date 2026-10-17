@@ -73,6 +73,8 @@ class EcoService : Service() {
         private const val UPLOAD_EVERY_MS = 120_000L
         /** Cada cuántas vueltas de subida (de 2 min) se pregunta a la laptop si hay app nueva: 3 h. */
         private const val UPDATE_EVERY_ROUNDS = 90
+        /** Cada cuántas vueltas se avisa a la laptop "sigo vivo": 10 min. */
+        private const val LATIDO_EVERY_ROUNDS = 5
         private const val ACCENT = 0xFF6B5BF5.toInt()
 
         /** Pausa automática por batería: a este % sin cargador se pausa; vuelve al cargar o al pasar de 25 %. */
@@ -135,9 +137,10 @@ class EcoService : Service() {
     private var parteInicioMs = 0L
     private var estabaEnPausa = false
 
-    // Batería y actualizaciones
+    // Batería, actualizaciones, latido y botón de volumen
     private var bateriaRegistrada = false
     private var uploadRounds = 0
+    private var volumen: VolumeKeys? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -145,6 +148,7 @@ class EcoService : Service() {
         super.onCreate()
         prefs = Prefs(this)
         createChannels(this)
+        volumen = VolumeKeys(this) { requestSave() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -191,6 +195,7 @@ class EcoService : Service() {
         EcoState.paused = false
         EcoState.pausaBateria = false
         unregisterBattery()
+        volumen?.cerrar()
         main.removeCallbacksAndMessages(null)
         io.shutdown()
         EcoWidget.refresh(this)
@@ -284,8 +289,12 @@ class EcoService : Service() {
         main.removeCallbacks(tick)
         main.removeCallbacks(uploadLoop)
         stopForeground(STOP_FOREGROUND_REMOVE)
+        volumen?.actualizar(escuchando = false, habilitado = false)
         EcoWidget.refresh(this)
-        runIo { uploadPending() }
+        runIo {
+            uploadPending()
+            latido("apagado")
+        }
         stopSelf()
     }
 
@@ -697,13 +706,35 @@ class EcoService : Service() {
     private val uploadLoop = object : Runnable {
         override fun run() {
             if (!EcoState.running) return
-            val revisar = uploadRounds++ % UPDATE_EVERY_ROUNDS == 0
+            val ronda = uploadRounds++
             runIo {
                 uploadPending()
-                if (revisar) checkForUpdate()
+                if (ronda % LATIDO_EVERY_ROUNDS == 0) latido(estadoTexto())
+                if (ronda % UPDATE_EVERY_ROUNDS == 0) checkForUpdate()
             }
             main.postDelayed(this, UPLOAD_EVERY_MS)
         }
+    }
+
+    private fun estadoTexto(): String = when {
+        !EcoState.running -> "apagado"
+        EcoState.reunionInicioMs > 0 -> "reunion"
+        EcoState.pausaBateria -> "pausa_bateria"
+        EcoState.paused -> "pausa"
+        else -> "escuchando"
+    }
+
+    /** "Sigo vivo": si deja de llegar, la laptop te avisa por Telegram. */
+    private fun latido(estado: String) {
+        if (prefs.server.isBlank()) return
+        val pendientes = pendingDir(this).listFiles()?.count { isUploadable(it) } ?: 0
+        val json = JSONObject()
+            .put("estado", estado)
+            .put("bateria", EcoState.batteryPct)
+            .put("cargando", EcoState.charging)
+            .put("pendientes", pendientes)
+            .put("version", try { Updater.installedName(this) } catch (_: Exception) { "" })
+        Net.latido(prefs.server, prefs.token, json.toString())
     }
 
     /** ¿Tu laptop tiene una versión nueva de Eco? Avisa una sola vez por versión. */
@@ -774,6 +805,8 @@ class EcoService : Service() {
         override fun run() {
             if (!EcoState.running) return
             updateLiveState()
+            val escuchando = !EcoState.paused && EcoState.reunionInicioMs == 0L && capturing
+            volumen?.actualizar(escuchando, prefs.dobleVolumen)
             tickCount++
             if (EcoState.savingRemainingSec >= 0 && tickCount % 5 == 0) refreshNotification()
             main.postDelayed(this, 1_000)

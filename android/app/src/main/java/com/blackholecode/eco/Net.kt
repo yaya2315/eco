@@ -76,6 +76,30 @@ object Net {
         }
     }
 
+    /** "Sigo vivo": la laptop te avisa por Telegram si el teléfono deja de reportarse. */
+    fun latido(server: String, token: String, json: String): Boolean {
+        val base = baseUrl(server) ?: return false
+        var c: HttpURLConnection? = null
+        return try {
+            val cuerpo = json.toByteArray(Charsets.UTF_8)
+            c = (URL("$base/latido").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 4000
+                readTimeout = 6000
+                setFixedLengthStreamingMode(cuerpo.size)
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("X-Eco-Token", token)
+            }
+            c.outputStream.use { it.write(cuerpo) }
+            c.responseCode == 200
+        } catch (_: Exception) {
+            false
+        } finally {
+            c?.disconnect()
+        }
+    }
+
     fun upload(server: String, token: String, wav: File, metaJson: String?): Result {
         val tipo = if (wav.name.endsWith(".m4a")) "audio/mp4" else "audio/wav"
         val base = baseUrl(server) ?: return Result(false, "Falta la dirección de tu laptop")
