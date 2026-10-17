@@ -17,3 +17,6 @@ android/.idea/
 android/.kotlin/
 *.iml
 .DS_Store
+
+# Página pública (es otro repositorio: yaya2315/eco-app)
+pagina-publica/
