@@ -148,6 +148,7 @@ class MainActivity : Activity() {
     private lateinit var agregarContacto: Button
     private lateinit var filaSms: Fila
     private lateinit var smsButton: Button
+    private lateinit var notaWhatsapp: TextView
 
     private var haloAnim: AnimatorSet? = null
     private var haloColor = 0
@@ -1236,6 +1237,13 @@ class MainActivity : Activity() {
         card.addView(contactosLista, lp(top = 4))
         agregarContacto = button("Agregar contacto", primary = false) { elegirContacto() }
         card.addView(agregarContacto, lp(top = 8))
+        card.addView(overline("CÓMO AVISAR"), lp(top = 16))
+        card.addView(interruptor("Por WhatsApp", prefs.usarWhatsapp) { prefs.usarWhatsapp = it; pintarContactos() }, lp(top = 2))
+        notaWhatsapp = label("", 12f, C_MUTED).apply { setLineSpacing(0f, 1.2f) }
+        card.addView(notaWhatsapp, lp())
+        card.addView(interruptor("SMS también con internet", prefs.smsSiempre) { prefs.smsSiempre = it }, lp(top = 6))
+        card.addView(label("El SMS llega sin que toques nada más. Sin internet, Eco siempre usa SMS (y reintenta si no hay señal).",
+            12f, C_MUTED).apply { setLineSpacing(0f, 1.2f) }, lp())
         filaSms = statusRow(card, "Permiso para mandar SMS", top = 8)
         smsButton = button("Dar permiso de SMS", primary = false) { requestPermissions(arrayOf(Manifest.permission.SEND_SMS), REQ_SMS) }
         card.addView(smsButton, lp(top = 4))
@@ -1265,12 +1273,27 @@ class MainActivity : Activity() {
         return card
     }
 
+    private fun interruptor(texto: String, valor: Boolean, alCambiar: (Boolean) -> Unit): Switch {
+        val estados = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        return Switch(this).apply {
+            text = texto
+            textSize = 15f
+            setTextColor(C_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            isChecked = valor
+            minHeight = dp(48)
+            thumbTintList = ColorStateList(estados, intArrayOf(0xFFFFFFFF.toInt(), C_MUTED))
+            trackTintList = ColorStateList(estados, intArrayOf(C_ACCENT, C_BORDER))
+            setOnCheckedChangeListener { _, activo -> alCambiar(activo) }
+        }
+    }
+
     private fun abrirEmergencia(modo: String) {
         startActivity(Intent(this, EmergenciaActivity::class.java).putExtra(Emergencia.EXTRA_MODO, modo))
     }
 
     private fun pintarContactos() {
-        if (!::contactosLista.isInitialized) return
+        if (!::contactosLista.isInitialized || !::notaWhatsapp.isInitialized || !::filaSms.isInitialized) return
         val lista = Emergencia.contactos(prefs)
         contactosTitulo.text = if (lista.isEmpty()) "CONTACTOS" else "CONTACTOS · ${lista.size} DE ${Emergencia.MAX_CONTACTOS}"
         contactosLista.removeAllViews()
@@ -1307,6 +1330,14 @@ class MainActivity : Activity() {
             contactosLista.addView(fila)
         }
         agregarContacto.visibility = if (lista.size >= Emergencia.MAX_CONTACTOS) View.GONE else View.VISIBLE
+        val tieneWhatsapp = Emergencia.paqueteWhatsapp(this) != null
+        notaWhatsapp.text = when {
+            !tieneWhatsapp -> "No encontré WhatsApp en este teléfono: se avisa por SMS."
+            !prefs.usarWhatsapp -> "Apagado: solo SMS."
+            else -> "WhatsApp no deja que una app mande mensajes sola: Eco te abre cada chat con el mensaje listo " +
+                "y tú tocas Enviar. Sin internet, WhatsApp lo manda cuando vuelve la conexión."
+        }
+        notaWhatsapp.setTextColor(if (tieneWhatsapp) C_MUTED else C_WARN)
         val conSms = hasSms()
         filaSms.fila.visibility = if (lista.isEmpty()) View.GONE else View.VISIBLE
         paintRow(filaSms, conSms)

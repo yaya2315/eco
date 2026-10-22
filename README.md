@@ -310,9 +310,11 @@ Actions vuelve a compilar el APK. Si ya pegaste el permiso de GitHub en el panel
 
 - En la app, ícono de la **sirena** → agrega hasta 5 contactos y pon tu nombre. Toca **Enviar prueba** para que sepan que los pusiste.
 - Si un momento que guardaste (o una nota de voz o de texto) suena a peligro —un asalto, una amenaza, que te siguen, un accidente, alguien pidiendo ayuda—, la laptop te pregunta en el teléfono **«¿Estás bien?»** (y por Telegram).
-- **Nunca se manda nada solo.** El SMS con tu ubicación sale únicamente si, en la pantalla de emergencia, **mantienes presionado el botón rojo 2 segundos**. Si lo sueltas antes, no pasa nada. «Estoy bien» descarta la pregunta.
-- **Avisar ahora** abre la misma pantalla sin esperar a la laptop: funciona sin internet, porque el SMS sale del teléfono.
-- La pantalla también tiene **Llamar al 911**. Si el SMS falla, puedes mandar el mismo texto por WhatsApp.
+- **Nunca se manda nada solo.** El mensaje con tu ubicación sale únicamente si, en la pantalla de emergencia, **mantienes presionado el botón rojo 2 segundos**. Si lo sueltas antes, no pasa nada. «Estoy bien» descarta la pregunta.
+- **Por WhatsApp:** WhatsApp no deja que una app mande mensajes sola, así que Eco abre el chat de cada contacto con el mensaje ya escrito y tú tocas **Enviar** (al volver a Eco, un botón verde abre el siguiente). Los números de El Salvador de 8 dígitos llevan el +503 solo.
+- **Sin internet:** Eco lo detecta y manda **SMS** (no necesitan datos, solo señal). Si tampoco hay señal, reintenta cada 30 segundos mientras la pantalla siga abierta. Si mandas por WhatsApp sin internet, WhatsApp lo guarda y lo envía cuando vuelve la conexión.
+- **SMS también con internet** (encendido de fábrica): el SMS llega aunque no puedas seguir tocando la pantalla. Lo puedes apagar en la sección de la sirena.
+- **Avisar ahora** abre la misma pantalla sin esperar a la laptop. Cada contacto tiene además **Llamar**, y abajo está **Llamar al 911**.
 - Cómo decide: primero busca palabras de peligro (sin IA); si encuentra alguna, la IA revisa si es real o es una película, una canción o "ayúdame con la tarea". Lo de clases y reuniones no se revisa.
 - Para que llegue rápido, guarda el momento con el doble toque de volumen: la pregunta aparece cuando la laptop termina de analizarlo (un par de minutos). Si estás lejos de tu Wi-Fi, la laptop solo lo recibe con Tailscale.
 

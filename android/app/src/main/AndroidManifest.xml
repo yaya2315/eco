@@ -14,10 +14,18 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Solo para el mensaje de emergencia, y solo cuando tú lo confirmas manteniendo el botón. -->
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Saber si hay internet: sin internet la alerta sale por SMS -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <!-- Para instalar la versión nueva de Eco que te pasa tu laptop (Android pide confirmarlo). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
+    <!-- Para saber si tienes WhatsApp (Android 11+ lo pide así) -->
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+    </queries>
 
     <!-- usesCleartextTraffic: la app habla con tu laptop por HTTP dentro de tu Wi-Fi. -->
     <application

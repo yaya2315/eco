@@ -1669,6 +1669,8 @@ def responder_alerta(aid: int, estado: str, enviados: int | None = None) -> bool
         fila = con.execute("SELECT * FROM alertas_peligro WHERE id=?", (aid,)).fetchone()
         if not fila:
             return False
+        if fila["estado"] == "enviada" and estado == "descartada":
+            return True  # ya avisaste: cerrar la pantalla después no lo deshace
         con.execute("UPDATE alertas_peligro SET estado=?, respondido=?, enviados=? WHERE id=?",
                     (estado, ahora().isoformat(timespec="seconds"), enviados, aid))
     if estado == "enviada":

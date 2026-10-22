@@ -51,6 +51,8 @@ class EmergenciaActivity : Activity() {
         private const val REQ_SMS = 40
         private const val ACCION_SMS = "com.blackholecode.eco.SMS_ENVIADO"
         private const val SOSTENER_MS = 2_000L
+        private const val SMS_REINTENTOS = 10
+        private const val SMS_ESPERA_MS = 30_000L
 
         private const val C_BG = 0xFF0A0A12.toInt()
         private const val C_SURFACE = 0xFF14141F.toInt()
@@ -63,6 +65,7 @@ class EmergenciaActivity : Activity() {
         private const val C_REC_PRESS = 0xFFB82A41.toInt()
         private const val C_LIVE = 0xFF3DDC97.toInt()
         private const val C_WARN = 0xFFFFB547.toInt()
+        private const val C_WHATSAPP = 0xFF25D366.toInt()
     }
 
     private lateinit var prefs: Prefs
@@ -79,21 +82,45 @@ class EmergenciaActivity : Activity() {
     private lateinit var ubicacionTexto: TextView
     private lateinit var zonaBoton: View
     private lateinit var resultados: LinearLayout
+    private lateinit var resumen: TextView
+    private lateinit var siguiente: Button
+    private lateinit var salirBoton: Button
     private lateinit var sostener: SostenerView
-    private val estados = ArrayList<TextView>()
-    private val partesOk = HashMap<Int, Int>()
-    private val partesTotal = HashMap<Int, Int>()
     private var contactos: List<Emergencia.Contacto> = emptyList()
+
+    /** Cómo va cada contacto: su SMS (con reintentos si no hay señal) y si ya le abriste WhatsApp. */
+    private inner class Envio(val contacto: Emergencia.Contacto) {
+        var intento = 0
+        var partesOk = 0
+        var partesTotal = 1
+        var smsListo = false
+        var esperando = false
+        var fallido = false
+        var reintentos = 0
+        var whatsappAbierto = false
+        lateinit var estado: TextView
+    }
+
+    private val envios = ArrayList<Envio>()
+    private var usarSms = false
+    private var whatsapp: String? = null
+    private var conInternet = false
+    private var codigo = (System.currentTimeMillis() % 100_000).toInt() * 10
 
     private val receptorSms = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val i = intent.getIntExtra("c", -1)
-            if (i !in estados.indices) return
+            if (i !in envios.indices) return
+            val e = envios[i]
+            if (intent.getIntExtra("a", -1) != e.intento || e.smsListo) return
             if (resultCode == RESULT_OK) {
-                partesOk[i] = (partesOk[i] ?: 0) + 1
-                if ((partesOk[i] ?: 0) >= (partesTotal[i] ?: 1)) marcar(i, "Enviado ✓", C_LIVE)
+                e.partesOk++
+                if (e.partesOk >= e.partesTotal) {
+                    e.smsListo = true
+                    pintar(i)
+                }
             } else {
-                marcar(i, "No se pudo", C_WARN)
+                falloSms(i)
             }
         }
     }
@@ -111,6 +138,11 @@ class EmergenciaActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receptorSms, filtro, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(receptorSms, filtro)
         buscarUbicacion()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (enviado) actualizarSiguiente() // volviste de WhatsApp: toca el siguiente
     }
 
     override fun onDestroy() {
@@ -188,47 +220,106 @@ class EmergenciaActivity : Activity() {
         -1
     }
 
-    private fun mensaje() = Emergencia.mensaje(modo, prefs.nombre, quePaso, ubicacion, bateria())
+    private fun mensaje(whatsapp: Boolean = false) =
+        Emergencia.mensaje(modo, prefs.nombre, quePaso, ubicacion, bateria(), whatsapp)
 
     @Suppress("DEPRECATION")
     private fun sms(): SmsManager =
         if (Build.VERSION.SDK_INT >= 31) getSystemService(SmsManager::class.java) else SmsManager.getDefault()
 
+    /** Por dónde va a salir, para decírtelo antes de mantener el botón. */
+    private fun canales(): String {
+        val wa = prefs.usarWhatsapp && Emergencia.paqueteWhatsapp(this) != null
+        return when {
+            wa && prefs.smsSiempre -> "por SMS y WhatsApp"
+            wa -> "por WhatsApp (o por SMS si no tienes internet)"
+            else -> "por SMS"
+        }
+    }
+
     /** Solo se llega aquí después de mantener presionado el botón (o confirmar con TalkBack). */
     private fun enviar() {
         if (enviado || contactos.isEmpty()) return
-        if (checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+        conInternet = Emergencia.hayInternet(this)
+        whatsapp = if (prefs.usarWhatsapp) Emergencia.paqueteWhatsapp(this) else null
+        // Sin internet (o sin WhatsApp), el SMS es lo único que llega: entonces va siempre.
+        usarSms = !conInternet || whatsapp == null || prefs.smsSiempre
+        if (usarSms && checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
             envioPendiente = true
             requestPermissions(arrayOf(Manifest.permission.SEND_SMS), REQ_SMS)
             return
         }
+        arrancarEnvio()
+    }
+
+    private fun arrancarEnvio() {
         enviado = true
-        val texto = mensaje()
+        salirBoton.text = "Cerrar"
+        envios.clear()
+        contactos.forEach { envios += Envio(it) }
         mostrarResultados()
-        val manager = try { sms() } catch (_: Exception) { null }
-        val base = (System.currentTimeMillis() % 10_000).toInt() * 10
-        var intentados = 0
-        contactos.forEachIndexed { i, c ->
-            if (manager == null) {
-                marcar(i, "No se pudo", C_WARN)
-                return@forEachIndexed
-            }
-            try {
-                val partes = manager.divideMessage(texto)
-                partesTotal[i] = partes.size
-                val avisos = ArrayList<PendingIntent>(partes.size)
-                for (p in partes.indices) {
-                    val aviso = Intent(ACCION_SMS).setPackage(packageName).putExtra("c", i)
-                    avisos += PendingIntent.getBroadcast(this, base + i * 100 + p, aviso, PendingIntent.FLAG_IMMUTABLE)
-                }
-                manager.sendMultipartTextMessage(c.numero, null, partes, avisos, null)
-                intentados++
-            } catch (_: Exception) {
-                marcar(i, "No se pudo", C_WARN)
-            }
-        }
+        if (usarSms) envios.indices.forEach { mandarSms(it) }
         Emergencia.quitarAviso(this)
-        if (modo != Emergencia.MODO_PRUEBA) responder("enviada", intentados)
+        if (modo != Emergencia.MODO_PRUEBA) responder("enviada", envios.size)
+        // WhatsApp: el primer chat se abre solo con el mensaje listo; los demás, con un toque cada uno.
+        if (whatsapp != null) ui.postDelayed({ abrirWhatsapp(0) }, 500)
+    }
+
+    private fun mandarSms(i: Int) {
+        val e = envios[i]
+        e.esperando = false
+        e.fallido = false
+        e.intento++
+        e.partesOk = 0
+        val manager = try { sms() } catch (_: Exception) { null }
+        if (manager == null) {
+            falloSms(i)
+            return
+        }
+        try {
+            val partes = manager.divideMessage(mensaje())
+            e.partesTotal = partes.size
+            val avisos = ArrayList<PendingIntent>(partes.size)
+            for (p in partes.indices) {
+                val aviso = Intent(ACCION_SMS).setPackage(packageName).putExtra("c", i).putExtra("a", e.intento)
+                avisos += PendingIntent.getBroadcast(this, codigo++, aviso, PendingIntent.FLAG_IMMUTABLE)
+            }
+            manager.sendMultipartTextMessage(e.contacto.numero, null, partes, avisos, null)
+        } catch (_: Exception) {
+            falloSms(i)
+        }
+        pintar(i)
+    }
+
+    /** Sin señal o sin saldo: se reintenta cada 30 s (hasta 10 veces) mientras esta pantalla siga abierta. */
+    private fun falloSms(i: Int) {
+        val e = envios[i]
+        if (e.esperando || e.smsListo) return
+        if (e.reintentos < SMS_REINTENTOS) {
+            e.reintentos++
+            e.esperando = true
+            ui.postDelayed({ if (!isDestroyed) mandarSms(i) }, SMS_ESPERA_MS)
+        } else {
+            e.fallido = true
+        }
+        pintar(i)
+    }
+
+    private fun abrirWhatsapp(i: Int) {
+        if (i !in envios.indices) return
+        val e = envios[i]
+        if (Emergencia.abrirWhatsapp(this, e.contacto.numero, mensaje(whatsapp = true))) {
+            e.whatsappAbierto = true
+        }
+        pintar(i)
+        actualizarSiguiente()
+    }
+
+    private fun llamar(numero: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(numero))))
+        } catch (_: Exception) {
+        }
     }
 
     private fun responder(estado: String, enviados: Int?) {
@@ -244,16 +335,19 @@ class EmergenciaActivity : Activity() {
         if (requestCode != REQ_SMS || !envioPendiente) return
         envioPendiente = false
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            enviar() // ya lo habías confirmado manteniendo el botón; Android solo pidió el permiso
+            arrancarEnvio() // ya lo habías confirmado manteniendo el botón; Android solo pidió el permiso
+        } else if (whatsapp != null) {
+            usarSms = false
+            arrancarEnvio()
         } else {
             if (::sostener.isInitialized) sostener.reiniciar()
             compartir()
         }
     }
 
-    /** Si el SMS no se puede (sin saldo, sin permiso), mandar el mismo texto por WhatsApp u otra app. */
+    /** El mismo texto por la app que elijas (Telegram, Messenger…). */
     private fun compartir() {
-        val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, mensaje())
+        val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, mensaje(whatsapp = true))
         try {
             startActivity(Intent.createChooser(intent, "Enviar la alerta con…"))
         } catch (_: Exception) {
@@ -268,8 +362,10 @@ class EmergenciaActivity : Activity() {
     }
 
     private fun estoyBien() {
-        Emergencia.quitarAviso(this)
-        if (modo == Emergencia.MODO_DETECCION) responder("descartada", null)
+        if (!enviado) {
+            Emergencia.quitarAviso(this)
+            if (modo == Emergencia.MODO_DETECCION) responder("descartada", null)
+        }
         finish()
     }
 
@@ -329,10 +425,10 @@ class EmergenciaActivity : Activity() {
 
         val explicacion = when (modo) {
             Emergencia.MODO_DETECCION -> "Eco escuchó" + (if (hora.isNotBlank()) " a las $hora" else "") +
-                " algo que suena a peligro. Si necesitas ayuda, avisa a tus contactos."
-            Emergencia.MODO_PRUEBA -> "Tus contactos reciben un SMS que dice que es una prueba. Sirve para que sepan " +
-                "que los pusiste y para comprobar que el mensaje sale."
-            else -> "Les llega un SMS con tu ubicación y que necesitas ayuda."
+                " algo que suena a peligro. Si necesitas ayuda, avisa a tus contactos ${canales()}."
+            Emergencia.MODO_PRUEBA -> "Tus contactos reciben ${canales()} un mensaje que dice que es una prueba. Sirve " +
+                "para que sepan que los pusiste y para comprobar que sale."
+            else -> "Les llega ${canales()} tu ubicación y que necesitas ayuda."
         }
         col.addView(label(explicacion, 15f, C_MUTED).apply { setLineSpacing(0f, 1.25f) }, lp(top = 8))
 
@@ -393,7 +489,8 @@ class EmergenciaActivity : Activity() {
             Emergencia.MODO_DETECCION -> "Estoy bien"
             else -> "Cancelar"
         }
-        col.addView(boton(salir, C_SURFACE_2, C_TEXT, C_BORDER) { estoyBien() }, lp(top = 24))
+        salirBoton = boton(salir, C_SURFACE_2, C_TEXT, C_BORDER) { estoyBien() }
+        col.addView(salirBoton, lp(top = 24))
         if (!prueba) {
             col.addView(boton("Llamar al 911", 0x00000000, C_REC, 0x66FF5C7A) { llamar911() }, lp(top = 10))
         }
@@ -407,31 +504,84 @@ class EmergenciaActivity : Activity() {
     private fun mostrarResultados() {
         zonaBoton.visibility = View.GONE
         resultados.removeAllViews()
-        estados.clear()
         resultados.visibility = View.VISIBLE
-        resultados.addView(label(if (modo == Emergencia.MODO_PRUEBA) "Enviando la prueba…" else "Avisando a tus contactos…",
-            17f, C_TEXT, medium = true))
-        contactos.forEach { c ->
+        val prueba = modo == Emergencia.MODO_PRUEBA
+        resultados.addView(label(if (prueba) "Prueba en camino" else "Avisando a tus contactos", 17f, C_TEXT, medium = true))
+        resumen = label(
+            when {
+                !conInternet && whatsapp != null -> "Sin internet: les llega un SMS. Si también lo mandas por WhatsApp, " +
+                    "sale en cuanto vuelva la conexión."
+                !conInternet -> "Sin internet: les llega un SMS. Si no hay señal, Eco lo reintenta cada 30 segundos."
+                whatsapp != null && usarSms -> "Ya sale un SMS a cada uno. En WhatsApp toca Enviar en cada chat."
+                whatsapp != null -> "En WhatsApp toca Enviar en cada chat."
+                else -> "Les llega un SMS. Si no hay señal, Eco lo reintenta cada 30 segundos."
+            }, 14f, C_MUTED
+        ).apply { setLineSpacing(0f, 1.2f) }
+        resultados.addView(resumen, lp(top = 4))
+        envios.forEachIndexed { i, e ->
             val fila = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                minimumHeight = dp(44)
-                background = rounded(C_SURFACE, 12, C_BORDER)
-                setPadding(dp(14), dp(8), dp(14), dp(8))
+                orientation = LinearLayout.VERTICAL
+                background = rounded(C_SURFACE, 14, C_BORDER)
+                setPadding(dp(14), dp(12), dp(14), dp(12))
             }
-            fila.addView(label(c.nombre, 15f, C_TEXT), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            val estado = label("Enviando…", 13f, C_MUTED, medium = true)
-            fila.addView(estado)
-            estados += estado
-            resultados.addView(fila, lp(top = 8))
+            fila.addView(label(e.contacto.nombre, 16f, C_TEXT, medium = true))
+            e.estado = label("", 13f, C_MUTED, medium = true)
+            fila.addView(e.estado, lp(top = 2))
+            val acciones = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            if (whatsapp != null) {
+                acciones.addView(boton("WhatsApp", C_WHATSAPP, 0xFF0B2E17.toInt()) { abrirWhatsapp(i) }.apply {
+                    contentDescription = "Abrir WhatsApp de ${e.contacto.nombre} con el mensaje listo"
+                }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            }
+            acciones.addView(boton("Llamar", C_SURFACE_2, C_TEXT, C_BORDER) { llamar(e.contacto.numero) }.apply {
+                contentDescription = "Llamar a ${e.contacto.nombre}"
+            }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { if (whatsapp != null) marginStart = dp(10) })
+            fila.addView(acciones, lp(top = 10))
+            resultados.addView(fila, lp(top = 10))
+            pintar(i)
         }
-        resultados.addView(boton("Mandarlo también por WhatsApp u otra app", C_SURFACE_2, C_TEXT, C_BORDER) { compartir() }, lp(top = 16))
+        siguiente = boton("", C_WHATSAPP, 0xFF0B2E17.toInt()) {
+            envios.indexOfFirst { !it.whatsappAbierto }.takeIf { it >= 0 }?.let { abrirWhatsapp(it) }
+        }
+        siguiente.visibility = View.GONE
+        resultados.addView(siguiente, lp(top = 14))
+        resultados.addView(boton("Mandarlo por otra app…", C_SURFACE_2, C_TEXT, C_BORDER) { compartir() }, lp(top = 10))
     }
 
-    private fun marcar(i: Int, texto: String, color: Int) {
-        if (i !in estados.indices) return
-        estados[i].text = texto
-        estados[i].setTextColor(color)
+    /** Después de volver de WhatsApp: botón grande para el siguiente contacto que falta. */
+    private fun actualizarSiguiente() {
+        if (!::siguiente.isInitialized) return
+        val falta = envios.firstOrNull { !it.whatsappAbierto }
+        if (whatsapp == null || falta == null) {
+            siguiente.visibility = View.GONE
+            return
+        }
+        siguiente.text = "Siguiente: WhatsApp de ${falta.contacto.nombre}"
+        siguiente.visibility = if (envios.any { it.whatsappAbierto }) View.VISIBLE else View.GONE
+    }
+
+    private fun pintar(i: Int) {
+        if (i !in envios.indices) return
+        val e = envios[i]
+        if (!::resumen.isInitialized) return
+        val partes = mutableListOf<String>()
+        if (usarSms) {
+            partes += when {
+                e.smsListo -> "SMS enviado ✓"
+                e.esperando -> "Sin señal: reintento en 30 s"
+                e.fallido -> "El SMS no salió"
+                else -> "Enviando SMS…"
+            }
+        }
+        if (whatsapp != null) partes += if (e.whatsappAbierto) "WhatsApp abierto" else "Falta WhatsApp"
+        e.estado.text = partes.joinToString(" · ")
+        e.estado.setTextColor(
+            when {
+                e.smsListo -> C_LIVE
+                e.esperando || e.fallido -> C_WARN
+                else -> C_MUTED
+            }
+        )
     }
 
     /**

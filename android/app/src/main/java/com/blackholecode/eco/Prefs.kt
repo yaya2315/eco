@@ -51,6 +51,16 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(K_PELIGRO, true)
         set(value) = sp.edit().putBoolean(K_PELIGRO, value).apply()
 
+    /** Avisar también por WhatsApp (abre cada chat con el mensaje listo; tú tocas Enviar). */
+    var usarWhatsapp: Boolean
+        get() = sp.getBoolean(K_WHATSAPP, true)
+        set(value) = sp.edit().putBoolean(K_WHATSAPP, value).apply()
+
+    /** Mandar SMS aunque haya internet (llegan sin tocar nada más). Sin internet, siempre hay SMS. */
+    var smsSiempre: Boolean
+        get() = sp.getBoolean(K_SMS_SIEMPRE, true)
+        set(value) = sp.edit().putBoolean(K_SMS_SIEMPRE, value).apply()
+
     /** La última pregunta de la laptop que ya te mostramos (para no repetirla). */
     var alertaVista: Long
         get() = sp.getLong(K_ALERTA_VISTA, 0L)
@@ -84,5 +94,7 @@ class Prefs(context: Context) {
         private const val K_PELIGRO = "detectar_peligro"
         private const val K_ALERTA_VISTA = "alerta_vista"
         private const val K_NOMBRE = "nombre"
+        private const val K_WHATSAPP = "usar_whatsapp"
+        private const val K_SMS_SIEMPRE = "sms_siempre"
     }
 }
