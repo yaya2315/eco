@@ -92,9 +92,9 @@ La primera vez que llegue un audio, Whisper descarga el modelo `small` (unos 500
 - Ten en cuenta que el **texto** transcrito sale a internet. El audio no.
 
 **Opción B: Ollama** (todo se queda en tu laptop y es gratis).
-- Instálalo desde ollama.com y ejecuta `ollama pull qwen2.5:3b`.
+- Instálalo desde ollama.com y ejecuta `ollama pull qwen3.5:4b` (unos 3 GB). Si no lo tienes, Eco usa `qwen2.5:3b`, que entiende bastante menos.
 - En `config.toml` pon `proveedor = "ollama"`.
-- Es más lento en tu Ryzen y algo menos fino, pero nada sale de tu casa.
+- Es más lento en tu Ryzen que en la nube, pero nada sale de tu casa.
 
 ### 6. Conecta Telegram
 
@@ -298,6 +298,24 @@ Actions vuelve a compilar el APK. Si ya pegaste el permiso de GitHub en el panel
 
 ---
 
+## Para que entienda mejor
+
+- **Transcripción:** con la laptop enchufada Eco usa Whisper **large-v3-turbo** (casi tan preciso como el más grande y bastante más rápido; se baja solo la primera vez, ~1.6 GB). Usa todos los núcleos, pero con prioridad baja: si tú estás usando la laptop, Windows te da preferencia. Con batería usa `small`.
+- **Nombres:** Whisper recibe tu nombre, tus clases y los nombres de personas que Eco ya anotó, para escribir "Steven" y no "Estiven". Puedes agregar más en `config.toml` → `[whisper] palabras = ["…"]`.
+- **El toque:** el teléfono le dice a la laptop en qué segundo tocaste *Guardar*. La IA sabe que lo importante está alrededor de ese punto y que lo de mucho antes puede ser la tele u otra conversación, así que ya no mezcla temas.
+- **La IA:** si instalaste `qwen3.5:4b`, Eco lo usa sin el modo "pensar" (en tu CPU tardaría minutos). Te lo sugiere por Telegram si falta.
+- **Para grabar mejor:** el micrófono principal del Honor está abajo. En la bolsa del pantalón el audio sale apagado; en la bolsa de la camisa, con el micrófono hacia afuera, o sobre la mesa se entiende mucho mejor.
+
+## Emergencia: «¿Estás bien?»
+
+- En la app, ícono de la **sirena** → agrega hasta 5 contactos y pon tu nombre. Toca **Enviar prueba** para que sepan que los pusiste.
+- Si un momento que guardaste (o una nota de voz o de texto) suena a peligro —un asalto, una amenaza, que te siguen, un accidente, alguien pidiendo ayuda—, la laptop te pregunta en el teléfono **«¿Estás bien?»** (y por Telegram).
+- **Nunca se manda nada solo.** El SMS con tu ubicación sale únicamente si, en la pantalla de emergencia, **mantienes presionado el botón rojo 2 segundos**. Si lo sueltas antes, no pasa nada. «Estoy bien» descarta la pregunta.
+- **Avisar ahora** abre la misma pantalla sin esperar a la laptop: funciona sin internet, porque el SMS sale del teléfono.
+- La pantalla también tiene **Llamar al 911**. Si el SMS falla, puedes mandar el mismo texto por WhatsApp.
+- Cómo decide: primero busca palabras de peligro (sin IA); si encuentra alguna, la IA revisa si es real o es una película, una canción o "ayúdame con la tarea". Lo de clases y reuniones no se revisa.
+- Para que llegue rápido, guarda el momento con el doble toque de volumen: la pregunta aparece cuando la laptop termina de analizarlo (un par de minutos). Si estás lejos de tu Wi-Fi, la laptop solo lo recibe con Tailscale.
+
 ## Privacidad: cómo está pensado
 
 - El audio vive **solo en la RAM** del teléfono y se sobrescribe cada pocos minutos.
@@ -306,6 +324,7 @@ Actions vuelve a compilar el APK. Si ya pegaste el permiso de GitHub en el panel
 - Por defecto se guardan **las notas, no la conversación completa** (`guardar_transcripcion = false`).
 - A la IA se le pide anotar de otras personas solo lo necesario para tus tareas, y **nunca** contraseñas, códigos ni tarjetas.
 - La laptop solo acepta audios que traen tu token. El bot de Telegram solo le responde a tu `chat_id`.
+- Tus contactos de emergencia viven **solo en el teléfono**; la laptop no los conoce. Eco no lee tu agenda: solo el contacto que tú eliges.
 - Las demás personas no saben que Eco está escuchando. Grabarlas sin que sepan puede ser ilegal y, en el colegio, ir contra las normas. Lo más sano es usarlo para tus propias cosas, avisar cuando guardas algo de una conversación y pausarlo donde no corresponde.
 
 ## Problemas comunes

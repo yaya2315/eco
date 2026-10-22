@@ -1,6 +1,7 @@
 package com.blackholecode.eco
 
 import android.util.Base64
+import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -83,6 +84,51 @@ object Net {
         return try {
             val cuerpo = json.toByteArray(Charsets.UTF_8)
             c = (URL("$base/latido").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 4000
+                readTimeout = 6000
+                setFixedLengthStreamingMode(cuerpo.size)
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("X-Eco-Token", token)
+            }
+            c.outputStream.use { it.write(cuerpo) }
+            c.responseCode == 200
+        } catch (_: Exception) {
+            false
+        } finally {
+            c?.disconnect()
+        }
+    }
+
+    /** ¿La laptop escuchó algo que suena a peligro? Devuelve la respuesta tal cual (o null si no hay conexión). */
+    fun alerta(server: String, token: String): JSONObject? {
+        val base = baseUrl(server) ?: return null
+        var c: HttpURLConnection? = null
+        return try {
+            c = (URL("$base/alerta").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 6000
+                setRequestProperty("X-Eco-Token", token)
+            }
+            if (c.responseCode != 200) return null
+            JSONObject(c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        } catch (_: Exception) {
+            null
+        } finally {
+            c?.disconnect()
+        }
+    }
+
+    /** Le cuenta a la laptop qué decidiste: "enviada" (y a cuántos) o "descartada". */
+    fun responderAlerta(server: String, token: String, id: Long, estado: String, enviados: Int?): Boolean {
+        val json = JSONObject().put("id", id).put("estado", estado)
+        if (enviados != null) json.put("enviados", enviados)
+        val base = baseUrl(server) ?: return false
+        var c: HttpURLConnection? = null
+        return try {
+            val cuerpo = json.toString().toByteArray(Charsets.UTF_8)
+            c = (URL("$base/alerta").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 connectTimeout = 4000

@@ -70,14 +70,19 @@ DEFAULTS: dict = {
     "servidor": {"puerto": 8765, "token": TOKEN_DE_EJEMPLO},
     "whisper": {
         "modelo": "small", "idioma": "es", "beam": 1, "hilos": 0,
-        # Con la laptop enchufada usa un modelo más preciso (más lento). "" = siempre el mismo.
-        "modelo_corriente": "medium", "beam_corriente": 2,
+        # Con la laptop enchufada usa el más preciso que aguanta tu Ryzen ("" = siempre el de arriba).
+        # large-v3-turbo: casi tan preciso como el más grande de Whisper y bastante más rápido.
+        "modelo_preciso": "large-v3-turbo", "beam_preciso": 3,
+        # Nombres y palabras que Whisper debe esperar (además de tus clases y los nombres que ya anotó).
+        "palabras": [],
     },
     "ia": {
         "proveedor": "claude",
         "claude_modelo": "claude-haiku-5-5",
         "claude_api_key": "",
         "ollama_modelo": "qwen2.5:3b",
+        # Si lo instalaste (ollama pull qwen3.5:4b), Eco lo usa en vez del de arriba: entiende mucho mejor.
+        "ollama_mejor": "qwen3.5:4b",
         "ollama_vision": "qwen2.5vl:3b",   # lee las fotos que mandas por Telegram
         "ollama_embed": "embeddinggemma",  # entiende el significado para "pregúntale a Eco" ("" = apagado)
         "ollama_url": "http://localhost:11434",
@@ -103,6 +108,12 @@ DEFAULTS: dict = {
         "activo": True,
         "carpeta": "",      # vacío = OneDrive\Eco respaldos
         "conservar": 14,    # cuántas copias guardar
+    },
+    "peligro": {
+        # Si en un momento que guardaste suena a que estás en peligro, Eco te pregunta en el teléfono
+        # si quieres avisar a tus contactos. Nunca les manda nada sin que tú lo confirmes.
+        "activo": True,
+        "horas_vigente": 2,       # después de esto, la pregunta ya no aparece en el teléfono
     },
     "salud": {
         "alertas": True,          # avisos por Telegram cuando algo deja de funcionar
@@ -234,6 +245,21 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS items_pendientes ON items(tipo, hecho, recordado, recordar_ts);
 CREATE TABLE IF NOT EXISTS estado (clave TEXT PRIMARY KEY, valor TEXT);
+CREATE TABLE IF NOT EXISTS alertas_peligro (  -- "¿estás bien?": solo se pregunta, nunca se avisa solo
+    id            INTEGER PRIMARY KEY,
+    captura_id    INTEGER,
+    archivo       TEXT,
+    creado        TEXT NOT NULL,
+    momento       TEXT,
+    nivel         INTEGER,
+    que_paso      TEXT,
+    frase         TEXT,
+    lat           REAL,
+    lon           REAL,
+    estado        TEXT NOT NULL DEFAULT 'pendiente',   -- pendiente | enviada | descartada | vencida
+    respondido    TEXT,
+    enviados      INTEGER
+);
 CREATE TABLE IF NOT EXISTS salida (id INTEGER PRIMARY KEY, texto TEXT NOT NULL, creado TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sesiones (
     id            INTEGER PRIMARY KEY,
@@ -440,7 +466,8 @@ def elegir_modelo() -> tuple[str, int, str]:
     """(modelo, beam, por qué). Enchufada = el preciso; con batería o con mucha cola = el rápido."""
     w = CFG["whisper"]
     rapido = (str(w["modelo"]), int(w.get("beam") or 1))
-    mejor = str(w.get("modelo_corriente") or "").strip()
+    # "modelo_corriente" es el nombre de antes (config.toml viejos): solo cuenta si no hay "modelo_preciso".
+    mejor = str(w.get("modelo_preciso") if "modelo_preciso" in w else w.get("modelo_corriente") or "").strip()
     if not mejor or mejor == rapido[0]:
         return (*rapido, "")
     enchufada = con_corriente()
@@ -451,7 +478,7 @@ def elegir_modelo() -> tuple[str, int, str]:
     if not _modelo_descargado(mejor):
         _bajar_en_segundo_plano(mejor)
         return (*rapido, f"bajando {mejor}")
-    return mejor, int(w.get("beam_corriente") or rapido[1]), "con corriente"
+    return mejor, int(w.get("beam_preciso") or w.get("beam_corriente") or rapido[1]), "con corriente"
 
 
 def leer_audio(ruta: Path):
@@ -516,7 +543,66 @@ def _segmento_valido(s) -> bool:
     return True
 
 
-def transcribir(ruta: Path) -> str:
+def _hilos(nombre: str) -> int:
+    """El modelo preciso usa todos los núcleos (Eco corre con prioridad baja, así que no te traba la
+    laptop); el rápido, la mitad, para gastar menos batería."""
+    pedido = int(CFG["whisper"].get("hilos") or 0)
+    if pedido > 0:
+        return pedido
+    total = os.cpu_count() or 4
+    return total if nombre != str(CFG["whisper"]["modelo"]) else max(2, total // 2)
+
+
+_vocab_cache = {"cuando": 0.0, "texto": ""}
+_NOMBRE_PROPIO = re.compile(r"(?<![.!?¿¡]\s)(?<!^)\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,})\b")
+_NO_SON_NOMBRES = {"El", "La", "Los", "Las", "Un", "Una", "Eco", "Hoy", "Mañana", "Lunes", "Martes", "Miércoles",
+                   "Jueves", "Viernes", "Sábado", "Domingo", "Para", "Con", "Del", "Que", "Pagarle", "Cobrarle"}
+
+
+def vocabulario() -> str:
+    """Palabras que Whisper debe esperar: tu nombre, tus clases y los nombres de personas que Eco ya
+    anotó (así escribe "Steven" y no "estiven"). Se arma cada 10 minutos."""
+    if time.time() - _vocab_cache["cuando"] < 600:
+        return _vocab_cache["texto"]
+    palabras: list[str] = []
+    nombre = str(CFG["usuario"].get("nombre") or "").strip()
+    if nombre and nombre != "el usuario":
+        palabras.append(nombre)
+    palabras += [str(p).strip() for p in CFG["whisper"].get("palabras") or [] if str(p).strip()]
+    for _id, curso in _cursos_cache[:30]:
+        corto = re.split(r"[:(\-–]", curso)[0].strip()
+        if 3 <= len(corto) <= 30:
+            palabras.append(corto)
+    try:
+        desde = (ahora() - timedelta(days=90)).isoformat()
+        with closing(db()) as con:
+            textos = [f["texto"] for f in con.execute(
+                "SELECT i.texto FROM items i JOIN capturas c ON c.id=i.captura_id WHERE c.inicio >= ? "
+                "ORDER BY i.id DESC LIMIT 400", (desde,))]
+        cuenta: dict[str, int] = {}
+        for t in textos:
+            for n in _NOMBRE_PROPIO.findall(t):
+                if n not in _NO_SON_NOMBRES:
+                    cuenta[n] = cuenta.get(n, 0) + 1
+        palabras += [n for n, _ in sorted(cuenta.items(), key=lambda x: -x[1])[:20]]
+    except sqlite3.Error:
+        pass
+    vistos, final = set(), []
+    for p in palabras:
+        k = p.lower()
+        if k not in vistos:
+            vistos.add(k)
+            final.append(p)
+    _vocab_cache.update(cuando=time.time(), texto=", ".join(final[:40]))
+    return _vocab_cache["texto"]
+
+
+MARCA_TOQUE = "[TOQUE]"
+
+
+def transcribir(ruta: Path, toque_s: float | None = None) -> str:
+    """Texto del audio. Con toque_s (segundo en que tocaste Guardar), deja la marca [TOQUE] ahí:
+    a la IA le sirve para saber qué es lo tuyo y qué era ruido de antes."""
     w = CFG["whisper"]
     nombre, beam, motivo = elegir_modelo()
     with _whisper_lock:
@@ -524,7 +610,7 @@ def transcribir(ruta: Path) -> str:
         if modelo is None:
             from faster_whisper import WhisperModel  # import lento: solo cuando hace falta
             log.info("Cargando Whisper '%s'%s…", nombre, f" ({motivo})" if motivo else "")
-            modelo = WhisperModel(nombre, device="cpu", compute_type="int8", cpu_threads=int(w.get("hilos") or 0))
+            modelo = WhisperModel(nombre, device="cpu", compute_type="int8", cpu_threads=_hilos(nombre))
             _modelos[nombre] = modelo
         ESTADO["whisper_usado"] = nombre
         audio = leer_audio(ruta)
@@ -533,8 +619,24 @@ def transcribir(ruta: Path) -> str:
         segmentos, _info = modelo.transcribe(
             audio, language=w.get("idioma") or None, beam_size=beam,
             vad_filter=True, condition_on_previous_text=False,
+            hotwords=vocabulario() or None,
         )
-        return " ".join(s.text.strip() for s in segmentos if _segmento_valido(s)).strip()
+        partes: list[str] = []
+        marcado = toque_s is None or toque_s <= 3
+        for seg in segmentos:
+            if not _segmento_valido(seg):
+                continue
+            if not marcado and seg.end > toque_s:  # el primer pedazo que llega hasta el toque o después
+                partes.append(MARCA_TOQUE)
+                marcado = True
+            partes.append(seg.text.strip())
+        if not marcado and partes:
+            partes.append(MARCA_TOQUE)  # tocaste al final: todo lo dicho fue antes
+        return " ".join(partes).strip()
+
+
+def sin_marcas(texto: str) -> str:
+    return re.sub(r"\s*\[TOQUE\]\s*", " ", texto or "").strip()
 
 
 def estado_whisper() -> str:
@@ -583,6 +685,9 @@ Reglas:
   No anotes detalles íntimos, de salud o de la vida privada de terceros (lo que {nombre} debe o le
   deben sí se anota, como tarea).
 - Nunca anotes contraseñas, códigos de verificación ni números de tarjeta.
+- No mezcles: si se oyen varias conversaciones o temas, cada tarea y cada dato sale de UNO solo.
+- La transcripción automática se equivoca a veces. Corrige un error solo si el contexto lo deja claro
+  (una marca, una materia, un nombre que ya aparece bien escrito); si no, no adivines.
 - Español claro y corto. Tareas en infinitivo ("Enviar el informe al profe").
 - importancia: 1 (trivial) a 5 (no se puede olvidar).
 
@@ -640,6 +745,12 @@ def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str
             "viernes', 'mañana', '23/10' con la fecha del anuncio). Datos = fechas de exámenes, cambios de horario o "
             "aula, temas e instrucciones. Ignora saludos y frases de cortesía. El título debe decir de qué trata "
             "(por ejemplo 'Examen de química el jueves').")
+    if MARCA_TOQUE in texto:
+        partes.append(
+            f"El teléfono de {nombre} siempre guarda lo último que escuchó; {nombre} tocó «Guardar» donde dice "
+            f"{MARCA_TOQUE}. Lo importante casi siempre está justo antes o justo después de {MARCA_TOQUE} (lo que "
+            f"{nombre} dijo o escuchó en ese momento). Lo de mucho antes puede ser ruido de fondo, la tele u otra "
+            "conversación: úsalo solo si tiene que ver con lo de ese momento.")
     if contexto:
         partes.append(contexto)
     if lugar:
@@ -713,21 +824,60 @@ def _llamar_claude(sistema: str, usuario: str, json_mode: bool = True) -> str:
     return "".join(getattr(b, "text", "") for b in msg.content)
 
 
+_modelos_ollama = {"cuando": 0.0, "lista": None}
+
+
+def modelos_ollama(forzar: bool = False) -> list[str] | None:
+    """Lo que tienes instalado en Ollama (se revisa como mucho cada 2 minutos)."""
+    if forzar or time.time() - _modelos_ollama["cuando"] > 120:
+        _modelos_ollama.update(cuando=time.time(), lista=_ollama_modelos())
+    return _modelos_ollama["lista"]
+
+
+def modelo_chat() -> str:
+    """El modelo que entiende tus momentos: el mejor si ya lo instalaste; si no, el de siempre."""
+    ia = CFG["ia"]
+    mejor = str(ia.get("ollama_mejor") or "").strip()
+    if mejor:
+        instalados = modelos_ollama()
+        if instalados and _tiene(instalados, mejor):
+            return mejor
+    return str(ia["ollama_modelo"])
+
+
+# Modelos que "piensan" antes de responder: en tu CPU eso tarda minutos y no hace falta para anotar.
+_PIENSAN = ("qwen3", "deepseek-r1", "gpt-oss", "gemma4", "magistral", "phi4-reasoning")
+
+
 def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True) -> str:
     ia = CFG["ia"]
+    modelo = modelo_chat()
     pedido = {
-        "model": ia["ollama_modelo"], "stream": False,
+        "model": modelo, "stream": False, "keep_alive": "15m",
         # num_ctx: Ollama trae 2048-4096 de fábrica y recorta en silencio lo que no cabe.
         "options": {"temperature": 0.2, "num_ctx": int(ia.get("ollama_contexto") or 8192)},
         "messages": [{"role": "system", "content": sistema}, {"role": "user", "content": usuario}],
     }
     if json_mode:
         pedido["format"] = "json"
-    cuerpo = json.dumps(pedido).encode()
-    req = urllib.request.Request(ia["ollama_url"].rstrip("/") + "/api/chat", data=cuerpo,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=900) as r:
-        return json.load(r)["message"]["content"]
+    if modelo.lower().startswith(_PIENSAN):
+        pedido["think"] = False
+    url = ia["ollama_url"].rstrip("/") + "/api/chat"
+
+    def pedir(datos: dict) -> str:
+        req = urllib.request.Request(url, data=json.dumps(datos).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=900) as r:
+            return json.load(r)["message"]["content"]
+
+    try:
+        respuesta = pedir(pedido)
+    except urllib.error.HTTPError as ex:
+        if ex.code != 400 or "think" not in pedido:
+            raise
+        pedido.pop("think")  # un Ollama viejo que no conoce "think"
+        respuesta = pedir(pedido)
+    # Por si el modelo igual escribió su razonamiento en la respuesta.
+    return re.sub(r"<think>.*?</think>", "", respuesta or "", flags=re.S).strip()
 
 
 def llamar_ia(sistema: str, usuario: str, json_mode: bool = True) -> str:
@@ -1330,10 +1480,19 @@ def procesar(ruta: Path) -> int | None:
     origen = "voz" if meta.get("origen") == "voz" else "audio"
 
     t0 = time.time()
-    texto = transcribir(ruta)
+    try:
+        toque = float(meta["toque_s"]) if meta.get("toque_s") is not None else None
+    except (TypeError, ValueError):
+        toque = None
+    marcado = transcribir(ruta, toque)  # con la marca [TOQUE] donde tocaste Guardar
+    texto = sin_marcas(marcado)
     log.info("Transcrito %s (%s de audio) en %.0f s", archivo, duracion(dur), time.time() - t0)
     if origen == "voz" and meta.get("texto"):
         texto = f"{meta['texto']}\n{texto}".strip()  # lo que escribiste junto a la nota de voz
+        marcado = f"{meta['texto']}\n{marcado}".strip()
+
+    # ¿Suena a peligro? Va antes que todo lo demás para que la pregunta te llegue rápido.
+    alerta_id = revisar_peligro(marcado, inicio, origen, lugar, lat, lon, archivo)
 
     # Tus notas de voz son tuyas: su texto se guarda siempre. Lo que escucha el teléfono, solo si lo pides.
     guardar_texto = origen == "voz" or bool(CFG["notas"].get("guardar_transcripcion"))
@@ -1344,7 +1503,7 @@ def procesar(ruta: Path) -> int | None:
                               lugar=lugar, info=info, transcripcion=texto or None, ia_ok=True)
     else:
         try:
-            info = extraer(texto, inicio, lugar, origen)
+            info = extraer(marcado, inicio, lugar, origen)
             ia_ok = True
         except Exception as ex:
             log.warning("La IA falló (%s); guardo la transcripción para no perder nada", ex)
@@ -1354,6 +1513,9 @@ def procesar(ruta: Path) -> int | None:
                               lugar=lugar, info=info, transcripcion=texto if (guardar_texto or not ia_ok) else None,
                               ia_ok=ia_ok)
 
+    if alerta_id:
+        with closing(db()) as con, con:
+            con.execute("UPDATE alertas_peligro SET captura_id=? WHERE id=?", (cid, alerta_id))
     actualizar_notas(inicio.date())
     enviar_o_guardar(mensaje_captura(cid))
 
@@ -1369,6 +1531,7 @@ def procesar(ruta: Path) -> int | None:
 
 def procesar_texto(texto: str) -> int:
     cuando = ahora()
+    alerta_id = revisar_peligro(texto, cuando, "texto", None, None, None, None)
     try:
         info = extraer(texto, cuando, None, "texto")
         ia_ok = True
@@ -1380,8 +1543,141 @@ def procesar_texto(texto: str) -> int:
         info["datos"] = [texto[:300]]
     cid = guardar_captura(archivo=None, origen="texto", inicio=cuando, dur=None, lat=None, lon=None,
                           lugar=None, info=info, transcripcion=None, ia_ok=ia_ok)
+    if alerta_id:
+        with closing(db()) as con, con:
+            con.execute("UPDATE alertas_peligro SET captura_id=? WHERE id=?", (cid, alerta_id))
     actualizar_notas(cuando.date())
     return cid
+
+
+# ════════════════════════════ ¿Estás en peligro? ════════════════════════════
+# Eco NUNCA avisa a nadie por su cuenta. Si un momento que guardaste suena a peligro, te pregunta en
+# el teléfono, y solo tú decides —manteniendo presionado el botón— si tus contactos reciben el mensaje.
+# Primero un filtro de palabras (rápido, sin IA); solo si algo coincide, la IA lo revisa con calma.
+
+_SENALES_PELIGRO = re.compile(r"\b(" + "|".join([
+    r"ayuda(me|nme)?", r"ayudenme", r"auxilio", r"socorro", r"emergencia", r"peligro", r"tengo miedo",
+    r"llam\w* (a la policia|al 911|a una ambulancia)", r"911", r"ambulancia", r"policia",
+    r"asalt\w*", r"me robaron", r"robo", r"robar\w*", r"dame (el|tu|todo|la)\b", r"entrega(me|lo|la)",
+    r"pistola", r"arma", r"cuchillo", r"navaja", r"corvo", r"machete", r"disparo\w*", r"balaz\w*", r"balacera",
+    r"me (pegaron|golpearon|apunalaron|dispararon|atropellaron|asaltaron)", r"golpe\w*", r"pelea\w*",
+    r"secuestr\w*", r"extorsi\w*", r"la renta", r"amenaz\w*", r"(te|lo|la|me|nos) (voy|vamos|van) a matar",
+    r"mat(arte|arlo|arla|arme)", r"(me|nos) (estan|esta|vienen|viene) siguiendo", r"me sigue", r"dejame",
+    r"sueltame", r"no me toques", r"accidente", r"choque", r"chocamos", r"atropell\w*", r"me cai",
+    r"sangr\w*", r"desmay\w*", r"inconsciente", r"no (puedo|puede) respirar", r"no respira",
+    r"me duele (mucho )?el pecho", r"convulsi\w*", r"infarto", r"incendio", r"fuego", r"se esta quemando",
+    r"terremoto",
+]) + r")\b")
+
+
+def senales_de_peligro(texto: str) -> list[str]:
+    return sorted({m.group(0) for m in _SENALES_PELIGRO.finditer(_sin_acentos(sin_marcas(texto)))})
+
+
+def _prompt_peligro() -> str:
+    nombre = CFG["usuario"]["nombre"]
+    return f"""Eres el detector de peligro de Eco, el asistente de memoria de {nombre}.
+Recibes la transcripción automática de un momento que {nombre} guardó con su teléfono: puede tener errores
+y no dice quién habla.
+
+Decide si {nombre}, o alguien que está con él, parece estar EN PELIGRO EN ESE MOMENTO: un asalto o robo,
+una amenaza o extorsión, que lo estén siguiendo, una pelea o agresión, un accidente, una emergencia de
+salud, un incendio o un desastre, o alguien pidiendo ayuda de verdad.
+
+NO es peligro: películas, series, videojuegos, canciones, noticias, chistes, clases o tareas sobre esos
+temas, contar algo que ya pasó y terminó bien, o frases como "ayúdame con la tarea".
+Si dudas pero alguien pide ayuda de verdad, hay amenazas o se oye una agresión, márcalo como posible
+(nivel 2): {nombre} siempre confirma antes de que se avise a alguien.
+
+Responde únicamente con un objeto JSON válido:
+{{"peligro": true o false, "nivel": 1, 2 o 3 (1 = casi seguro que no, 2 = posible, 3 = claro),
+ "que_paso": "una oración corta, por ejemplo 'Parece que intentaron asaltar a {nombre}'",
+ "frase": "la frase del audio que lo indica, máximo 15 palabras"}}"""
+
+
+def revisar_peligro(texto: str, cuando: datetime, origen: str, lugar: str | None,
+                    lat: float | None, lon: float | None, archivo: str | None) -> int | None:
+    """Devuelve el id de la alerta si hay que preguntarte "¿estás bien?". Nunca avisa a nadie."""
+    p = CFG["peligro"]
+    if not p.get("activo", True) or origen not in ("audio", "voz", "texto"):
+        return None
+    if ahora() - cuando > timedelta(hours=float(p.get("horas_vigente") or 2)):
+        return None  # lo viejo (la laptop estaba apagada) ya no tiene sentido preguntarlo
+    senales = senales_de_peligro(texto)
+    if not senales:
+        return None
+    try:
+        nombre = CFG["usuario"]["nombre"]
+        partes = [f"Fecha y hora: {fecha_larga(cuando.date())}, {cuando:%H:%M}."]
+        if lugar:
+            partes.append(f"Lugar: {lugar}.")
+        if MARCA_TOQUE in texto:
+            partes.append(f"{nombre} tocó «Guardar» donde dice {MARCA_TOQUE}.")
+        partes.append(f'Transcripción:\n"""\n{texto[-6000:]}\n"""')
+        r = _json_de(llamar_ia(_prompt_peligro(), "\n".join(partes)))
+        peligro = r.get("peligro") is True or str(r.get("peligro")).lower() == "true"
+        nivel = max(1, min(3, int(r.get("nivel") or 1)))
+        que_paso = str(r.get("que_paso") or "").strip()[:200]
+        frase = str(r.get("frase") or "").strip()[:160]
+    except Exception as ex:
+        # Sin IA no hay segunda opinión: con señales claras de pedir ayuda, igual se pregunta.
+        log.warning("No pude revisar el posible peligro con la IA (%s)", ex)
+        fuertes = {"auxilio", "socorro", "ayudenme", "me asaltaron", "me robaron", "no puedo respirar"}
+        if not fuertes.intersection(senales):
+            return None
+        peligro, nivel, que_paso, frase = True, 2, "Se escuchó a alguien pedir ayuda.", ", ".join(senales)[:160]
+    log.info("Revisé un posible peligro (%s): %s, nivel %d", ", ".join(senales)[:80],
+             "sí" if peligro else "no", nivel)
+    if not peligro or nivel < 2:
+        return None
+    with closing(db()) as con, con:
+        aid = con.execute(
+            "INSERT INTO alertas_peligro(archivo, creado, momento, nivel, que_paso, frase, lat, lon) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (archivo, ahora().isoformat(timespec="seconds"), cuando.isoformat(timespec="seconds"), nivel,
+             que_paso or "Algo de lo que se escuchó suena a peligro.", frase, lat, lon)).lastrowid
+    e = html.escape
+    enviar_o_guardar(
+        f"⚠️ <b>¿Estás bien?</b>\n{e(que_paso or 'Algo de lo que guardaste suena a peligro.')}"
+        + (f"\n<i>«{e(frase)}»</i>" if frase else "")
+        + "\n\nSi necesitas ayuda, abre el aviso de Eco en tu teléfono para avisar a tus contactos. "
+          "<b>Nada se manda sin que lo confirmes.</b>\nEmergencias: <b>911</b>.")
+    return aid
+
+
+def _alerta_json(a) -> dict:
+    momento = datetime.fromisoformat(a["momento"]) if a["momento"] else None
+    return {"id": a["id"], "nivel": a["nivel"], "que_paso": a["que_paso"], "frase": a["frase"],
+            "hora": f"{momento:%H:%M}" if momento else None, "creado": a["creado"], "estado": a["estado"],
+            "lat": a["lat"], "lon": a["lon"], "nombre": CFG["usuario"]["nombre"]}
+
+
+def alerta_pendiente() -> dict | None:
+    """La pregunta "¿estás bien?" que el teléfono todavía no te mostró o no respondiste."""
+    limite = (ahora() - timedelta(hours=float(CFG["peligro"].get("horas_vigente") or 2))).isoformat(timespec="seconds")
+    with closing(db()) as con, con:
+        con.execute("UPDATE alertas_peligro SET estado='vencida' WHERE estado='pendiente' AND creado < ?", (limite,))
+        a = con.execute("SELECT * FROM alertas_peligro WHERE estado='pendiente' ORDER BY id DESC LIMIT 1").fetchone()
+    return _alerta_json(a) if a else None
+
+
+def responder_alerta(aid: int, estado: str, enviados: int | None = None) -> bool:
+    """El teléfono cuenta qué decidiste: "enviada" (y a cuántos) o "descartada" (estás bien)."""
+    if estado not in ("enviada", "descartada"):
+        return False
+    with closing(db()) as con, con:
+        fila = con.execute("SELECT * FROM alertas_peligro WHERE id=?", (aid,)).fetchone()
+        if not fila:
+            return False
+        con.execute("UPDATE alertas_peligro SET estado=?, respondido=?, enviados=? WHERE id=?",
+                    (estado, ahora().isoformat(timespec="seconds"), enviados, aid))
+    if estado == "enviada":
+        n = int(enviados or 0)
+        enviar_o_guardar(f"🆘 Avisaste a {n} contacto{'s' if n != 1 else ''} con tu ubicación. "
+                         "Si puedes, llama al <b>911</b>.")
+    elif fila["estado"] == "pendiente":
+        enviar_o_guardar("👍 Marcaste que estás bien. No se avisó a nadie.")
+    return True
 
 
 # ── Fotos (pizarra, cuaderno, hoja de tareas) ──
@@ -3062,15 +3358,21 @@ def revisar_salud(forzar: bool = False) -> None:
 
     # Ollama y sus modelos
     if usa_ollama or _modelo_embed():
-        modelos = _ollama_modelos()
+        modelos = modelos_ollama(forzar=True)
         alerta("ollama", usa_ollama and modelos is None,
                "🔴 <b>Ollama no responde</b>\nLos momentos siguen llegando, pero no se pueden analizar. "
                "Abre <b>Ollama</b> en la laptop (ícono de la llama junto al reloj) o reinicia la laptop.",
                resuelto="✅ Ollama volvió a responder. Lo que quedó pendiente se procesa solo.")
         if modelos is not None:
-            falta = ia["ollama_modelo"] if usa_ollama and not _tiene(modelos, ia["ollama_modelo"]) else None
+            usado = modelo_chat()
+            falta = usado if usa_ollama and not _tiene(modelos, usado) else None
             alerta("modelo_ia", bool(falta),
                    f"🔴 <b>Falta el modelo de IA</b> {e(falta)}\nEn PowerShell: <code>ollama pull {e(falta)}</code>")
+            mejor = str(ia.get("ollama_mejor") or "").strip()
+            alerta("modelo_mejor", usa_ollama and bool(mejor) and not _tiene(modelos, mejor),
+                   f"💡 <b>Eco puede entender mucho mejor</b> lo que guardas (menos errores, no mezcla temas). "
+                   f"Instala un modelo más nuevo (unos 3 GB). En PowerShell:\n<code>ollama pull {e(mejor)}</code>",
+                   resuelto=f"✅ Listo: Eco ya usa {e(mejor)} para entender tus momentos.", repetir_h=24 * 7)
             emb = _modelo_embed()
             alerta("modelo_embed", bool(emb) and not _tiene(modelos, emb),
                    f"💡 Para que «pregúntale a Eco» entienda el significado y no solo palabras exactas, instala "
@@ -3214,7 +3516,7 @@ def api_estado(es_local: bool) -> dict:
         "procesando": ESTADO["procesando"], "en_cola": COLA.qsize(),
         "direccion_fija": f"{fija}:{puerto}" if fija else None,
         "direccion_wifi": f"{ip_local()}:{puerto}",
-        "ia": f"{ia['proveedor']} · {ia['ollama_modelo'] if ia['proveedor'] == 'ollama' else ia['claude_modelo']}",
+        "ia": f"{ia['proveedor']} · {modelo_chat() if ia['proveedor'] == 'ollama' else ia['claude_modelo']}",
         "whisper": estado_whisper(), "whisper_cargado": bool(_modelos),
         "telefono": estado_telefono(), "alertas": [{"clave": k, "texto": t} for k, t in ALERTAS.items()],
         "semantica": estado_semantica() if es_local else None,
@@ -3596,6 +3898,10 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
             return self._json(200, {"ok": True, "nombre": "Eco", "en_cola": COLA.qsize()})
+        if ruta == "/alerta":  # el teléfono pregunta si hay que mostrarte "¿estás bien?"
+            if not self._autorizado():
+                return self._json(401, {"ok": False, "error": "token"})
+            return self._json(200, {"ok": True, "alerta": alerta_pendiente(), "nombre": CFG["usuario"]["nombre"]})
         if ruta in ("/app/version", "/app/eco.apk"):  # la app del teléfono pregunta si hay versión nueva
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
@@ -3637,6 +3943,17 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
         ruta = self.path.split("?")[0]
         if ruta == "/subir":
             return self._subir()
+        if ruta == "/alerta":  # el teléfono cuenta qué decidiste
+            if not self._autorizado():
+                return self._json(401, {"ok": False, "error": "token"})
+            try:
+                largo = min(int(self.headers.get("Content-Length") or 0), 4096)
+                d = json.loads(self.rfile.read(largo) or b"{}")
+                ok = responder_alerta(int(d["id"]), str(d.get("estado")),
+                                      int(d["enviados"]) if d.get("enviados") is not None else None)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                return self._json(400, {"ok": False})
+            return self._json(200 if ok else 404, {"ok": ok})
         if ruta == "/latido":  # la app del teléfono avisa que sigue viva (cada 10 min)
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
@@ -3885,6 +4202,19 @@ def puerto_ocupado(puerto: int) -> bool:
         return False
 
 
+def prioridad_baja() -> None:
+    """Eco usa todos los núcleos para transcribir, pero con prioridad "por debajo de lo normal":
+    si tú estás usando la laptop, Windows te da preferencia a ti y no se traba."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
+    except Exception:
+        pass
+
+
 def arrancar(consola: bool = True) -> ServidorEco:
     """Prepara todo y devuelve el servidor listo para serve_forever()."""
     configurar(cargar_config(BASE / "config.toml"))
@@ -3896,6 +4226,7 @@ def arrancar(consola: bool = True) -> ServidorEco:
         raise YaEncendido(puerto)
     servidor = ServidorEco(("0.0.0.0", puerto), Manejador)
     ESTADO["inicio"] = ahora().isoformat(timespec="seconds")
+    prioridad_baja()
     global CLASE
     from clase import GrabadoraClase
     CLASE = GrabadoraClase(ENTRADA, COLA.put, log,

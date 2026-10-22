@@ -13,16 +13,18 @@ puerto = 8765
 token = "cambia-esto-por-una-clave-larga"
 
 [whisper]
-# tiny / base / small / medium. "small" es el equilibrio para tu Ryzen 5.
-# Si tarda mucho, prueba "base"; si se equivoca mucho, "medium" (más lento).
+# Con batería: tiny / base / small / medium. "small" es el equilibrio para tu Ryzen 5.
 modelo = "small"
 idioma = "es"
 beam = 1        # 1 = rápido. 3-5 = un poco más preciso y más lento.
-hilos = 0       # 0 = automático
-# Con la laptop enchufada usa un modelo más preciso (se baja solo la primera vez, ~1.5 GB).
+hilos = 0       # 0 = automático (enchufada usa todos los núcleos, con prioridad baja)
+# Con la laptop enchufada usa el más preciso (se baja solo la primera vez, ~1.6 GB).
+# "large-v3-turbo" es casi tan bueno como el más grande de Whisper y bastante más rápido.
 # "" = usar siempre el de arriba.
-modelo_corriente = "medium"
-beam_corriente = 2
+modelo_preciso = "large-v3-turbo"
+beam_preciso = 3
+# Nombres o palabras raras que dices seguido (Eco ya usa tus clases y los nombres que anotó).
+palabras = []   # por ejemplo ["Steven", "Market Conexión", "Tinkercad"]
 
 [ia]
 # "claude" (mejor calidad, necesita internet y una API key)
@@ -31,6 +33,7 @@ proveedor = "claude"
 claude_modelo = "claude-haiku-5-5"
 claude_api_key = ""             # o deja vacío y usa la variable de entorno ANTHROPIC_API_KEY
 ollama_modelo = "qwen2.5:3b"
+ollama_mejor = "qwen3.5:4b"     # si lo instalas (ollama pull qwen3.5:4b), Eco lo usa: entiende mucho mejor
 ollama_vision = "qwen2.5vl:3b"  # lee las fotos que le mandas al bot (ollama pull qwen2.5vl:3b)
 ollama_embed = "embeddinggemma" # entiende el significado al preguntarle a Eco (ollama pull embeddinggemma)
 ollama_url = "http://localhost:11434"
@@ -64,6 +67,12 @@ clase_auto_terminar_min = 20    # la clase se termina sola tras este tiempo en s
 activo = true
 carpeta = ""        # vacío = tu OneDrive\Eco respaldos
 conservar = 14      # cuántas copias diarias guardar
+
+[peligro]
+# Si algo que guardaste suena a peligro, Eco te pregunta en el teléfono si quieres avisar a tus
+# contactos de emergencia. Nunca les manda nada sin que lo confirmes (manteniendo presionado el botón).
+activo = true
+horas_vigente = 2         # después de esto la pregunta ya no aparece
 
 [salud]
 alertas = true            # avisos por Telegram cuando algo deja de funcionar

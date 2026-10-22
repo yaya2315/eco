@@ -59,7 +59,10 @@ class MainActivity : Activity() {
     companion object {
         const val EXTRA_AUTOSTART = "autostart"
         const val EXTRA_ACTUALIZAR = "actualizar"
+        const val EXTRA_SECCION = "seccion"
         private const val REQ_PERMS = 10
+        private const val REQ_CONTACTO = 11
+        private const val REQ_SMS = 12
 
         // Paleta (contrastes verificados contra el fondo: texto 17:1, secundario 8:1).
         private const val C_BG = 0xFF0A0A12.toInt()
@@ -80,7 +83,8 @@ class MainActivity : Activity() {
         private const val S_MOMENTO = 1
         private const val S_PERMISOS = 2
         private const val S_BATERIA = 3
-        private val SECCIONES = arrayOf("Tu laptop", "Duración del momento", "Permisos", "Batería")
+        private const val S_EMERGENCIA = 4
+        private val SECCIONES = arrayOf("Tu laptop", "Duración del momento", "Permisos", "Batería", "Emergencia")
 
         /** "Antes" va de 15 s a 5 min y "después" de 0 a 5 min, de 15 en 15 segundos. */
         private const val PASO_SEG = 15
@@ -138,6 +142,13 @@ class MainActivity : Activity() {
     private lateinit var filaCarga: Fila
     private lateinit var batteryButton: Button
 
+    // Emergencia
+    private lateinit var contactosLista: LinearLayout
+    private lateinit var contactosTitulo: TextView
+    private lateinit var agregarContacto: Button
+    private lateinit var filaSms: Fila
+    private lateinit var smsButton: Button
+
     private var haloAnim: AnimatorSet? = null
     private var haloColor = 0
     private var lastUpdateCheck = 0L
@@ -152,6 +163,7 @@ class MainActivity : Activity() {
         setContentView(buildUi())
         // Primera vez: abre "Tu laptop", que es lo único que hay que configurar.
         if (savedInstanceState == null && prefs.server.isBlank()) seccionAbierta = S_LAPTOP
+        if (intent?.getStringExtra(EXTRA_SECCION) == "emergencia") seccionAbierta = S_EMERGENCIA
         paintSections()
         autostartPending = intent?.getBooleanExtra(EXTRA_AUTOSTART, false) == true
         installWhenFound = intent?.getBooleanExtra(EXTRA_ACTUALIZAR, false) == true
@@ -167,6 +179,7 @@ class MainActivity : Activity() {
             autostartPending = true
             tryAutostart()
         }
+        if (intent?.getStringExtra(EXTRA_SECCION) == "emergencia") openSection(S_EMERGENCIA)
         if (intent?.getBooleanExtra(EXTRA_ACTUALIZAR, false) == true) {
             installWhenFound = true
             lastUpdateCheck = 0L
@@ -228,6 +241,13 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_SMS) {
+            refreshPerms()
+            if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+                toast("Sin ese permiso, la alerta se manda por WhatsApp u otra app (tú eliges a quién)")
+            }
+            return
+        }
         refreshPerms()
         if (!hasMic()) toast("Sin el micrófono Eco no puede escuchar")
         tryAutostart()
@@ -262,6 +282,7 @@ class MainActivity : Activity() {
         val sinLimite = sinLimiteDeBateria()
         paintRow(filaSinLimite, sinLimite)
         batteryButton.visibility = if (sinLimite) View.GONE else View.VISIBLE
+        pintarContactos()
         paintSections()
     }
 
@@ -727,7 +748,7 @@ class MainActivity : Activity() {
         }
         val iconos = intArrayOf(
             R.drawable.ic_seccion_laptop, R.drawable.ic_seccion_momento,
-            R.drawable.ic_seccion_permisos, R.drawable.ic_seccion_bateria,
+            R.drawable.ic_seccion_permisos, R.drawable.ic_seccion_bateria, R.drawable.ic_seccion_emergencia,
         )
         for (i in SECCIONES.indices) {
             dock.addView(sectionButton(i, iconos[i]), LinearLayout.LayoutParams(0, dp(56), 1f).apply {
@@ -735,7 +756,7 @@ class MainActivity : Activity() {
             })
         }
         wrap.addView(dock)
-        listOf(buildConnectionCard(), buildMomentCard(), buildPermsCard(), buildBatteryCard()).forEach {
+        listOf(buildConnectionCard(), buildMomentCard(), buildPermsCard(), buildBatteryCard(), buildEmergencyCard()).forEach {
             it.visibility = View.GONE
             seccionPaneles += it
             wrap.addView(it, lp(top = 10))
@@ -823,6 +844,7 @@ class MainActivity : Activity() {
             prefs.dobleVolumen && EcoState.volumenEstado == "sin_audio",
             !hasMic() || !hasNotifications(),
             !sinLimiteDeBateria(),
+            emergenciaIncompleta(),
         )
         val cambio = seccionPintada != seccionAbierta
         for (i in seccionBotones.indices) {
@@ -1163,6 +1185,200 @@ class MainActivity : Activity() {
             lp(top = 8)
         )
         return card
+    }
+
+    // ───────────────────────── Emergencia ─────────────────────────
+
+    private fun hasSms() = has(Manifest.permission.SEND_SMS)
+
+    /** Puntito ámbar: activaste la pregunta pero no hay a quién avisar, o falta el permiso de SMS. */
+    private fun emergenciaIncompleta(): Boolean {
+        val n = Emergencia.contactos(prefs).size
+        return (prefs.detectarPeligro && n == 0) || (n > 0 && !hasSms())
+    }
+
+    private fun buildEmergencyCard(): View {
+        val card = panelCard(S_EMERGENCIA)
+        card.addView(
+            label("Si algo que guardas suena a peligro, Eco te pregunta «¿Estás bien?». Tus contactos solo reciben " +
+                "un SMS con tu ubicación si tú mantienes presionado el botón.", 13f, C_MUTED).apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 6)
+        )
+        val estados = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        card.addView(Switch(this).apply {
+            text = "Preguntarme si estoy en peligro"
+            textSize = 15f
+            setTextColor(C_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            isChecked = prefs.detectarPeligro
+            minHeight = dp(48)
+            thumbTintList = ColorStateList(estados, intArrayOf(0xFFFFFFFF.toInt(), C_MUTED))
+            trackTintList = ColorStateList(estados, intArrayOf(C_ACCENT, C_BORDER))
+            setOnCheckedChangeListener { _, activo ->
+                prefs.detectarPeligro = activo
+                paintSections()
+            }
+        }, lp(top = 8))
+
+        card.addView(overline("TU NOMBRE EN EL MENSAJE"), lp(top = 12))
+        card.addView(input("Tu nombre", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS).apply {
+            setText(prefs.nombre)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) { prefs.nombre = s?.toString().orEmpty() }
+            })
+        }, lp(top = 6))
+
+        contactosTitulo = overline("CONTACTOS")
+        card.addView(contactosTitulo, lp(top = 16))
+        contactosLista = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        card.addView(contactosLista, lp(top = 4))
+        agregarContacto = button("Agregar contacto", primary = false) { elegirContacto() }
+        card.addView(agregarContacto, lp(top = 8))
+        filaSms = statusRow(card, "Permiso para mandar SMS", top = 8)
+        smsButton = button("Dar permiso de SMS", primary = false) { requestPermissions(arrayOf(Manifest.permission.SEND_SMS), REQ_SMS) }
+        card.addView(smsButton, lp(top = 4))
+
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row.addView(button("Enviar prueba", primary = false) { abrirEmergencia(Emergencia.MODO_PRUEBA) },
+            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        row.addView(Button(this).apply {
+            text = "Avisar ahora"
+            isAllCaps = false
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            minHeight = dp(48)
+            minimumHeight = dp(48)
+            stateListAnimator = null
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setTextColor(0xFF1A0A0F.toInt())
+            background = ripple(rounded(C_REC, 14), 14)
+            setOnClickListener { abrirEmergencia(Emergencia.MODO_MANUAL) }
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
+        card.addView(row, lp(top = 16))
+        card.addView(
+            label("«Avisar ahora» abre la pantalla de emergencia: ahí también hay que mantener el botón. " +
+                "Cada SMS lo cobra tu plan como un mensaje normal.", 12f, C_MUTED).apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 10)
+        )
+        return card
+    }
+
+    private fun abrirEmergencia(modo: String) {
+        startActivity(Intent(this, EmergenciaActivity::class.java).putExtra(Emergencia.EXTRA_MODO, modo))
+    }
+
+    private fun pintarContactos() {
+        if (!::contactosLista.isInitialized) return
+        val lista = Emergencia.contactos(prefs)
+        contactosTitulo.text = if (lista.isEmpty()) "CONTACTOS" else "CONTACTOS · ${lista.size} DE ${Emergencia.MAX_CONTACTOS}"
+        contactosLista.removeAllViews()
+        if (lista.isEmpty()) {
+            contactosLista.addView(label("Todavía nadie. Agrega a quien quieres que le llegue tu ubicación si algo pasa.",
+                13f, C_WARN).apply { setLineSpacing(0f, 1.2f) }, lp(top = 4))
+        }
+        lista.forEachIndexed { i, c ->
+            val fila = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(52)
+            }
+            val textos = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            textos.addView(label(c.nombre, 15f, C_TEXT))
+            textos.addView(label(c.numero, 13f, C_MUTED))
+            fila.addView(textos, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            fila.addView(TextView(this).apply {
+                text = "✕"
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setTextColor(C_MUTED)
+                contentDescription = "Quitar a ${c.nombre}"
+                background = ripple(rounded(0x00000000, 24), 24)
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    Emergencia.guardarContactos(prefs, lista.filterIndexed { j, _ -> j != i })
+                    pintarContactos()
+                    paintSections()
+                    toast("Quitaste a ${c.nombre}")
+                }
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            contactosLista.addView(fila)
+        }
+        agregarContacto.visibility = if (lista.size >= Emergencia.MAX_CONTACTOS) View.GONE else View.VISIBLE
+        val conSms = hasSms()
+        filaSms.fila.visibility = if (lista.isEmpty()) View.GONE else View.VISIBLE
+        paintRow(filaSms, conSms)
+        smsButton.visibility = if (lista.isNotEmpty() && !conSms) View.VISIBLE else View.GONE
+    }
+
+    /** Abre tus contactos para elegir uno (Eco no lee tu agenda: solo el que tú tocas). */
+    private fun elegirContacto() {
+        try {
+            startActivityForResult(
+                Intent(Intent.ACTION_PICK, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI),
+                REQ_CONTACTO
+            )
+        } catch (_: Exception) {
+            contactoAMano()
+        }
+    }
+
+    private fun contactoAMano() {
+        val caja = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val nombre = input("Nombre", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS)
+        val numero = input("Número, p. ej. 7123 4567", InputType.TYPE_CLASS_PHONE)
+        caja.addView(nombre)
+        caja.addView(numero, lp(top = 8))
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Agregar contacto")
+            .setView(caja)
+            .setPositiveButton("Agregar") { _, _ -> agregar(nombre.text.toString(), numero.text.toString()) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun agregar(nombre: String, numeroCrudo: String) {
+        val numero = Emergencia.limpiarNumero(numeroCrudo)
+        if (numero.count { it.isDigit() } < 7) {
+            toast("Ese número no parece completo")
+            return
+        }
+        val lista = Emergencia.contactos(prefs)
+        if (lista.any { it.numero == numero }) {
+            toast("Ya está en tu lista")
+            return
+        }
+        Emergencia.guardarContactos(prefs, lista + Emergencia.Contacto(nombre.trim().ifEmpty { numero }, numero))
+        pintarContactos()
+        paintSections()
+        toast("Agregaste a ${nombre.trim().ifEmpty { numero }}")
+        if (!hasSms()) requestPermissions(arrayOf(Manifest.permission.SEND_SMS), REQ_SMS)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_CONTACTO || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try {
+            contentResolver.query(
+                uri,
+                arrayOf(
+                    android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER,
+                ),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) agregar(c.getString(0) ?: "", c.getString(1) ?: "")
+            }
+        } catch (_: Exception) {
+            toast("No pude leer ese contacto; escríbelo a mano")
+            contactoAMano()
+        }
     }
 
     /** Panel de una sección: tarjeta con su nombre arriba, en pequeño. */

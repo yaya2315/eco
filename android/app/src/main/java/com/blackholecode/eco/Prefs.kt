@@ -41,6 +41,26 @@ class Prefs(context: Context) {
         get() = sp.getInt(K_PRESTADO, 0)
         set(value) = sp.edit().putInt(K_PRESTADO, value.coerceAtLeast(0)).apply()
 
+    /** Contactos de emergencia (nombre y número), en JSON. Solo viven en el teléfono. */
+    var contactosJson: String
+        get() = sp.getString(K_CONTACTOS, "[]") ?: "[]"
+        set(value) = sp.edit().putString(K_CONTACTOS, value).apply()
+
+    /** Preguntarte "¿estás bien?" cuando la laptop escucha algo que suena a peligro. */
+    var detectarPeligro: Boolean
+        get() = sp.getBoolean(K_PELIGRO, true)
+        set(value) = sp.edit().putBoolean(K_PELIGRO, value).apply()
+
+    /** La última pregunta de la laptop que ya te mostramos (para no repetirla). */
+    var alertaVista: Long
+        get() = sp.getLong(K_ALERTA_VISTA, 0L)
+        set(value) = sp.edit().putLong(K_ALERTA_VISTA, value).apply()
+
+    /** Tu nombre en el mensaje de emergencia. */
+    var nombre: String
+        get() = sp.getString(K_NOMBRE, "") ?: ""
+        set(value) = sp.edit().putString(K_NOMBRE, value.trim().take(40)).apply()
+
     /** Última versión nueva de la que ya avisamos (para no repetir el aviso). */
     var avisoVersion: Long
         get() = sp.getLong(K_AVISO, 0L)
@@ -60,5 +80,9 @@ class Prefs(context: Context) {
         private const val K_AVISO = "aviso_version"
         private const val K_DOBLE_VOLUMEN = "doble_volumen"
         private const val K_PRESTADO = "volumen_prestado"
+        private const val K_CONTACTOS = "contactos_emergencia"
+        private const val K_PELIGRO = "detectar_peligro"
+        private const val K_ALERTA_VISTA = "alerta_vista"
+        private const val K_NOMBRE = "nombre"
     }
 }

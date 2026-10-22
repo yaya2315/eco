@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Solo para el mensaje de emergencia, y solo cuando tú lo confirmas manteniendo el botón. -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <!-- Para instalar la versión nueva de Eco que te pasa tu laptop (Android pide confirmarlo). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
@@ -43,6 +46,19 @@
                 <data android:scheme="eco" android:host="conectar" />
             </intent-filter>
         </activity>
+
+        <!-- Emergencia: "¿Estás bien?" y el botón que hay que mantener para avisar a tus contactos -->
+        <activity
+            android:name=".EmergenciaActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.blackholecode.eco.emergencia" />
+
+        <!-- "Estoy bien" desde la notificación -->
+        <receiver
+            android:name=".AlertaReceiver"
+            android:exported="false" />
 
         <!-- Que Play Services descargue el escáner de QR al instalar la app, no al primer uso -->
         <meta-data

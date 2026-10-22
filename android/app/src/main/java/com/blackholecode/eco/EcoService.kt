@@ -75,6 +75,8 @@ class EcoService : Service() {
         private const val UPDATE_EVERY_ROUNDS = 90
         /** Cada cuántas vueltas se avisa a la laptop "sigo vivo": 10 min. */
         private const val LATIDO_EVERY_ROUNDS = 5
+        private const val ALERTA_RAPIDA_MS = 20_000L
+        private const val VIGILAR_MS = 10 * 60_000L
         private const val ACCENT = 0xFF6B5BF5.toInt()
 
         /** Pausa automática por batería: a este % sin cargador se pausa; vuelve al cargar o al pasar de 25 %. */
@@ -105,10 +107,12 @@ class EcoService : Service() {
                     description = "Cuando Eco se detiene, se actualiza o necesita que lo reactives"
                 }
             )
+            Emergencia.crearCanal(context)
         }
     }
 
-    private class Clip(val pcm: ShortArray, val startMs: Long, val location: Location?)
+    /** toqueS: en qué segundo del audio tocaste Guardar (a la IA le dice qué es lo tuyo y qué era fondo). */
+    private class Clip(val pcm: ShortArray, val startMs: Long, val location: Location?, val toqueS: Double)
 
     private lateinit var prefs: Prefs
     private val main = Handler(Looper.getMainLooper())
@@ -120,6 +124,7 @@ class EcoService : Service() {
     private var total = 0L          // muestras escritas desde que se abrió el micrófono
     private var saveStart = -1L     // rango del momento pendiente [saveStart, saveEnd)
     private var saveEnd = -1L
+    private var saveTap = -1L       // muestra en la que tocaste Guardar
     private var activeBefore = Prefs.DEFAULT_BEFORE
     private var activeAfter = Prefs.DEFAULT_AFTER
 
@@ -478,9 +483,11 @@ class EcoService : Service() {
             src = (src + c) % size
         }
         val startMs = System.currentTimeMillis() - (total - start) * 1000L / SAMPLE_RATE
+        val toqueS = if (saveTap >= start) (saveTap - start).toDouble() / SAMPLE_RATE else 0.0
         saveStart = -1
         saveEnd = -1
-        return Clip(out, startMs, lastLocation)
+        saveTap = -1
+        return Clip(out, startMs, lastLocation, toqueS)
     }
 
     private fun finishPendingSaveNow() {
@@ -505,6 +512,7 @@ class EcoService : Service() {
             if (saveEnd < 0) {
                 saveStart = max(0L, total - activeBefore.toLong() * SAMPLE_RATE)
                 saveEnd = total + activeAfter.toLong() * SAMPLE_RATE
+                saveTap = total
             } else {
                 // Tocar otra vez mientras se guarda = alargar el momento.
                 saveEnd = min(saveStart + maxLen, total + activeAfter.toLong() * SAMPLE_RATE)
@@ -526,6 +534,7 @@ class EcoService : Service() {
         val meta = JSONObject()
             .put("inicio_ms", clip.startMs)
             .put("duracion_s", clip.pcm.size.toDouble() / SAMPLE_RATE)
+            .put("toque_s", clip.toqueS)
             .put("app", "eco-android-1")
         clip.location?.let {
             meta.put("lat", it.latitude)
@@ -540,7 +549,10 @@ class EcoService : Service() {
 
         val hora = SimpleDateFormat("HH:mm", Locale.US).format(Date())
         EcoState.lastSaved = "Guardado a las $hora · ${formatDuration(clip.pcm.size / SAMPLE_RATE)}"
-        main.post { refreshNotification() }
+        main.post {
+            refreshNotification()
+            vigilarAlertas()
+        }
         uploadPending()
     }
 
@@ -709,11 +721,46 @@ class EcoService : Service() {
             val ronda = uploadRounds++
             runIo {
                 uploadPending()
+                revisarAlerta()
                 if (ronda % LATIDO_EVERY_ROUNDS == 0) latido(estadoTexto())
                 if (ronda % UPDATE_EVERY_ROUNDS == 0) checkForUpdate()
             }
             main.postDelayed(this, UPLOAD_EVERY_MS)
         }
+    }
+
+    // ───────────────────────── ¿Estás bien? ─────────────────────────
+    // La laptop puede detectar que algo suena a peligro. Aquí solo se MUESTRA la pregunta: el mensaje a
+    // tus contactos sale únicamente desde la pantalla de emergencia, manteniendo presionado el botón.
+
+    private var vigilarHasta = 0L
+    private val vigilar = object : Runnable {
+        override fun run() {
+            if (!EcoState.running || SystemClock.uptimeMillis() > vigilarHasta) return
+            runIo { revisarAlerta() }
+            main.postDelayed(this, ALERTA_RAPIDA_MS)
+        }
+    }
+
+    /** Después de guardar un momento, pregunta seguido (cada 20 s) mientras la laptop lo analiza. */
+    private fun vigilarAlertas() {
+        if (!prefs.detectarPeligro) return
+        vigilarHasta = SystemClock.uptimeMillis() + VIGILAR_MS
+        main.removeCallbacks(vigilar)
+        main.postDelayed(vigilar, ALERTA_RAPIDA_MS)
+    }
+
+    private fun revisarAlerta() {
+        if (!prefs.detectarPeligro || prefs.server.isBlank()) return
+        val r = Net.alerta(prefs.server, prefs.token) ?: return
+        val nombre = r.optString("nombre").trim()
+        if (prefs.nombre.isBlank() && nombre.isNotEmpty() && nombre != "el usuario") prefs.nombre = nombre
+        val a = r.optJSONObject("alerta") ?: return
+        val id = a.optLong("id", -1L)
+        if (id <= prefs.alertaVista) return
+        prefs.alertaVista = id
+        fun texto(k: String) = if (a.isNull(k)) "" else a.optString(k)
+        main.post { Emergencia.mostrarAviso(this, id, texto("que_paso"), texto("frase"), texto("hora")) }
     }
 
     private fun estadoTexto(): String = when {
