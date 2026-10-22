@@ -147,11 +147,80 @@ COLA: "queue.Queue" = queue.Queue()
 CLASE = None  # grabadora del modo clase (se crea al arrancar)
 
 
+_TABLA = re.compile(r"^\s*\[\s*([A-Za-z0-9_.\- ]+?)\s*\]\s*(#.*)?$")
+_TABLA_LISTA = re.compile(r"^\s*\[\[")
+_CLAVE_TOML = re.compile(r"^\s*([A-Za-z0-9_\-]+)\s*=")
+CONFIG_ARREGLADA: list[str] = []  # avisos para el registro (cargar_config corre antes que los logs)
+
+
+def arreglar_toml(texto: str) -> str:
+    """Arregla el error más común al editar config.toml a mano: pegar una sección que ya existía
+    ([usuario] dos veces) o repetir un valor. Junta la sección repetida con la primera y, si un valor
+    aparece dos veces, vale el de más abajo (el de arriba queda como comentario). No borra nada más."""
+    bloques: list[list] = [[None, []]]  # [nombre de la tabla, líneas]; el primero es lo de antes de cualquier tabla
+    listas = 0
+    for linea in texto.splitlines():
+        if _TABLA_LISTA.match(linea):  # [[lugares]] se puede repetir: nunca se junta
+            listas += 1
+            bloques.append([f"[[{listas}]]", [linea]])
+            continue
+        m = _TABLA.match(linea)
+        if m:
+            bloques.append([m.group(1).strip(), [linea]])
+        else:
+            bloques[-1][1].append(linea)
+    vistos: dict[str, list] = {}
+    salida: list[list] = []
+    for nombre, lineas in bloques:
+        if nombre and not nombre.startswith("[[") and nombre in vistos:
+            primero = vistos[nombre][1]
+            while primero and not primero[-1].strip():  # sin dejar huecos en medio
+                primero.pop()
+            primero += [f"# (Eco juntó aquí el [{nombre}] que estaba repetido más abajo)"] + lineas[1:]
+            continue
+        bloque = [nombre, list(lineas)]
+        salida.append(bloque)
+        if nombre:
+            vistos[nombre] = bloque
+    for bloque in salida:
+        lineas = bloque[1]
+        ultima: dict[str, int] = {}
+        for i, linea in enumerate(lineas):
+            m = _CLAVE_TOML.match(linea)
+            if m:
+                ultima[m.group(1)] = i
+        bloque[1] = [
+            f"# {linea}   (repetido: vale el de más abajo)"
+            if (m := _CLAVE_TOML.match(linea)) and ultima[m.group(1)] != i else linea
+            for i, linea in enumerate(lineas)
+        ]
+    return "\n".join(linea for b in salida for linea in b[1]).rstrip("\n") + "\n"
+
+
 def cargar_config(ruta: Path) -> dict:
     cfg = json.loads(json.dumps(DEFAULTS))
     if ruta.exists():
-        with open(ruta, "rb") as f:
-            leido = tomllib.load(f)
+        texto = ruta.read_bytes().decode("utf-8-sig")  # el Bloc de notas a veces agrega una marca invisible
+        try:
+            leido = tomllib.loads(texto)
+        except tomllib.TOMLDecodeError as ex:
+            arreglado = arreglar_toml(texto)
+            try:
+                leido = tomllib.loads(arreglado)
+            except tomllib.TOMLDecodeError:
+                raise ConfigIncompleta(
+                    f"Hay un error en config.toml:\n{ex}\n\nÁbrelo con el Bloc de notas (servidor\\config.toml), "
+                    "corrige esa línea y vuelve a abrir Eco.") from ex
+            # Copia del original en datos\ (no se sube a GitHub) y el archivo queda arreglado.
+            copia = ruta.parent / "datos" / f"{ruta.name}.antes"
+            try:
+                copia.parent.mkdir(parents=True, exist_ok=True)
+                copia.write_text(texto, encoding="utf-8")
+                ruta.write_text(arreglado, encoding="utf-8")
+                CONFIG_ARREGLADA.append(f"config.toml tenía un error ({ex}); lo arreglé solo. "
+                                        f"El original quedó en {copia}")
+            except OSError:
+                CONFIG_ARREGLADA.append(f"config.toml tiene un error ({ex}); lo corregí en memoria")
         for clave, valor in leido.items():
             if isinstance(valor, dict) and isinstance(cfg.get(clave), dict):
                 cfg[clave].update(valor)
@@ -4221,6 +4290,8 @@ def arrancar(consola: bool = True) -> ServidorEco:
     """Prepara todo y devuelve el servidor listo para serve_forever()."""
     configurar(cargar_config(BASE / "config.toml"))
     preparar_logs(consola)
+    for aviso_config in CONFIG_ARREGLADA:
+        log.warning(aviso_config)
     if str(CFG["servidor"]["token"]) == TOKEN_DE_EJEMPLO:
         raise ConfigIncompleta("Cambia el token de ejemplo en config.toml antes de encender Eco.")
     puerto = int(CFG["servidor"]["puerto"])
