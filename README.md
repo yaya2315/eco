@@ -263,6 +263,8 @@ Cada vez que GitHub compila una versión nueva de la app, la laptop la baja sola
 
 > Esta versión de la app es la que trae el botón **Actualizar**: instálala a mano una última vez, como siempre (paso 2 y 3). Las siguientes llegan solas.
 
+**Si el teléfono no ve la laptop** (otra red, Tailscale apagado), bájala directo de GitHub: en el teléfono abre `github.com/yaya2315/eco/releases/latest`, toca **Eco-1.3.N.apk** e instálala encima. No pierdes tus ajustes ni tus contactos. Cada versión que compila Actions aparece ahí sola.
+
 ---
 
 ## Uso diario

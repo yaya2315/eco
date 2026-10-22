@@ -2,12 +2,16 @@ name: Construir APK de Eco
 
 # Se ejecuta cada vez que haces push con cambios en la app, o a mano desde la pestaña Actions.
 # La laptop baja este APK sola y se lo ofrece al teléfono (sección 11 del README).
+# Además queda en "Releases" del repositorio, para bajarlo directo desde el teléfono.
 on:
   push:
     paths:
       - "android/**"
       - ".github/workflows/apk.yml"
   workflow_dispatch:
+
+permissions:
+  contents: write   # para publicar el APK en Releases
 
 jobs:
   apk:
@@ -48,3 +52,19 @@ jobs:
             android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/apk/debug/version.json
           retention-days: 30
+
+      - name: Nombre del APK para Releases
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "Eco-${ECO_VERSION_NAME}.apk"
+
+      - name: Publicar en Releases (se baja directo en el teléfono)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.ECO_VERSION_NAME }}
+          name: Eco ${{ env.ECO_VERSION_NAME }}
+          target_commitish: ${{ github.sha }}
+          make_latest: "true"
+          files: Eco-${{ env.ECO_VERSION_NAME }}.apk
+          body: |
+            ${{ github.event.head_commit.message }}
+
+            **Para instalarla en el teléfono:** toca `Eco-${{ env.ECO_VERSION_NAME }}.apk` aquí abajo, ábrelo e instálala encima de la que tienes. No pierdes tus ajustes ni tus contactos.
