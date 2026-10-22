@@ -149,6 +149,8 @@ class MainActivity : Activity() {
     private lateinit var filaSms: Fila
     private lateinit var smsButton: Button
     private lateinit var notaWhatsapp: TextView
+    private lateinit var filaAuto: Fila
+    private lateinit var autoButton: Button
 
     private var haloAnim: AnimatorSet? = null
     private var haloColor = 0
@@ -1195,7 +1197,30 @@ class MainActivity : Activity() {
     /** Puntito ámbar: activaste la pregunta pero no hay a quién avisar, o falta el permiso de SMS. */
     private fun emergenciaIncompleta(): Boolean {
         val n = Emergencia.contactos(prefs).size
-        return (prefs.detectarPeligro && n == 0) || (n > 0 && !hasSms())
+        return (prefs.detectarPeligro && n == 0) || (n > 0 && !hasSms()) || (n > 0 && faltaWhatsappAutomatico())
+    }
+
+    private fun faltaWhatsappAutomatico() =
+        prefs.usarWhatsapp && Emergencia.paqueteWhatsapp(this) != null && !EnvioWhatsapp.activo(this)
+
+    /** Lleva a Ajustes › Accesibilidad para activar "Eco: alerta por WhatsApp". */
+    private fun activarWhatsappAutomatico() {
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("WhatsApp sin tocar nada")
+            .setMessage("En la siguiente pantalla busca «Eco: alerta por WhatsApp» (puede estar dentro de " +
+                "«Apps descargadas» o «Servicios instalados») y actívalo.\n\nSolo actúa cuando mantienes el botón rojo " +
+                "para avisar a tus contactos: toca Enviar en WhatsApp por ti. No lee tus chats ni hace nada más.\n\n" +
+                "Si Android dice que es un «ajuste restringido»: Ajustes › Apps › Eco › ⋮ (arriba a la derecha) › " +
+                "Permitir ajustes restringidos, y vuelve a intentarlo.")
+            .setPositiveButton("Ir a Accesibilidad") { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (_: Exception) {
+                    openAppSettings()
+                }
+            }
+            .setNegativeButton("Ahora no", null)
+            .show()
     }
 
     private fun buildEmergencyCard(): View {
@@ -1241,6 +1266,9 @@ class MainActivity : Activity() {
         card.addView(interruptor("Por WhatsApp", prefs.usarWhatsapp) { prefs.usarWhatsapp = it; pintarContactos() }, lp(top = 2))
         notaWhatsapp = label("", 12f, C_MUTED).apply { setLineSpacing(0f, 1.2f) }
         card.addView(notaWhatsapp, lp())
+        filaAuto = statusRow(card, "WhatsApp sin tocar nada", top = 4)
+        autoButton = button("Activar envío automático", primary = true) { activarWhatsappAutomatico() }
+        card.addView(autoButton, lp(top = 4))
         card.addView(interruptor("SMS también con internet", prefs.smsSiempre) { prefs.smsSiempre = it }, lp(top = 6))
         card.addView(label("El SMS llega sin que toques nada más. Sin internet, Eco siempre usa SMS (y reintenta si no hay señal).",
             12f, C_MUTED).apply { setLineSpacing(0f, 1.2f) }, lp())
@@ -1331,12 +1359,19 @@ class MainActivity : Activity() {
         }
         agregarContacto.visibility = if (lista.size >= Emergencia.MAX_CONTACTOS) View.GONE else View.VISIBLE
         val tieneWhatsapp = Emergencia.paqueteWhatsapp(this) != null
+        val auto = EnvioWhatsapp.activo(this)
         notaWhatsapp.text = when {
             !tieneWhatsapp -> "No encontré WhatsApp en este teléfono: se avisa por SMS."
             !prefs.usarWhatsapp -> "Apagado: solo SMS."
-            else -> "WhatsApp no deja que una app mande mensajes sola: Eco te abre cada chat con el mensaje listo " +
-                "y tú tocas Enviar. Sin internet, WhatsApp lo manda cuando vuelve la conexión."
+            auto -> "Al confirmar una alerta, Eco abre el chat de cada contacto y toca Enviar por ti. " +
+                "Si el teléfono tiene PIN, te lo pide una vez. Sin internet, WhatsApp lo manda cuando vuelve la conexión."
+            else -> "WhatsApp no deja que una app mande mensajes sola. Activa el envío automático para que Eco " +
+                "toque Enviar por ti; si no, te abre cada chat y tú lo tocas."
         }
+        val mostrarAuto = tieneWhatsapp && prefs.usarWhatsapp
+        filaAuto.fila.visibility = if (mostrarAuto) View.VISIBLE else View.GONE
+        paintRow(filaAuto, auto, siTexto = "Activado", noTexto = "Falta activar")
+        autoButton.visibility = if (mostrarAuto && !auto) View.VISIBLE else View.GONE
         notaWhatsapp.setTextColor(if (tieneWhatsapp) C_MUTED else C_WARN)
         val conSms = hasSms()
         filaSms.fila.visibility = if (lista.isEmpty()) View.GONE else View.VISIBLE

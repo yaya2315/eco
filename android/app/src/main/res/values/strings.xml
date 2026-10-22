@@ -3,4 +3,6 @@
     <string name="app_name">Eco</string>
     <string name="tile_label">Guardar momento</string>
     <string name="widget_desc">Guarda un momento con un toque y mira si Eco está escuchando.</string>
+    <string name="envio_whatsapp_nombre">Eco: alerta por WhatsApp</string>
+    <string name="envio_whatsapp_descripcion">Solo para emergencias. Cuando mantienes el botón rojo de Eco para avisar a tus contactos, Eco toca Enviar en WhatsApp por ti. No lee tus chats, no guarda nada y no hace nada más.</string>
 </resources>

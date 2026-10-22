@@ -49,6 +49,8 @@ class EmergenciaActivity : Activity() {
 
     companion object {
         private const val REQ_SMS = 40
+        /** El servicio de WhatsApp trae de vuelta esta pantalla después de cada envío. */
+        const val EXTRA_VOLVER = "volver"
         private const val ACCION_SMS = "com.blackholecode.eco.SMS_ENVIADO"
         private const val SOSTENER_MS = 2_000L
         private const val SMS_REINTENTOS = 10
@@ -98,6 +100,8 @@ class EmergenciaActivity : Activity() {
         var fallido = false
         var reintentos = 0
         var whatsappAbierto = false
+        var whatsappListo = false
+        var whatsappFallo = false
         lateinit var estado: TextView
     }
 
@@ -105,6 +109,8 @@ class EmergenciaActivity : Activity() {
     private var usarSms = false
     private var whatsapp: String? = null
     private var conInternet = false
+    /** WhatsApp sin tocar nada: el servicio de accesibilidad de Eco toca Enviar en cada chat. */
+    private var automatico = false
     private var codigo = (System.currentTimeMillis() % 100_000).toInt() * 10
 
     private val receptorSms = object : BroadcastReceiver() {
@@ -129,6 +135,10 @@ class EmergenciaActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null && intent?.getBooleanExtra(EXTRA_VOLVER, false) == true) {
+            finish() // Android cerró la pantalla mientras estabas en WhatsApp: no hay nada que retomar
+            return
+        }
         prefs = Prefs(this)
         if (Build.VERSION.SDK_INT >= 27) setShowWhenLocked(true) // en una emergencia no hay que desbloquear
         leerIntent(intent)
@@ -140,9 +150,21 @@ class EmergenciaActivity : Activity() {
         buscarUbicacion()
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent) // volver de WhatsApp no cambia nada: la alerta sigue siendo la misma
+    }
+
     override fun onResume() {
         super.onResume()
-        if (enviado) actualizarSiguiente() // volviste de WhatsApp: toca el siguiente
+        if (!enviado) return
+        // Volviste de WhatsApp: qué se envió solo y qué no.
+        envios.forEachIndexed { i, e ->
+            if (i in EnvioWhatsapp.enviados) e.whatsappListo = true
+            if (i in EnvioWhatsapp.fallidos) e.whatsappFallo = true
+            pintar(i)
+        }
+        actualizarSiguiente()
+        if (automatico && EnvioWhatsapp.armado < 0) ui.postDelayed({ siguienteAutomatico() }, 700)
     }
 
     override fun onDestroy() {
@@ -261,8 +283,14 @@ class EmergenciaActivity : Activity() {
         if (usarSms) envios.indices.forEach { mandarSms(it) }
         Emergencia.quitarAviso(this)
         if (modo != Emergencia.MODO_PRUEBA) responder("enviada", envios.size)
-        // WhatsApp: el primer chat se abre solo con el mensaje listo; los demás, con un toque cada uno.
-        if (whatsapp != null) ui.postDelayed({ abrirWhatsapp(0) }, 500)
+        // WhatsApp: con el envío automático activado, Eco abre cada chat y toca Enviar solo, uno tras otro.
+        // Sin él, el primer chat se abre con el mensaje listo y los demás con un toque cada uno.
+        EnvioWhatsapp.reiniciar()
+        automatico = whatsapp != null && EnvioWhatsapp.activo(this)
+        if (whatsapp != null) {
+            pedirDesbloqueo()
+            ui.postDelayed({ if (automatico) siguienteAutomatico() else abrirWhatsapp(0) }, 500)
+        }
     }
 
     private fun mandarSms(i: Int) {
@@ -303,6 +331,23 @@ class EmergenciaActivity : Activity() {
             e.fallido = true
         }
         pintar(i)
+    }
+
+    /** WhatsApp no abre con el teléfono bloqueado: Android te pide el PIN una vez y sigue solo. */
+    private fun pedirDesbloqueo() {
+        val km = getSystemService(android.app.KeyguardManager::class.java) ?: return
+        if (km.isKeyguardLocked) km.requestDismissKeyguard(this, null)
+    }
+
+    private fun siguienteAutomatico() {
+        if (!automatico || EnvioWhatsapp.armado >= 0 || isFinishing) return
+        val i = envios.indexOfFirst { !it.whatsappAbierto }
+        if (i < 0) {
+            resumen.text = resumenTexto()
+            return
+        }
+        EnvioWhatsapp.armar(i)
+        abrirWhatsapp(i)
     }
 
     private fun abrirWhatsapp(i: Int) {
@@ -507,16 +552,7 @@ class EmergenciaActivity : Activity() {
         resultados.visibility = View.VISIBLE
         val prueba = modo == Emergencia.MODO_PRUEBA
         resultados.addView(label(if (prueba) "Prueba en camino" else "Avisando a tus contactos", 17f, C_TEXT, medium = true))
-        resumen = label(
-            when {
-                !conInternet && whatsapp != null -> "Sin internet: les llega un SMS. Si también lo mandas por WhatsApp, " +
-                    "sale en cuanto vuelva la conexión."
-                !conInternet -> "Sin internet: les llega un SMS. Si no hay señal, Eco lo reintenta cada 30 segundos."
-                whatsapp != null && usarSms -> "Ya sale un SMS a cada uno. En WhatsApp toca Enviar en cada chat."
-                whatsapp != null -> "En WhatsApp toca Enviar en cada chat."
-                else -> "Les llega un SMS. Si no hay señal, Eco lo reintenta cada 30 segundos."
-            }, 14f, C_MUTED
-        ).apply { setLineSpacing(0f, 1.2f) }
+        resumen = label(resumenTexto(), 14f, C_MUTED).apply { setLineSpacing(0f, 1.2f) }
         resultados.addView(resumen, lp(top = 4))
         envios.forEachIndexed { i, e ->
             val fila = LinearLayout(this).apply {
@@ -548,11 +584,29 @@ class EmergenciaActivity : Activity() {
         resultados.addView(boton("Mandarlo por otra app…", C_SURFACE_2, C_TEXT, C_BORDER) { compartir() }, lp(top = 10))
     }
 
+    private fun resumenTexto(): String {
+        val terminado = automatico && envios.all { it.whatsappListo || it.whatsappFallo }
+        return when {
+            terminado && envios.all { it.whatsappListo } -> "Listo: Eco envió el WhatsApp a todos" +
+                (if (usarSms) " y también un SMS." else ".")
+            terminado -> "Eco envió lo que pudo. Si a alguien no le salió por WhatsApp, usa Llamar o su SMS."
+            automatico && usarSms -> "Ya sale un SMS a cada uno, y Eco está mandando el WhatsApp de cada uno solo. No toques nada."
+            automatico -> "Eco está mandando el WhatsApp de cada uno solo. No toques nada."
+            !conInternet && whatsapp != null -> "Sin internet: les llega un SMS. Si también lo mandas por WhatsApp, " +
+                "sale en cuanto vuelva la conexión."
+            !conInternet -> "Sin internet: les llega un SMS. Si no hay señal, Eco lo reintenta cada 30 segundos."
+            whatsapp != null && usarSms -> "Ya sale un SMS a cada uno. En WhatsApp toca Enviar en cada chat."
+            whatsapp != null -> "En WhatsApp toca Enviar en cada chat."
+            else -> "Les llega un SMS. Si no hay señal, Eco lo reintenta cada 30 segundos."
+        }
+    }
+
     /** Después de volver de WhatsApp: botón grande para el siguiente contacto que falta. */
     private fun actualizarSiguiente() {
         if (!::siguiente.isInitialized) return
+        if (::resumen.isInitialized) resumen.text = resumenTexto()
         val falta = envios.firstOrNull { !it.whatsappAbierto }
-        if (whatsapp == null || falta == null) {
+        if (whatsapp == null || falta == null || automatico) {
             siguiente.visibility = View.GONE
             return
         }
@@ -573,11 +627,20 @@ class EmergenciaActivity : Activity() {
                 else -> "Enviando SMS…"
             }
         }
-        if (whatsapp != null) partes += if (e.whatsappAbierto) "WhatsApp abierto" else "Falta WhatsApp"
+        if (whatsapp != null) {
+            partes += when {
+                e.whatsappListo -> "WhatsApp enviado ✓"
+                e.whatsappFallo -> "WhatsApp no salió"
+                e.whatsappAbierto && automatico -> "Enviando WhatsApp…"
+                e.whatsappAbierto -> "WhatsApp abierto"
+                automatico -> "WhatsApp en espera"
+                else -> "Falta WhatsApp"
+            }
+        }
         e.estado.text = partes.joinToString(" · ")
         e.estado.setTextColor(
             when {
-                e.smsListo -> C_LIVE
+                e.smsListo || e.whatsappListo -> C_LIVE
                 e.esperando || e.fallido -> C_WARN
                 else -> C_MUTED
             }

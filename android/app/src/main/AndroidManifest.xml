@@ -63,6 +63,20 @@
             android:excludeFromRecents="true"
             android:taskAffinity="com.blackholecode.eco.emergencia" />
 
+        <!-- Toca "Enviar" en WhatsApp por ti, solo en la alerta que confirmaste (lo activas en Accesibilidad) -->
+        <service
+            android:name=".EnvioWhatsappService"
+            android:exported="true"
+            android:label="@string/envio_whatsapp_nombre"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/envio_whatsapp" />
+        </service>
+
         <!-- "Estoy bien" desde la notificación -->
         <receiver
             android:name=".AlertaReceiver"
