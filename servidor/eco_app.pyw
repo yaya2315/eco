@@ -10,6 +10,7 @@ Windows lo enciende solo al iniciar sesión (lo configura instalar_inicio.bat).
 Si lo abres cuando ya está encendido, solo te abre el panel.
 """
 import ctypes
+import logging
 import os
 import sys
 import threading
@@ -89,6 +90,7 @@ def main() -> None:
         if eco.CLASE is not None and eco.CLASE.activa():
             eco.CLASE.terminar(esperar=True)  # la última parte queda guardada para la próxima vez
         servidor.shutdown()
+        servidor.server_close()  # suelta el puerto ya, aunque algo siga terminando
         icon.stop()
 
     def texto_estado(item):
@@ -140,6 +142,9 @@ def main() -> None:
         ),
     )
     icono.run(setup=refrescar_menu)
+    # Apagar es apagar: sin esperar descargas o análisis a medias (se retoman la próxima vez).
+    logging.shutdown()
+    os._exit(0)
 
 
 if __name__ == "__main__":

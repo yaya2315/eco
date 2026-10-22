@@ -4273,6 +4273,75 @@ def puerto_ocupado(puerto: int) -> bool:
         return False
 
 
+def eco_respondiendo(puerto: int) -> bool:
+    """¿Hay un Eco que de verdad contesta? (uno trabado tiene el puerto pero no responde)."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{puerto}/", timeout=4) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _pids_escuchando(netstat: str, puerto: int) -> set[int]:
+    """De la salida de `netstat -ano`, los procesos que escuchan en ese puerto (Windows en español o inglés)."""
+    pids: set[int] = set()
+    for linea in netstat.splitlines():
+        partes = linea.split()
+        if (len(partes) >= 5 and partes[0].upper() == "TCP" and partes[1].endswith(f":{puerto}")
+                and partes[3].upper() in ("LISTENING", "ESCUCHANDO") and partes[4].isdigit()):
+            pids.add(int(partes[4]))
+    pids.discard(os.getpid())
+    return pids
+
+
+def liberar_puerto(puerto: int) -> bool:
+    """Si un Eco anterior se quedó trabado con el puerto (por ejemplo, terminando una descarga después de
+    apagarlo), lo cierra. Solo cierra procesos de Eco: nunca otro programa. Devuelve True si cerró alguno."""
+    if os.name != "nt":
+        return False
+    import subprocess
+    sin_ventana = 0x08000000  # CREATE_NO_WINDOW: que no parpadee una consola
+    try:
+        salida = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                                timeout=15, creationflags=sin_ventana).stdout
+    except Exception:
+        return False
+    cerrados = 0
+    for pid in _pids_escuchando(salida, puerto):
+        try:
+            linea = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
+                capture_output=True, text=True, timeout=20, creationflags=sin_ventana).stdout.lower()
+        except Exception:
+            continue
+        if "eco_app" in linea or "eco_servidor" in linea:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"], capture_output=True,
+                           timeout=15, creationflags=sin_ventana)
+            cerrados += 1
+    return cerrados > 0
+
+
+def _crear_servidor(puerto: int) -> "ServidorEco":
+    try:
+        return ServidorEco(("0.0.0.0", puerto), Manejador)
+    except OSError as ex:
+        ocupado = getattr(ex, "winerror", None) == 10048 or ex.errno in (48, 98, 10048)
+        if not ocupado:
+            raise
+        if liberar_puerto(puerto):
+            for _ in range(10):  # Windows tarda un poco en soltar el puerto
+                time.sleep(1)
+                try:
+                    return ServidorEco(("0.0.0.0", puerto), Manejador)
+                except OSError:
+                    continue
+        raise ConfigIncompleta(
+            f"Otro programa está usando el puerto {puerto} de la laptop, así que Eco no puede encender.\n\n"
+            "Reinicia la laptop. Si vuelve a pasar, cambia el puerto en config.toml ([servidor] puerto = 8766) "
+            "y vuelve a conectar el teléfono con el QR.") from ex
+
+
 def prioridad_baja() -> None:
     """Eco usa todos los núcleos para transcribir, pero con prioridad "por debajo de lo normal":
     si tú estás usando la laptop, Windows te da preferencia a ti y no se traba."""
@@ -4296,8 +4365,12 @@ def arrancar(consola: bool = True) -> ServidorEco:
         raise ConfigIncompleta("Cambia el token de ejemplo en config.toml antes de encender Eco.")
     puerto = int(CFG["servidor"]["puerto"])
     if puerto_ocupado(puerto):
-        raise YaEncendido(puerto)
-    servidor = ServidorEco(("0.0.0.0", puerto), Manejador)
+        if eco_respondiendo(puerto):
+            raise YaEncendido(puerto)
+        # Tiene el puerto pero no contesta: un Eco viejo trabado. Se cierra y este toma su lugar.
+        log.warning("Había un Eco anterior trabado en el puerto %d; lo cierro", puerto)
+        liberar_puerto(puerto)
+    servidor = _crear_servidor(puerto)
     ESTADO["inicio"] = ahora().isoformat(timespec="seconds")
     prioridad_baja()
     global CLASE
