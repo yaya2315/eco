@@ -135,6 +135,8 @@ class MainActivity : Activity() {
     private lateinit var vozSwitch: Switch
     private lateinit var vozEstadoTexto: TextView
     private lateinit var bordeBoton: Button
+    private lateinit var probarBordeBoton: Button
+    private lateinit var bordeNotaTexto: TextView
     private lateinit var filaBorde: Fila
 
     // Permisos y batería
@@ -451,7 +453,21 @@ class MainActivity : Activity() {
         }
         vozEstadoTexto.text = texto
         vozEstadoTexto.setTextColor(color)
-        bordeBoton.visibility = if (prefs.vozActiva && !BordeVoz.disponible(this)) View.VISIBLE else View.GONE
+        val sinBorde = !BordeVoz.disponible(this)
+        bordeBoton.visibility = if (prefs.vozActiva && sinBorde) View.VISIBLE else View.GONE
+        probarBordeBoton.visibility = if (prefs.vozActiva && !sinBorde) View.VISIBLE else View.GONE
+        val nota = if (ahora - s.bordeNotaMs < 5 * 60_000L) when {
+            s.bordeNota == "bloqueada" ->
+                "El borde no se ve con la pantalla bloqueada (Android lo esconde). Para verlo también ahí, activa " +
+                    "«Eco: alerta por WhatsApp» en Ajustes › Accesibilidad."
+            s.bordeNota == "sin_permiso" -> "No hay permiso para dibujar el borde."
+            s.bordeNota.startsWith("error:") ->
+                "Android no dejó dibujar el borde (${s.bordeNota.removePrefix("error:")}). Quita y vuelve a dar " +
+                    "«Mostrar sobre otras apps» a Eco y reinicia la app."
+            else -> ""
+        } else ""
+        bordeNotaTexto.text = nota
+        bordeNotaTexto.visibility = if (prefs.vozActiva && nota.isNotEmpty()) View.VISIBLE else View.GONE
         if (vozSwitch.isChecked != prefs.vozActiva) vozSwitch.isChecked = prefs.vozActiva
     }
 
@@ -1180,6 +1196,16 @@ class MainActivity : Activity() {
         card.addView(vozEstadoTexto, lp(top = 2))
         bordeBoton = button("Permitir el borde azul", primary = false) { pedirBorde() }
         card.addView(bordeBoton, lp(top = 10))
+        probarBordeBoton = button("Probar el borde azul", primary = false) {
+            BordeVoz.probar(this)
+            ui.postDelayed({ render() }, 400)
+        }
+        card.addView(probarBordeBoton, lp(top = 10))
+        bordeNotaTexto = label("", 13f, C_WARN).apply {
+            setLineSpacing(0f, 1.2f)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        card.addView(bordeNotaTexto, lp(top = 6))
         card.addView(
             label("Escucha solo «Eco» + una orden, dentro del teléfono y sin internet. Guarda lo que ya estaba " +
                 "escuchando más lo que le dices, hasta que te callas.", 13f, C_MUTED).apply { setLineSpacing(0f, 1.2f) },

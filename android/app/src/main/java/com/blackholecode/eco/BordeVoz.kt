@@ -1,6 +1,7 @@
 package com.blackholecode.eco
 
 import android.animation.ValueAnimator
+import android.app.KeyguardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -20,8 +21,12 @@ import android.view.animation.DecelerateInterpolator
  * El borde azul difuminado que aparece alrededor de la pantalla cuando Eco te escucha decir
  * «Eco, …», y se va cuando te callas. Va encima de cualquier app y no bloquea los toques.
  *
- * Necesita «Mostrar sobre otras apps». Si no lo diste pero activaste el envío automático por
- * WhatsApp (servicio de accesibilidad), usa ese permiso; si no hay ninguno, solo vibra.
+ * Dos formas de dibujarlo:
+ *  • con el servicio de accesibilidad de Eco (el del envío por WhatsApp), si está activado: se ve
+ *    siempre, también con la pantalla bloqueada;
+ *  • con «Mostrar sobre otras apps»: se ve encima de cualquier app, pero Android lo esconde mientras
+ *    la pantalla está bloqueada.
+ * Cada intento deja una nota en EcoState.bordeNota para saber qué pasó.
  */
 object BordeVoz {
     private val main = Handler(Looper.getMainLooper())
@@ -33,18 +38,32 @@ object BordeVoz {
     fun disponible(ctx: Context): Boolean =
         Settings.canDrawOverlays(ctx) || EnvioWhatsapp.servicio != null
 
-    fun mostrar(ctx: Context) {
-        main.post { mostrarYa(ctx) }
+    fun mostrar(ctx: Context, maxMs: Long = (DetectorVoz.ORDEN_MAX_S + 5) * 1000L) {
+        main.post { mostrarYa(ctx.applicationContext, maxMs) }
     }
 
-    private fun mostrarYa(ctx: Context) {
+    /** Botón «Probar el borde»: lo muestra unos segundos. */
+    fun probar(ctx: Context) = mostrar(ctx, 2_500)
+
+    private fun nota(texto: String) {
+        EcoState.bordeNota = texto
+        EcoState.bordeNotaMs = System.currentTimeMillis()
+    }
+
+    private fun mostrarYa(ctx: Context, maxMs: Long) {
         main.removeCallbacks(ocultarSolo)
-        main.postDelayed(ocultarSolo, (DetectorVoz.ORDEN_MAX_S + 5) * 1000L)  // por si nunca llega el final
+        main.postDelayed(ocultarSolo, maxMs)  // por si nunca llega el final
         vista?.let { it.entrar(); return }
+        val bloqueada = ctx.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+        val accesibilidad = EnvioWhatsapp.servicio
         val (contexto, tipo) = when {
-            Settings.canDrawOverlays(ctx) -> ctx.applicationContext to WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            EnvioWhatsapp.servicio != null -> EnvioWhatsapp.servicio!! to WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-            else -> return
+            // El de accesibilidad va por encima de todo, incluso de la pantalla de bloqueo.
+            accesibilidad != null -> accesibilidad to WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            Settings.canDrawOverlays(ctx) -> ctx to WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else -> {
+                nota("sin_permiso")
+                return
+            }
         }
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, tipo,
@@ -68,12 +87,18 @@ object BordeVoz {
         val nueva = Brillo(contexto)
         try {
             gestor.addView(nueva, p)
-        } catch (_: Exception) {
-            return  // Android no dejó dibujar (permiso quitado): queda la vibración
+        } catch (e: Exception) {
+            nota("error:${e.javaClass.simpleName}")  // Android no dejó dibujar: queda la vibración
+            return
         }
         vista = nueva
         wm = gestor
         nueva.entrar()
+        nota(when {
+            tipo == WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY -> "ok"
+            bloqueada -> "bloqueada"
+            else -> "ok"
+        })
     }
 
     fun ocultar() {
