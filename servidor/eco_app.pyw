@@ -8,6 +8,9 @@ Corre Eco en segundo plano, sin ventana negra, con un ícono junto al reloj:
 
 Windows lo enciende solo al iniciar sesión (lo configura instalar_inicio.bat).
 Si lo abres cuando ya está encendido, solo te abre el panel.
+
+Con --perfil abuelo corre el Eco de otra persona (lo crea nuevo_perfil.bat): su propio puerto,
+sus datos, su Telegram. Puede correr al mismo tiempo que el tuyo.
 """
 import ctypes
 import logging
@@ -52,11 +55,13 @@ def main() -> None:
         aviso(str(ex), error=True)
         return
     except Exception as ex:  # config.toml dañado, puerto bloqueado, etc.
-        aviso(f"Eco no pudo encender:\n\n{ex}\n\nRevisa servidor\\datos\\eco.log", error=True)
+        aviso(f"Eco no pudo encender:\n\n{ex}\n\nRevisa {eco.DATOS / 'eco.log'}", error=True)
         raise
 
     puerto = int(eco.CFG["servidor"]["puerto"])
     panel = f"http://localhost:{puerto}/"
+    nombre = str(eco.CFG["usuario"].get("nombre") or eco.PERFIL).strip() if eco.PERFIL else ""
+    de_quien = f" de {nombre}" if nombre else ""
     hilo = threading.Thread(target=servidor.serve_forever, name="servidor", daemon=True)
     hilo.start()
     if not SILENCIOSO:
@@ -97,8 +102,8 @@ def main() -> None:
         if eco.CLASE is not None and eco.CLASE.activa():
             return "Grabando la clase…"
         if eco.ESTADO.get("procesando") or eco.COLA.qsize():
-            return "Procesando…"
-        return "Recibiendo momentos"
+            return f"Eco{de_quien}: procesando…" if eco.PERFIL else "Procesando…"
+        return f"Eco{de_quien}: recibiendo momentos" if eco.PERFIL else "Recibiendo momentos"
 
     def texto_clase(item):
         e = eco.CLASE.estado() if eco.CLASE is not None else {"grabando": False}
@@ -126,19 +131,19 @@ def main() -> None:
                 pass
 
     icono = pystray.Icon(
-        "Eco",
+        f"Eco-{eco.PERFIL}" if eco.PERFIL else "Eco",
         Image.open(BASE / "eco.ico"),
-        "Eco · recibiendo momentos",
+        f"Eco{de_quien} · puerto {puerto}" if eco.PERFIL else "Eco · recibiendo momentos",
         menu=pystray.Menu(
             pystray.MenuItem(texto_estado, None, enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(texto_clase, alternar_clase),
+            pystray.MenuItem(texto_clase, alternar_clase, visible=eco.CLASE is not None),
             pystray.MenuItem("Abrir panel", abrir_panel, default=True),
             pystray.MenuItem("Conectar el teléfono (QR)", conectar_telefono),
             pystray.MenuItem("Abrir carpeta de notas", abrir_notas),
             pystray.MenuItem("Ver registro", abrir_registro),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Apagar Eco", apagar),
+            pystray.MenuItem(f"Apagar Eco{de_quien}", apagar),
         ),
     )
     icono.run(setup=refrescar_menu)

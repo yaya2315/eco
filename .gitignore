@@ -3,6 +3,7 @@ servidor/config.toml
 servidor/google_cliente.json
 servidor/client_secret*.json
 servidor/datos/
+servidor/perfiles/
 servidor/notas/
 servidor/.venv/
 __pycache__/

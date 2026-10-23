@@ -25,7 +25,7 @@ Paso "1/5  Cerrando Eco si estaba abierto..."
 Stop-ScheduledTask -TaskName "Eco" -ErrorAction SilentlyContinue
 # (el Python del entorno abre un segundo proceso: al cerrar uno el otro ya puede no existir)
 Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
-    Where-Object { $_.CommandLine -match 'eco_servidor\.py|eco_app\.pyw' } |
+    Where-Object { $_.CommandLine -match 'eco_servidor\.py|eco_app\.pyw' -and $_.CommandLine -notmatch '--perfil' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 

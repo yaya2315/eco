@@ -41,7 +41,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -75,6 +75,8 @@ DEFAULTS: dict = {
         "modelo_preciso": "large-v3-turbo", "beam_preciso": 3,
         # Nombres y palabras que Whisper debe esperar (además de tus clases y los nombres que ya anotó).
         "palabras": [],
+        # Minutos sin usarlo para sacarlo de la memoria (0 = siempre listo). Útil con varios perfiles.
+        "liberar_min": 0,
     },
     "ia": {
         "proveedor": "claude",
@@ -119,8 +121,13 @@ DEFAULTS: dict = {
         "alertas": True,          # avisos por Telegram cuando algo deja de funcionar
         "telefono_horas": 3,      # avisar si el teléfono no se reporta en este tiempo (de día)
         "silencio": "22:00-06:30",  # en este horario las alertas esperan a la mañana
+        "tecnicas": True,         # false = por Telegram solo llega lo del teléfono (no lo de modelos y Google)
+    },
+    "funciones": {
+        "clases": True,      # grabar clases y reuniones de la laptop (Modo clase)
     },
     "google": {
+        "activo": True,      # false = sin Classroom ni Calendar (no se ofrece conectar Google)
         "anuncios": True,    # leer los anuncios de Classroom y sacar fechas y tareas
         "classroom": True,   # traer las tareas de Classroom
         "calendar": True,    # poner las tareas con fecha en el calendario "Eco"
@@ -197,36 +204,91 @@ def arreglar_toml(texto: str) -> str:
     return "\n".join(linea for b in salida for linea in b[1]).rstrip("\n") + "\n"
 
 
-def cargar_config(ruta: Path) -> dict:
-    cfg = json.loads(json.dumps(DEFAULTS))
-    if ruta.exists():
-        texto = ruta.read_bytes().decode("utf-8-sig")  # el Bloc de notas a veces agrega una marca invisible
+def _leer_toml(ruta: Path) -> dict:
+    """Lee un config.toml. Si tiene el error típico de edición a mano, lo arregla (y guarda el original)."""
+    if not ruta.exists():
+        return {}
+    texto = ruta.read_bytes().decode("utf-8-sig")  # el Bloc de notas a veces agrega una marca invisible
+    try:
+        return tomllib.loads(texto)
+    except tomllib.TOMLDecodeError as ex:
+        arreglado = arreglar_toml(texto)
         try:
-            leido = tomllib.loads(texto)
-        except tomllib.TOMLDecodeError as ex:
-            arreglado = arreglar_toml(texto)
-            try:
-                leido = tomllib.loads(arreglado)
-            except tomllib.TOMLDecodeError:
-                raise ConfigIncompleta(
-                    f"Hay un error en config.toml:\n{ex}\n\nÁbrelo con el Bloc de notas (servidor\\config.toml), "
-                    "corrige esa línea y vuelve a abrir Eco.") from ex
-            # Copia del original en datos\ (no se sube a GitHub) y el archivo queda arreglado.
-            copia = ruta.parent / "datos" / f"{ruta.name}.antes"
-            try:
-                copia.parent.mkdir(parents=True, exist_ok=True)
-                copia.write_text(texto, encoding="utf-8")
-                ruta.write_text(arreglado, encoding="utf-8")
-                CONFIG_ARREGLADA.append(f"config.toml tenía un error ({ex}); lo arreglé solo. "
-                                        f"El original quedó en {copia}")
-            except OSError:
-                CONFIG_ARREGLADA.append(f"config.toml tiene un error ({ex}); lo corregí en memoria")
-        for clave, valor in leido.items():
-            if isinstance(valor, dict) and isinstance(cfg.get(clave), dict):
-                cfg[clave].update(valor)
-            else:
-                cfg[clave] = valor
+            leido = tomllib.loads(arreglado)
+        except tomllib.TOMLDecodeError:
+            raise ConfigIncompleta(
+                f"Hay un error en config.toml:\n{ex}\n\nÁbrelo con el Bloc de notas ({ruta}), "
+                "corrige esa línea y vuelve a abrir Eco.") from ex
+        # Copia del original en datos\ (no se sube a GitHub) y el archivo queda arreglado.
+        copia = ruta.parent / "datos" / f"{ruta.name}.antes"
+        try:
+            copia.parent.mkdir(parents=True, exist_ok=True)
+            copia.write_text(texto, encoding="utf-8")
+            ruta.write_text(arreglado, encoding="utf-8")
+            CONFIG_ARREGLADA.append(f"{ruta} tenía un error ({ex}); lo arreglé solo. El original quedó en {copia}")
+        except OSError:
+            CONFIG_ARREGLADA.append(f"{ruta} tiene un error ({ex}); lo corregí en memoria")
+        return leido
+
+
+# Lo que un perfil (p. ej. el del abuelo) toma del Eco principal si no lo cambia en su config.toml:
+# la misma IA y el mismo Whisper, ya instalados en esta laptop.
+HEREDADO = ("ia", "whisper")
+
+
+def cargar_config(ruta: Path, principal: Path | None = None) -> dict:
+    cfg = json.loads(json.dumps(DEFAULTS))
+    base: dict = {}
+    if principal is not None:
+        base = _leer_toml(principal)
+        for clave in HEREDADO:
+            if isinstance(base.get(clave), dict):
+                cfg[clave].update(base[clave])
+        cfg["whisper"]["palabras"] = []  # los nombres que esperaba la otra persona no sirven aquí
+        zona = (base.get("notas") or {}).get("zona_horaria")
+        if zona:
+            cfg["notas"]["zona_horaria"] = zona
+    for clave, valor in _leer_toml(ruta).items():
+        if isinstance(valor, dict) and isinstance(cfg.get(clave), dict):
+            cfg[clave].update(valor)
+        else:
+            cfg[clave] = valor
+    if principal is not None:
+        propio = str(cfg["telegram"].get("token") or "").strip()
+        if propio and propio == str((base.get("telegram") or {}).get("token") or "").strip():
+            # Dos Eco no pueden escuchar el mismo bot: se pelearían los mensajes.
+            cfg["telegram"]["token"] = ""
+            CONFIG_ARREGLADA.append("Este perfil tenía el mismo bot de Telegram que el Eco principal; "
+                                    "lo apagué aquí. Crea otro bot con @BotFather y pon su token en su config.toml")
     return cfg
+
+
+# ── Perfiles: otro Eco en la misma laptop (otra persona, otro puerto, sus propios datos) ──
+PERFIL = ""     # "" = el Eco principal
+RAIZ = BASE     # carpeta del perfil: config.toml, datos\ y notas\
+
+
+def elegir_perfil(argv: list[str] | None = None) -> None:
+    """--perfil abuelo  →  usa servidor/perfiles/abuelo (lo crea nuevo_perfil.bat)."""
+    global PERFIL, RAIZ
+    args = list(sys.argv[1:] if argv is None else argv)
+    nombre = ""
+    for i, a in enumerate(args):
+        if a.startswith("--perfil="):
+            nombre = a.split("=", 1)[1]
+        elif a == "--perfil" and i + 1 < len(args):
+            nombre = args[i + 1]
+    nombre = (nombre or os.environ.get("ECO_PERFIL") or "").strip().lower()
+    if nombre and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,29}", nombre):
+        raise ConfigIncompleta(f"El perfil «{nombre}» no es válido: usa letras sin tildes, números o guiones.")
+    PERFIL = nombre
+    RAIZ = BASE / "perfiles" / nombre if nombre else BASE
+    if nombre and not (RAIZ / "config.toml").exists():
+        raise ConfigIncompleta(f"No existe el perfil «{nombre}». Créalo con nuevo_perfil.bat.")
+
+
+def config_actual() -> dict:
+    return cargar_config(RAIZ / "config.toml", BASE / "config.toml" if PERFIL else None)
 
 
 def configurar(cfg: dict, base_datos: Path | None = None) -> None:
@@ -243,6 +305,11 @@ def configurar(cfg: dict, base_datos: Path | None = None) -> None:
     for d in (DATOS, ENTRADA, NOTAS):
         d.mkdir(parents=True, exist_ok=True)
     init_db()
+    if not str(cfg["telegram"].get("chat_id") or "").strip():
+        try:  # el chat que se conectó solo con el enlace de Telegram del panel
+            cfg["telegram"]["chat_id"] = str(json.loads((DATOS / "telegram.json").read_text(encoding="utf-8"))["chat_id"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
 
 
 def _hhmm(texto: str, defecto: tuple[int, int]) -> tuple[int, int]:
@@ -476,6 +543,7 @@ def ubicacion_de(meta: dict) -> tuple[float | None, float | None]:
 
 _modelos: dict = {}            # modelos de Whisper ya cargados (nombre → modelo)
 _whisper_lock = threading.Lock()
+_whisper_uso = {"t": 0.0}      # cuándo se usó por última vez (para sacarlo de la memoria)
 _modelo_listo: dict[str, bool] = {}
 _bajando: set[str] = set()
 
@@ -674,7 +742,8 @@ def transcribir(ruta: Path, toque_s: float | None = None) -> str:
     a la IA le sirve para saber qué es lo tuyo y qué era ruido de antes."""
     w = CFG["whisper"]
     nombre, beam, motivo = elegir_modelo()
-    with _whisper_lock:
+    with _whisper_lock, turno_whisper():
+        _whisper_uso["t"] = time.time()
         modelo = _modelos.get(nombre)
         if modelo is None:
             from faster_whisper import WhisperModel  # import lento: solo cuando hace falta
@@ -701,7 +770,67 @@ def transcribir(ruta: Path, toque_s: float | None = None) -> str:
             partes.append(seg.text.strip())
         if not marcado and partes:
             partes.append(MARCA_TOQUE)  # tocaste al final: todo lo dicho fue antes
+        _whisper_uso["t"] = time.time()
         return " ".join(partes).strip()
+
+
+@contextmanager
+def turno_whisper():
+    """Si en la laptop corre más de un Eco (tu perfil y el de tu abuelo), transcriben por turnos:
+    dos a la vez usarían el procesador a medias y tardarían el doble cada uno."""
+    try:
+        (BASE / "datos").mkdir(parents=True, exist_ok=True)
+        f = open(BASE / "datos" / "whisper.turno", "a+b")
+    except OSError:
+        yield
+        return
+    tomado, avisado = False, False
+    try:
+        while not tomado:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                tomado = True
+            except OSError:
+                if not avisado:
+                    log.info("Espero turno: otro Eco de esta laptop está transcribiendo")
+                    avisado = True
+                time.sleep(1)
+        yield
+    finally:
+        if tomado:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        f.close()
+
+
+def liberar_whisper_hilo() -> None:
+    """Con [whisper] liberar_min, el modelo sale de la memoria si nadie lo usa en ese tiempo
+    (se vuelve a cargar solo con el siguiente audio, en unos segundos)."""
+    while True:
+        time.sleep(60)
+        minutos = float(CFG["whisper"].get("liberar_min") or 0)
+        if minutos <= 0 or not _modelos or time.time() - _whisper_uso["t"] < minutos * 60:
+            continue
+        with _whisper_lock:
+            if _modelos and time.time() - _whisper_uso["t"] >= minutos * 60:
+                _modelos.clear()
+                import gc
+                gc.collect()
+                log.info("Saqué Whisper de la memoria (sin usarlo en %g min)", minutos)
 
 
 def sin_marcas(texto: str) -> str:
@@ -1308,27 +1437,68 @@ def resumen_del_dia(d: date) -> str | None:
     return "\n".join(partes)
 
 
-AYUDA = (
-    "🫧 <b>Eco</b> — tu memoria de bolsillo\n\n"
-    "/hoy — resumen de hoy\n"
-    "/semana — lo que viene en los próximos 7 días\n"
-    "/pendientes — lo que tienes por hacer\n"
-    "/hecho 12 — marcar la tarea #12 como hecha\n"
-    "/buscar palabra — buscar en todo lo guardado\n\n"
-    "Pregúntame lo que quieras con signo de pregunta, por ejemplo:\n"
-    "<i>¿Qué dejó de tarea el profe de física?</i>\n\n"
-    "Si me escribes cualquier otra cosa (\"examen de física el martes\"), la anoto.\n"
-    "🎙️ Mándame una <b>nota de voz</b> y la anoto igual que un momento.\n"
-    "📷 Mándame una <b>foto</b> de la pizarra o de la hoja de tareas y saco las fechas y tareas."
-)
+def ayuda() -> str:
+    estudiante = bool(CFG["funciones"].get("clases", True))
+    pregunta = "¿Qué dejó de tarea el profe de física?" if estudiante else "¿Qué me dijo el doctor la última vez?"
+    anota = "examen de física el martes" if estudiante else "cita con el doctor el martes a las 9"
+    foto = "de la pizarra o de la hoja de tareas" if estudiante else "de una receta o de un papel con fechas"
+    return (
+        "🫧 <b>Eco</b> — tu memoria de bolsillo\n\n"
+        "/hoy — resumen de hoy\n"
+        "/semana — lo que viene en los próximos 7 días\n"
+        "/pendientes — lo que tienes por hacer\n"
+        "/hecho 12 — marcar la tarea #12 como hecha\n"
+        "/buscar palabra — buscar en todo lo guardado\n\n"
+        "Pregúntame lo que quieras con signo de pregunta, por ejemplo:\n"
+        f"<i>{pregunta}</i>\n\n"
+        f"Si me escribes cualquier otra cosa (\"{anota}\"), la anoto.\n"
+        "🎙️ Mándame una <b>nota de voz</b> y la anoto igual que un momento.\n"
+        f"📷 Mándame una <b>foto</b> {foto} y saco las fechas y tareas."
+    )
+
+
+def codigo_telegram() -> str:
+    """Clave del enlace «Conectar Telegram» (sale del token de Eco, así que nadie más la adivina)."""
+    return hmac.new(str(CFG["servidor"]["token"]).encode(), b"telegram", hashlib.sha256).hexdigest()[:16]
+
+
+_bot_nombre = {"valor": None, "cuando": 0.0}
+
+
+def bot_usuario() -> str | None:
+    """@usuario del bot, para el enlace t.me (se pregunta a Telegram una vez)."""
+    if _bot_nombre["valor"] or not CFG["telegram"].get("token") or time.time() - _bot_nombre["cuando"] < 300:
+        return _bot_nombre["valor"]
+    _bot_nombre["cuando"] = time.time()
+    try:
+        _bot_nombre["valor"] = ((tg("getMe") or {}).get("result") or {}).get("username")
+    except Exception:
+        pass
+    return _bot_nombre["valor"]
+
+
+def enlace_telegram() -> str | None:
+    """t.me/tu_bot?start=CLAVE: al tocar Iniciar, ese chat queda como el dueño del bot."""
+    usuario = bot_usuario()
+    return f"https://t.me/{usuario}?start={codigo_telegram()}" if usuario else None
 
 
 def manejar_mensaje(chat: str, texto: str) -> None:
     dueño = str(CFG["telegram"].get("chat_id") or "")
     if not dueño:
-        if texto.startswith("/start"):
+        if texto.split() == ["/start", codigo_telegram()]:
+            # Llegó con el enlace del panel o de la página de instalación: este chat es el dueño.
+            (DATOS / "telegram.json").write_text(json.dumps({"chat_id": chat}), encoding="utf-8")
+            CFG["telegram"]["chat_id"] = chat
+            log.info("Telegram conectado con el enlace del panel")
+            nombre = str(CFG["usuario"].get("nombre") or "").strip()
+            saludo = f"Hola, {e(nombre)} 👋" if nombre and nombre != DEFAULTS["usuario"]["nombre"] else "Hola 👋"
+            enviar(f"✅ <b>{saludo} Eco ya está conectado.</b>\nAquí te llegan tus recordatorios y lo que "
+                   "guardes con el teléfono.\n\n" + ayuda(), chat)
+        elif texto.startswith("/start"):
             enviar(f"Hola 👋 Tu chat_id es <code>{e(chat)}</code>.\n"
-                   "Pégalo en <b>config.toml</b> → [telegram] chat_id y reinicia Eco.", chat)
+                   "Pégalo en <b>config.toml</b> → [telegram] chat_id y reinicia Eco, o abre el enlace "
+                   "«Conectar Telegram» del panel de Eco.", chat)
         return
     if chat != dueño:
         if texto.startswith("/start"):
@@ -1340,7 +1510,7 @@ def manejar_mensaje(chat: str, texto: str) -> None:
     resto = resto.strip()
 
     if comando in ("/start", "/ayuda", "/help"):
-        enviar(AYUDA)
+        enviar(ayuda())
     elif comando == "/hoy":
         enviar(resumen_del_dia(ahora().date()) or "Hoy todavía no guardaste momentos.")
     elif comando in ("/semana", "/manana", "/agenda"):
@@ -1411,7 +1581,7 @@ def manejar_mensaje(chat: str, texto: str) -> None:
                                                         for f in r["fuentes"][:3]) + "</i>")
         enviar("\n".join(partes))
     elif comando.startswith("/"):
-        enviar("No conozco ese comando.\n\n" + AYUDA)
+        enviar("No conozco ese comando.\n\n" + ayuda())
     else:
         cid = procesar_texto(texto)
         enviar("📝 Anotado.\n\n" + mensaje_captura(cid))
@@ -2564,12 +2734,16 @@ def carpeta_respaldo() -> Path | None:
     elegida = str(CFG["respaldo"].get("carpeta") or "").strip()
     if elegida:
         return Path(elegida).expanduser()
+    destino = None
     for variable in ("OneDriveConsumer", "OneDrive"):
         raiz = os.environ.get(variable)
         if raiz and Path(raiz).exists():
-            return Path(raiz) / "Eco respaldos"
-    casa = Path.home() / "OneDrive"
-    return casa / "Eco respaldos" if casa.exists() else None
+            destino = Path(raiz) / "Eco respaldos"
+            break
+    if destino is None and (Path.home() / "OneDrive").exists():
+        destino = Path.home() / "OneDrive" / "Eco respaldos"
+    # Cada perfil en su propia carpeta: así uno nunca borra las copias viejas del otro.
+    return destino / PERFIL if destino is not None and PERFIL else destino
 
 
 def hacer_respaldo() -> Path:
@@ -2666,7 +2840,13 @@ def _b64url(datos: bytes) -> str:
     return base64.urlsafe_b64encode(datos).rstrip(b"=").decode()
 
 
+def google_activo() -> bool:
+    return bool(CFG["google"].get("activo", True))
+
+
 def google_cliente() -> dict | None:
+    if not google_activo():
+        return None
     for ruta in (DATOS / "google_cliente.json", BASE / "google_cliente.json"):
         if ruta.exists():
             try:
@@ -3271,10 +3451,13 @@ _app_evento = threading.Event()
 
 
 def _carpeta_app() -> Path:
-    return DATOS / "app"
+    # Siempre la del Eco principal: los perfiles le ofrecen al teléfono la misma app que él bajó.
+    return BASE / "datos" / "app"
 
 
 def _github_token() -> str:
+    if PERFIL:
+        return ""  # la baja el Eco principal
     t = str(CFG["github"].get("token") or "").strip()
     if t:
         return t
@@ -3388,6 +3571,9 @@ def _en_silencio(actual: datetime) -> bool:
     return (hm >= ini or hm < fin) if ini > fin else (ini <= hm < fin)
 
 
+ALERTAS_PERSONALES = {"telefono"}
+
+
 def alerta(clave: str, activa: bool, texto: str = "", resuelto: str | None = None, repetir_h: float = 12) -> None:
     previo = estado_get(f"alerta_{clave}") or ""
     if not activa:
@@ -3401,6 +3587,8 @@ def alerta(clave: str, activa: bool, texto: str = "", resuelto: str | None = Non
     actual = ahora()
     if not CFG["salud"].get("alertas", True) or _en_silencio(actual):
         return
+    if clave not in ALERTAS_PERSONALES and not CFG["salud"].get("tecnicas", True):
+        return  # se ve en el panel; por Telegram no (a esa persona no le toca arreglar modelos)
     if previo and actual - datetime.fromisoformat(previo) < timedelta(hours=repetir_h):
         return
     if enviar(texto):
@@ -3454,7 +3642,7 @@ def revisar_salud(forzar: bool = False) -> None:
     g = estado_google()
     if g["cliente"]:
         alerta("google", bool(g["error"]) and not g["conectado"],
-               f"🔴 <b>Google se desconectó</b>\n{e(g['error'])}\nEn Chrome: http://localhost:8765 → Conectar con Google.",
+               f"🔴 <b>Google se desconectó</b>\n{e(g['error'])}\nEn Chrome: http://localhost:{CFG['servidor']['puerto']} → Conectar con Google.",
                resuelto="✅ Google volvió a conectarse.")
         problema = g["classroom"]["error"] or g["calendar"]["error"] if g["conectado"] else None
         alerta("google_parcial", bool(problema), f"⚠️ <b>Classroom o Calendar con problemas</b>\n{e(problema)}",
@@ -3517,7 +3705,7 @@ def estado_telefono() -> dict | None:
 
 def estado_app() -> dict:
     info = info_app() or {}
-    return {"token": bool(_github_token()), "version": info.get("versionName"), "codigo": info.get("versionCode"),
+    return {"token": bool(_github_token()), "compartida": bool(PERFIL), "version": info.get("versionName"), "codigo": info.get("versionCode"),
             "creado": info.get("creado"), "revisado": estado_get("app_revisado"),
             "error": estado_get("app_error") or None}
 
@@ -3598,8 +3786,12 @@ def api_estado(es_local: bool) -> dict:
         "sesiones": sesiones_en_curso(),
         "clase": CLASE.estado() if CLASE is not None else None,
         "respaldo": estado_respaldo() if es_local else None,
-        "google": estado_google() if es_local else None,
+        "google": estado_google() if es_local and google_activo() else None,
+        "google_activo": google_activo(),
         "app": estado_app() if es_local else None,
+        "perfil": PERFIL or None, "nombre": str(CFG["usuario"].get("nombre") or ""),
+        "telegram_enlace": enlace_telegram() if es_local and CFG["telegram"].get("token")
+                           and not CFG["telegram"].get("chat_id") else None,
     }
 
 
@@ -3857,6 +4049,8 @@ def datos_conexion() -> dict:
     principal = f"{fija}:{puerto}" if fija else wifi
     consulta = urllib.parse.urlencode({"v": 1, "d": principal, "w": wifi, "t": str(CFG["servidor"]["token"])})
     enlace = f"eco://conectar?{consulta}"
+    # Para un teléfono lejos (otra casa): una página que se abre con Tailscale y deja instalar y conectar.
+    instalar = f"http://{principal}/instalar?" + urllib.parse.urlencode({"t": str(CFG["servidor"]["token"])})
     svg = None
     try:
         import segno
@@ -3864,7 +4058,103 @@ def datos_conexion() -> dict:
             scale=1, border=3, dark="#0A0A12", light="#FFFFFF", omitsize=True, svgclass="qr")
     except Exception as ex:  # segno sin instalar: el panel muestra los datos para escribirlos a mano
         log.warning("Sin código QR (%s); corre instalar_inicio.bat", ex)
-    return {"direccion": principal, "fija": bool(fija), "svg": svg, "enlace": enlace}
+    return {"direccion": principal, "fija": bool(fija), "svg": svg, "enlace": enlace, "instalar": instalar,
+            "nombre": str(CFG["usuario"].get("nombre") or "")}
+
+
+def pagina_instalar() -> bytes:
+    """La página que abre el teléfono nuevo (con Tailscale encendido): bajar la app, conectarla y
+    conectar Telegram, cada cosa con un solo botón. Solo se muestra con el token correcto."""
+    c = datos_conexion()
+    q = urllib.parse.urlencode({"t": str(CFG["servidor"]["token"])})
+    nombre = str(CFG["usuario"].get("nombre") or "").strip()
+    if nombre == DEFAULTS["usuario"]["nombre"]:
+        nombre = ""
+    app = info_app()
+    pasos: list[str] = []
+    if app:
+        mb = f"{(app.get('tamano') or 0) / 1048576:.0f} MB"
+        pasos.append(f"""<h2>Descarga la app</h2>
+<a class="boton" href="/instalar/eco.apk?{html.escape(q)}" download="Eco.apk">Descargar Eco · {html.escape(mb)}</a>
+<p>Cuando termine, toca el archivo y luego <b>Instalar</b>.</p>
+<p class="nota">Si el teléfono pide permiso para <b>instalar apps desconocidas</b>, toca Configuración, activa
+Permitir y regresa. Si Chrome avisa que el archivo puede ser dañino, toca <b>Descargar de todos modos</b>:
+es la app de Eco y viene de la laptop.</p>""")
+    else:
+        pasos.append("""<h2>Descarga la app</h2>
+<p>La app todavía no está lista en la laptop. Pídele a quien te mandó este enlace que te la envíe por
+WhatsApp; ábrela y toca <b>Instalar</b>.</p>""")
+    pasos.append(f"""<h2>Conéctala con la laptop</h2>
+<a class="boton" href="{html.escape(c['enlace'])}">Conectar Eco</a>
+<p>Se abre Eco y te pregunta si conectar: toca <b>Conectar</b>.</p>
+<p class="nota">Deja <b>Tailscale</b> siempre encendido: es el camino entre tu teléfono y la laptop.</p>""")
+    if CFG["telegram"].get("token"):
+        if CFG["telegram"].get("chat_id"):
+            pasos.append("""<h2>Avisos por Telegram</h2><p class="listo">Listo: Telegram ya está conectado.</p>""")
+        else:
+            enlace = enlace_telegram()
+            pasos.append("""<h2>Recibe tus avisos en Telegram</h2>""" + (
+                f"""<a class="boton secundario" href="{html.escape(enlace)}">Abrir Telegram</a>
+<p>Toca <b>Iniciar</b> en el chat que se abre. Ahí te llegan tus recordatorios y te puedes escribir con Eco.</p>"""
+                if enlace else "<p>La laptop no pudo hablar con Telegram ahora. Vuelve a abrir esta página en un rato.</p>"))
+    pasos.append("""<h2>Enciéndela</h2>
+<p>En Eco toca <b>Encender</b> y acepta los permisos: micrófono, notificaciones y ubicación.</p>
+<p>Luego abre la sección <b>Emergencia</b> y agrega a las personas a las que Eco debe avisar si algo
+te pasa. Nunca les manda nada sin que tú lo confirmes.</p>""")
+    lista = "".join(f'<li><span class="n" aria-hidden="true">{i}</span><div>{p}</div></li>' for i, p in enumerate(pasos, 1))
+    titulo = f"Eco de {html.escape(nombre)}" if nombre else "Instala Eco"
+    cuerpo = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark"><title>{titulo}</title>
+<style>
+:root{{--fondo:#0A0A12;--sup:#14141F;--linea:#2A2A3D;--texto:#EEEEF6;--suave:#A3A3BA;--tenue:#8A8AA3;
+--violeta:#6B5BF5;--violeta2:#4A3BD6;--lila:#B8AEFF;--ok:#3DDC97}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--fondo);color:var(--texto);
+font:400 1.125rem/1.55 "Segoe UI Variable Text","Segoe UI",Roboto,system-ui,sans-serif;-webkit-text-size-adjust:100%}}
+main{{max-width:560px;margin:0 auto;padding:32px 16px 48px}}
+.marca{{display:flex;align-items:center;gap:12px}}
+.marca svg{{width:44px;height:44px;flex:none}}
+h1{{margin:0;font:650 clamp(1.75rem,1.4rem + 2vw,2.25rem)/1.15 Roboto,"Segoe UI Variable Display",system-ui,sans-serif;letter-spacing:-.01em}}
+.sub{{margin:16px 0 32px;color:var(--suave)}}
+ol{{list-style:none;margin:0;padding:0;display:grid;gap:16px}}
+li{{display:flex;gap:16px;padding:24px 20px;border-radius:20px;background:var(--sup);border:1px solid var(--linea)}}
+.n{{flex:none;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+background:rgba(107,91,245,.18);color:var(--lila);font-weight:700;font-variant-numeric:tabular-nums}}
+li div{{min-width:0;flex:1}}
+h2{{margin:4px 0 12px;font:600 1.25rem/1.3 Roboto,system-ui,sans-serif}}
+p{{margin:12px 0 0;color:var(--suave)}} b{{color:var(--texto);font-weight:600}}
+.nota{{font-size:1rem;color:var(--tenue)}}
+.listo{{color:var(--ok)}}
+.boton{{display:flex;align-items:center;justify-content:center;min-height:56px;padding:0 20px;border-radius:14px;
+background:var(--violeta);color:#fff;font-weight:600;text-decoration:none;transition:background-color .15s,transform .1s}}
+.boton:hover{{background:var(--violeta2)}} .boton:active{{transform:scale(.98)}}
+.boton.secundario{{background:transparent;color:var(--lila);box-shadow:inset 0 0 0 1.5px var(--lila)}}
+:focus-visible{{outline:3px solid var(--lila);outline-offset:3px}}
+footer{{margin-top:32px;font-size:.9375rem;color:var(--tenue)}}
+@media (prefers-reduced-motion:reduce){{*{{transition:none!important}}}}
+</style></head><body><main>
+<header class="marca"><svg viewBox="0 0 44 44" aria-hidden="true">
+<circle cx="22" cy="22" r="21" fill="none" stroke="#6B5BF5" stroke-width="1.5"/>
+<circle cx="22" cy="22" r="15" fill="none" stroke="#6B5BF5" stroke-opacity=".5" stroke-width="1.6"/>
+<circle cx="22" cy="22" r="9.5" fill="none" stroke="#B8AEFF" stroke-width="2"/><circle cx="22" cy="22" r="4" fill="#fff"/></svg>
+<h1>{titulo}</h1></header>
+<p class="sub">Tu memoria de bolsillo. Haz estos pasos en orden, desde este teléfono.</p>
+<ol>{lista}</ol>
+<footer>Para guardar algo que acabas de oír: dos toques rápidos al botón de <b>subir volumen</b>.<br>
+Este enlace es personal: no lo compartas.</footer>
+</main></body></html>"""
+    return cuerpo.encode()
+
+
+def pagina_enlace_malo() -> bytes:
+    return ("""<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport"
+content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Eco</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;background:#0A0A12;color:#EEEEF6;
+font:400 1.125rem/1.5 Roboto,"Segoe UI",system-ui,sans-serif}main{max-width:440px;padding:32px 24px;border-radius:20px;
+background:#14141F;border:1px solid #2A2A3D}h1{margin:0 0 8px;font-size:1.5rem}p{margin:0;color:#A3A3BA}</style>
+</head><body><main><h1>Este enlace ya no sirve</h1><p>Pídele a quien te lo mandó uno nuevo, sacado del panel de
+Eco en la laptop.</p></main></body></html>""").encode()
 
 
 _PANEL: bytes | None = None
@@ -3891,6 +4181,10 @@ class Manejador(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         return self.client_address[0] in ("127.0.0.1", "::1") and host in ("localhost", "127.0.0.1", "::1")
 
+    def _token_en_enlace(self, params: dict) -> bool:
+        """La página de instalación lleva el token en el enlace (se abre en el navegador del teléfono)."""
+        return hmac.compare_digest(str(params.get("t") or "").encode(), str(CFG["servidor"]["token"]).encode())
+
     def _puede_ver_panel(self) -> bool:
         return self._es_local() or self._autorizado()
 
@@ -3904,8 +4198,8 @@ class Manejador(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(cuerpo)
 
-    def _html(self, cuerpo: bytes) -> None:
-        self.send_response(200)
+    def _html(self, cuerpo: bytes, codigo: int = 200) -> None:
+        self.send_response(codigo)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(cuerpo)))
         self.send_header("Cache-Control", "no-store")
@@ -3925,10 +4219,12 @@ class Manejador(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
 
-    def _archivo(self, ruta: Path, tipo: str) -> None:
+    def _archivo(self, ruta: Path, tipo: str, descargar_como: str | None = None) -> None:
         tam = ruta.stat().st_size
         self.send_response(200)
         self.send_header("Content-Type", tipo)
+        if descargar_como:
+            self.send_header("Content-Disposition", f'attachment; filename="{descargar_como}"')
         self.send_header("Content-Length", str(tam))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -3965,6 +4261,14 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 return self._redirigir(google_url_conectar())
             except ValueError as ex:
                 return self._pagina_google(False, str(ex))
+        if ruta in ("/instalar", "/instalar/eco.apk"):  # teléfono nuevo: instalar y conectar con un enlace
+            if not self._token_en_enlace(params):
+                return self._html(pagina_enlace_malo(), 401)
+            if ruta == "/instalar":
+                return self._html(pagina_instalar())
+            if not info_app():
+                return self._html(pagina_enlace_malo(), 404)
+            return self._archivo(_carpeta_app() / "eco.apk", "application/vnd.android.package-archive", "Eco.apk")
         if ruta == "/estado":  # lo usa la app del teléfono
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
@@ -4357,7 +4661,8 @@ def prioridad_baja() -> None:
 
 def arrancar(consola: bool = True) -> ServidorEco:
     """Prepara todo y devuelve el servidor listo para serve_forever()."""
-    configurar(cargar_config(BASE / "config.toml"))
+    elegir_perfil()
+    configurar(config_actual(), RAIZ)
     preparar_logs(consola)
     for aviso_config in CONFIG_ARREGLADA:
         log.warning(aviso_config)
@@ -4374,23 +4679,25 @@ def arrancar(consola: bool = True) -> ServidorEco:
     ESTADO["inicio"] = ahora().isoformat(timespec="seconds")
     prioridad_baja()
     global CLASE
-    from clase import GrabadoraClase
-    CLASE = GrabadoraClase(ENTRADA, COLA.put, log,
-                           minutos_silencio=int(CFG["sesiones"].get("clase_auto_terminar_min") or 20))
+    if CFG["funciones"].get("clases", True):
+        from clase import GrabadoraClase
+        CLASE = GrabadoraClase(ENTRADA, COLA.put, log,
+                               minutos_silencio=int(CFG["sesiones"].get("clase_auto_terminar_min") or 20))
     for f in sorted(ENTRADA.iterdir()):  # lo que quedó pendiente la última vez
         if f.suffix.lower() in EXT_AUDIO + EXT_IMAGEN:
             COLA.put(f)
     threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
     migrar_recordar()
-    for destino in (trabajador, bot, reloj, google_hilo, actualizaciones_hilo, vectores_hilo):
+    for destino in (trabajador, bot, reloj, google_hilo, actualizaciones_hilo, vectores_hilo, liberar_whisper_hilo):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
-    log.info("Eco encendido (puerto %d)", puerto)
+    log.info("Eco encendido (puerto %d)%s", puerto, f" · perfil {PERFIL}" if PERFIL else "")
     return servidor
 
 
 def main() -> None:
     if "--probar" in sys.argv or "--descargar" in sys.argv:
-        configurar(cargar_config(BASE / "config.toml"))
+        elegir_perfil()
+        configurar(config_actual(), RAIZ)
         preparar_logs()
         diagnostico() if "--probar" in sys.argv else descargar_modelo()
         return

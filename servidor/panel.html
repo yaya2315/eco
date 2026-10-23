@@ -75,6 +75,7 @@ button, input { font: inherit; color: inherit; }
 .marca { display: flex; align-items: center; gap: var(--s3); }
 .marca svg { flex: none; width: 44px; height: 44px; }
 .marca h1 { margin: 0; font: 600 var(--t-hero)/1 var(--display); letter-spacing: -0.03em; }
+.perfil { align-self: center; padding: 4px 12px; border-radius: 999px; border: 1px solid rgba(184, 174, 255, 0.35); color: var(--violet-soft); font: 600 var(--t-sm)/1.4 var(--body); white-space: nowrap; }
 .pulso { transform-origin: 22px 22px; animation: pulso 2.8s ease-out infinite; }
 .apagado .pulso { animation: none; opacity: 0; }
 @keyframes pulso { from { transform: scale(0.55); opacity: 0.7; } to { transform: scale(1); opacity: 0; } }
@@ -251,18 +252,27 @@ details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: 
 
 /* ── Conectar con QR ── */
 .conectar {
-  width: min(420px, calc(100vw - 32px)); padding: var(--s6); border: 1px solid var(--line); border-radius: var(--r-lg);
+  width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: var(--s6); border: 1px solid var(--line); border-radius: var(--r-lg);
   background: var(--surface); color: var(--text); text-align: center;
 }
 .conectar::backdrop { background: rgba(5, 5, 10, 0.72); backdrop-filter: blur(4px); }
 .conectar h2 { margin: 0; font: 600 var(--t-xl)/1.2 var(--display); }
 .conectar p { margin: var(--s2) 0 0; color: var(--muted); }
 .conectar p strong { color: var(--text); font-weight: 600; }
-.qr-tarjeta { margin: var(--s5) auto 0; width: min(280px, 100%); aspect-ratio: 1; padding: var(--s2); border-radius: var(--r-md); background: #fff; display: grid; place-items: center; }
+.qr-tarjeta { margin: var(--s5) auto 0; width: min(240px, 100%); aspect-ratio: 1; padding: var(--s2); border-radius: var(--r-md); background: #fff; display: grid; place-items: center; }
 .qr-tarjeta svg { width: 100%; height: 100%; display: block; }
 .qr-tarjeta.sin-qr { aspect-ratio: auto; background: var(--surface-2); color: var(--muted); padding: var(--s4); font-size: var(--t-sm); text-align: left; }
 .conectar-dir { font-variant-numeric: tabular-nums; color: var(--text) !important; }
 .conectar-nota { font-size: var(--t-xs); color: var(--faint) !important; }
+.lejos { margin-top: var(--s5); padding-top: var(--s5); border-top: 1px solid var(--line); text-align: left; }
+.lejos h3 { margin: 0; font: 600 var(--t-lg)/1.3 var(--display); }
+.lejos ol { margin: var(--s2) 0 0; padding-left: 1.25em; color: var(--muted); font-size: var(--t-sm); }
+.lejos li + li { margin-top: var(--s1); }
+.lejos li strong { color: var(--text); font-weight: 600; }
+.lejos-acciones { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
+.lejos-acciones > * { flex: 1 1 160px; min-height: 48px; margin: 0; padding: 0 var(--s4); width: auto; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.boton-secundario { border-radius: var(--r-md); border: 1.5px solid var(--violet-soft); background: transparent; color: var(--violet-soft); font-weight: 600; cursor: pointer; transition: background-color .15s; }
+.boton-secundario:hover { background: rgba(184, 174, 255, 0.1); }
 .no { color: var(--warn); }
 
 /* ── Estados vacíos y acceso ── */
@@ -485,6 +495,7 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
           <circle cx="22" cy="22" r="4" fill="#fff"/>
         </svg>
         <h1>Eco</h1>
+        <span class="perfil" id="perfil" hidden></span>
       </div>
       <p class="estado" id="estado" role="status" aria-live="polite"><span class="punto" aria-hidden="true"></span><span id="estado-texto">Conectando con Eco…</span></p>
     </div>
@@ -600,6 +611,18 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
   <div class="qr-tarjeta" id="qr"></div>
   <p class="conectar-dir" id="conectar-dir"></p>
   <p class="conectar-nota">El código lleva tu token de Eco: no le tomes foto ni lo compartas.</p>
+  <section class="lejos" aria-labelledby="lejos-titulo">
+    <h3 id="lejos-titulo">¿El teléfono está en otra casa?</h3>
+    <ol>
+      <li>En ese teléfono, instala <strong>Tailscale</strong> desde Play Store y entra a la red de esta laptop (README, sección «Eco para otra persona»).</li>
+      <li>Mándale este enlace por WhatsApp. Al abrirlo puede bajar la app, conectarla y conectar Telegram, con un toque cada cosa.</li>
+    </ol>
+    <p class="conectar-nota" id="lejos-nota"></p>
+    <div class="lejos-acciones">
+      <button class="boton-secundario" type="button" id="lejos-copiar">Copiar enlace</button>
+      <a class="boton-principal" id="lejos-whatsapp" href="#" target="_blank" rel="noopener noreferrer">Enviar por WhatsApp</a>
+    </div>
+  </section>
   <button class="boton-principal" type="button" id="cerrar-qr">Listo</button>
 </dialog>
 
@@ -730,9 +753,16 @@ function duracionTexto(seg) {
 function pintarEstado(e) {
   const g = e.google;
   ui.calendar = Boolean(g?.conectado && g.calendar?.activo && g.calendar?.permiso);
-  $("pend-nota").textContent = g && !ui.calendar
+  $("pend-nota").textContent = e.google_activo === false
+    ? "Se quedan aquí hasta que los marques. Los que tienen fecha te llegan como recordatorio por Telegram."
+    : g && !ui.calendar
     ? "Se quedan aquí hasta que los marques. Conecta Google para que los que tienen fecha vayan a tu Calendar."
     : "Se quedan aquí hasta que los marques. Los que tienen fecha van a tu Google Calendar.";
+  if (e.perfil) {
+    const quien = e.nombre || e.perfil;
+    if ($("perfil").textContent !== quien) { $("perfil").textContent = quien; document.title = `Eco · ${quien}`; }
+    $("perfil").hidden = false;
+  }
   const caja = $("estado");
   let texto;
   if (e.clase?.grabando) {
@@ -785,7 +815,9 @@ function pintarEstado(e) {
       : sm.listos >= sm.total ? `<span class="ok">listo</span> · ${plural(sm.total, "momento", "momentos")}`
       : `preparando… ${sm.listos} de ${sm.total}`);
   }
-  fila("Telegram", e.telegram ? '<span class="ok">conectado</span>' : '<span class="no">sin configurar</span>');
+  fila("Telegram", e.telegram ? '<span class="ok">conectado</span>'
+    : e.telegram_enlace ? `<span class="no">falta conectar el chat</span> <a class="copiar" href="${esc(e.telegram_enlace)}" target="_blank" rel="noopener noreferrer">Conectar Telegram</a>`
+    : '<span class="no">sin configurar</span>');
   if (e.inicio) fila("Encendido", esc(hace(e.inicio)));
   if (e.notas) fila("Tus notas", `${esc(e.notas)} <button class="copiar" type="button" data-copiar="${esc(e.notas)}">Copiar</button>`);
   if (e.respaldo) {
@@ -800,7 +832,10 @@ function pintarEstado(e) {
   if (e.app) {
     const a = e.app;
     let dd;
-    if (!a.token) {
+    if (a.compartida) {
+      dd = a.version ? `Versión ${esc(a.version)} lista · la baja el Eco principal de esta laptop`
+        : "La baja el Eco principal de esta laptop cuando tenga su token de GitHub";
+    } else if (!a.token) {
       dd = `Para que el teléfono se actualice solo, pega aquí un token de GitHub (README, sección 11).
         <form class="mini-form" id="github-form"><label class="oculto" for="github-token">Token de GitHub</label>
         <input class="control" id="github-token" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false">
@@ -926,6 +961,13 @@ async function abrirQr() {
     const svg = caja.querySelector("svg");
     if (svg) { svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Código QR para conectar la app Eco"); }
     $("conectar-dir").textContent = `${c.direccion}${c.fija ? " · dirección fija de Tailscale" : " · solo funciona en este Wi-Fi"}`;
+    ui.enlaceInstalar = c.instalar;
+    const para = c.nombre ? `Hola, ${c.nombre}. ` : "";
+    $("lejos-whatsapp").href = "https://wa.me/?text=" + encodeURIComponent(
+      `${para}Este es tu enlace para instalar Eco. Ábrelo en tu teléfono con Tailscale encendido y sigue los pasos:\n${c.instalar}`);
+    $("lejos-nota").textContent = c.fija
+      ? "El enlace lleva el token de este Eco: mándalo solo a esa persona."
+      : "Esta laptop no tiene Tailscale encendido: el enlace solo funcionaría en este mismo Wi-Fi.";
   } catch {
     $("qr").classList.add("sin-qr");
     $("qr").textContent = "El código solo se muestra en la pantalla de la laptop.";
@@ -933,6 +975,13 @@ async function abrirQr() {
   if (!dialogo.open) dialogo.showModal();
 }
 $("abrir-qr").addEventListener("click", abrirQr);
+$("lejos-copiar").addEventListener("click", async () => {
+  const b = $("lejos-copiar");
+  if (!ui.enlaceInstalar) return;
+  try { await navigator.clipboard.writeText(ui.enlaceInstalar); b.textContent = "Copiado"; }
+  catch { b.textContent = "No se pudo copiar"; }
+  setTimeout(() => (b.textContent = "Copiar enlace"), 1600);
+});
 $("cerrar-qr").addEventListener("click", () => $("conectar").close());
 $("visor-cerrar").addEventListener("click", () => $("visor").close());
 $("visor").addEventListener("click", (ev) => { if (ev.target === $("visor")) $("visor").close(); });

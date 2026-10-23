@@ -25,6 +25,7 @@ modelo_preciso = "large-v3-turbo"
 beam_preciso = 3
 # Nombres o palabras raras que dices seguido (Eco ya usa tus clases y los nombres que anotó).
 palabras = []   # por ejemplo ["Steven", "Market Conexión", "Tinkercad"]
+liberar_min = 0 # minutos sin audios para sacar Whisper de la memoria (0 = siempre listo)
 
 [ia]
 # "claude" (mejor calidad, necesita internet y una API key)

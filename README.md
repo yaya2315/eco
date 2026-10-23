@@ -102,6 +102,8 @@ La primera vez que llegue un audio, Whisper descarga el modelo `small` (unos 500
 2. Reinicia Eco y escríbele `/start` a tu bot. Te va a responder con tu **chat_id**.
 3. Pega ese número en `[telegram] chat_id` y reinicia Eco otra vez.
 
+Más fácil: con el token puesto, en el panel la fila **Telegram** muestra **Conectar Telegram**. Ábrelo, toca **Iniciar** y listo (no hay que copiar el chat_id).
+
 ### 7. Dirección fija con Tailscale (recomendado)
 
 Tailscale crea una red privada entre tu laptop y tu teléfono. La laptop recibe una dirección `100.x.y.z` que **no cambia nunca**, y funciona aunque estén en redes distintas, incluso con datos móviles.
@@ -320,6 +322,34 @@ Actions vuelve a compilar el APK. Si ya pegaste el permiso de GitHub en el panel
 - **Avisar ahora** abre la misma pantalla sin esperar a la laptop. Cada contacto tiene además **Llamar**, y abajo está **Llamar al 911**.
 - Cómo decide: primero busca palabras de peligro (sin IA); si encuentra alguna, la IA revisa si es real o es una película, una canción o "ayúdame con la tarea". Lo de clases y reuniones no se revisa.
 - Para que llegue rápido, guarda el momento con el doble toque de volumen: la pregunta aparece cuando la laptop termina de analizarlo (un par de minutos). Si estás lejos de tu Wi-Fi, la laptop solo lo recibe con Tailscale.
+
+## Eco para otra persona (por ejemplo, tu abuelo)
+
+Su teléfono usa **tu laptop** como cerebro: no necesita computadora propia. En tu laptop corre un segundo Eco, aparte del tuyo:
+
+- **Su propio puerto** (8766, el tuyo sigue en 8765), su token, sus momentos, sus pendientes y su respaldo (`OneDrive\Eco respaldos\abuelo`). No ve nada tuyo ni tú mezclas lo suyo.
+- **Su propio bot de Telegram** para sus recordatorios.
+- Guarda momentos, recordatorios y **Emergencia**. Sin Modo clase, sin Classroom ni Calendar.
+- Usa la **misma IA y el mismo Whisper** que el tuyo (ya están instalados). Si los dos mandan audio a la vez, se turnan; y si él no manda nada en 20 minutos, su Whisper sale de la memoria para que tu laptop no se ponga lenta.
+- Solo funciona mientras tu laptop esté encendida y con tu sesión iniciada. Si estaba apagada, su teléfono guarda los momentos y los sube después.
+
+### En tu laptop (5 minutos)
+
+1. Crea su bot: en Telegram, **@BotFather** → `/newbot`. Copia el token (tiene que ser un bot nuevo, no el tuyo).
+2. Doble clic en `servidor\nuevo_perfil.bat` → **Sí** al permiso de administrador. Escribe su nombre y pega el token del bot (clic derecho para pegar).
+3. Se abre **su panel** (un acceso directo «Eco de …» queda en el escritorio) con el QR y el enlace para su teléfono.
+
+Se enciende solo con Windows igual que el tuyo. Su configuración queda en `servidor\perfiles\<nombre>\config.toml` (nunca se sube a GitHub).
+
+### Su teléfono (en otra casa)
+
+1. **Tailscale.** Él instala **Tailscale** de Play Store y entra con su cuenta de Google. Tú, en [login.tailscale.com](https://login.tailscale.com) → Machines → los tres puntos de tu laptop → **Share** → **Copy invite link**, y se lo mandas. Él lo abre y acepta. Así su teléfono llega **solo a tu laptop**, no a tu teléfono ni a nada más.
+2. **El enlace de Eco.** En su panel → **Conectar el teléfono con un QR** → **Enviar por WhatsApp**. Él abre ese enlace con Tailscale encendido y sigue cuatro botones: **Descargar Eco**, **Conectar Eco**, **Abrir Telegram** y Encender.
+3. **Emergencia.** Que te ponga como contacto: si algo le pasa y lo confirma, te llega a ti también.
+
+Si están juntos, es más rápido: escanea el QR de su panel con su teléfono.
+
+La app se le actualiza sola, igual que la tuya: tu Eco baja cada versión de GitHub y la comparte con el suyo. Para quitarlo: Programador de tareas → borra la tarea «Eco (nombre)» y la carpeta `servidor\perfiles\nombre`.
 
 ## Privacidad: cómo está pensado
 

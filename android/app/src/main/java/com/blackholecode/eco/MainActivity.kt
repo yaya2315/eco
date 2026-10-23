@@ -643,7 +643,7 @@ class MainActivity : Activity() {
         } else {
             AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
                 .setTitle("¿Conectar Eco con esta laptop?")
-                .setMessage("Tus audios se van a subir a ${datos.server}. Acepta solo si ese código lo sacaste del panel de tu laptop.")
+                .setMessage("Tus audios se van a subir a ${datos.server}. Acepta solo si este código o enlace salió del panel de Eco en la laptop.")
                 .setPositiveButton("Conectar") { _, _ -> aplicar() }
                 .setNegativeButton("Cancelar", null)
                 .show()
