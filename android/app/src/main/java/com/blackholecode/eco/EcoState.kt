@@ -44,6 +44,15 @@ object EcoState {
     /** Último doble toque que guardó un momento. */
     @Volatile var volumenDobleMs = 0L
 
+    /** «Eco, recuérdame…»: "apagado", "cargando", "escuchando" o "error". */
+    @Volatile var vozEstado = "apagado"
+    @Volatile var vozError: String? = null
+    /** Bajando el modelo de voz desde la laptop: 0-99 %, o -1 si no se está bajando. */
+    @Volatile var vozDescarga = -1
+    /** Última vez que te oyó decir "Eco, …" y qué frase reconoció. */
+    @Volatile var vozUltimaMs = 0L
+    @Volatile var vozFrase = ""
+
     @Volatile var lastSaved = ""
     @Volatile var lastUpload = "Todavía no se ha subido nada"
     @Volatile var lastUploadOk = true

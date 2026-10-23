@@ -132,6 +132,8 @@ class MainActivity : Activity() {
     private lateinit var barraAntes: View
     private lateinit var barraDespues: View
     private lateinit var volumenEstado: TextView
+    private lateinit var vozSwitch: Switch
+    private lateinit var vozEstadoTexto: TextView
 
     // Permisos y batería
     private lateinit var filaMic: Fila
@@ -382,7 +384,8 @@ class MainActivity : Activity() {
             s.paused -> "Reanuda para volver a guardar momentos."
             else -> "Guarda los últimos ${formatDuration(s.beforeSec)} y lo que sigue. " +
                 (if (prefs.dobleVolumen) "También con dos toques a subir volumen, el widget o la notificación."
-                else "También desde el widget, la notificación o el botón rápido.")
+                else "También desde el widget, la notificación o el botón rápido.") +
+                (if (prefs.vozActiva && s.vozEstado == "escuchando") " O di «Eco, recuérdame…»." else "")
         }
         setHalo(listening || enReunion, if (s.savingRemainingSec >= 0 || enReunion) C_REC else C_ACCENT)
         meetingButton.visibility = if (enReunion) View.GONE else View.VISIBLE
@@ -393,6 +396,7 @@ class MainActivity : Activity() {
         styleButton(powerButton, primary = !s.running)
         renderUpdate()
         renderVolumen()
+        renderVoz()
         renderCarga()
         paintSections()
     }
@@ -418,6 +422,31 @@ class MainActivity : Activity() {
         }
         volumenEstado.text = texto
         volumenEstado.setTextColor(color)
+    }
+
+    /** Debajo de «Activar con la voz»: si está bajando el modelo, listo, o qué escuchó la última vez. */
+    private fun renderVoz() {
+        if (!::vozEstadoTexto.isInitialized) return
+        val s = EcoState
+        val ahora = System.currentTimeMillis()
+        val (texto, color) = when {
+            !prefs.vozActiva -> "Apagado. Al activarlo, el teléfono baja de tu laptop un modelo de voz (40 MB, una vez)." to C_MUTED
+            s.vozDescarga >= 0 && s.vozError == null -> "Bajando el modelo de voz de tu laptop… ${s.vozDescarga} %" to C_MUTED
+            s.vozError != null -> s.vozError!! to C_WARN
+            !VozModelo.listo(this) -> "Preparando el modelo de voz…" to C_MUTED
+            !s.running || s.paused -> "Se activa cuando Eco está escuchando." to C_MUTED
+            s.vozEstado == "cargando" -> "Cargando el modelo de voz…" to C_MUTED
+            ahora - s.vozUltimaMs < 60_000 ->
+                "✓ Te escuché («${s.vozFrase}») a las ${SimpleDateFormat("HH:mm", Locale.US).format(Date(s.vozUltimaMs))}. " +
+                    "Tu laptop lo anota en un par de minutos." to C_LIVE
+            s.vozEstado == "escuchando" ->
+                "Listo. Di «Eco, recuérdame…», «Eco, anota…» o «Eco, haz…» y lo que quieres. " +
+                    "Vibra dos veces cuando te escucha." to C_MUTED
+            else -> "Se activa cuando Eco está escuchando." to C_MUTED
+        }
+        vozEstadoTexto.text = texto
+        vozEstadoTexto.setTextColor(color)
+        if (vozSwitch.isChecked != prefs.vozActiva) vozSwitch.isChecked = prefs.vozActiva
     }
 
     private fun renderCarga() {
@@ -1101,6 +1130,35 @@ class MainActivity : Activity() {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         card.addView(volumenEstado, lp(top = 2))
+
+        vozSwitch = Switch(this).apply {
+            text = "Activar con la voz: «Eco, …»"
+            textSize = 15f
+            setTextColor(C_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            isChecked = prefs.vozActiva
+            minHeight = dp(48)
+            thumbTintList = ColorStateList(estados, intArrayOf(0xFFFFFFFF.toInt(), C_MUTED))
+            trackTintList = ColorStateList(estados, intArrayOf(C_ACCENT, C_BORDER))
+            setOnCheckedChangeListener { _, activo ->
+                if (activo == prefs.vozActiva) return@setOnCheckedChangeListener
+                prefs.vozActiva = activo
+                EcoState.vozError = null
+                DetectorVoz.aplicar(this@MainActivity)
+                render()
+            }
+        }
+        card.addView(vozSwitch, lp(top = 8))
+        vozEstadoTexto = label("", 13f, C_MUTED).apply {
+            setLineSpacing(0f, 1.2f)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        card.addView(vozEstadoTexto, lp(top = 2))
+        card.addView(
+            label("Escucha solo «Eco» + una orden, dentro del teléfono y sin internet. Guarda lo que ya estaba " +
+                "escuchando más lo que le dices, hasta que te callas.", 13f, C_MUTED).apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 6)
+        )
         return card
     }
 

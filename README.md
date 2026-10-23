@@ -272,6 +272,7 @@ Cada vez que GitHub compila una versión nueva de la app, la laptop la baja sola
 ## Uso diario
 
 - **Pasa algo importante:** toca *Guardar momento*. Vas a sentir una vibración corta.
+- **Con la voz:** di **«Eco, recuérdame…»** (o «Eco, anota…», «Eco, haz…»). Mira la sección [Activar con la voz](#activar-con-la-voz-eco-recuérdame).
 - **Subida:** con Tailscale, los momentos se suben solos desde donde estés mientras la laptop esté encendida. Sin Tailscale, se suben cuando el teléfono está en el mismo Wi-Fi que la laptop. También puedes tocar *Subir ahora*.
 - **Telegram:**
   - te manda cada momento ya analizado;
@@ -309,6 +310,18 @@ Actions vuelve a compilar el APK. Si ya pegaste el permiso de GitHub en el panel
 - **El toque:** el teléfono le dice a la laptop en qué segundo tocaste *Guardar*. La IA sabe que lo importante está alrededor de ese punto y que lo de mucho antes puede ser la tele u otra conversación, así que ya no mezcla temas.
 - **La IA:** si instalaste `qwen3.5:4b`, Eco lo usa sin el modo "pensar" (en tu CPU tardaría minutos). Te lo sugiere por Telegram si falta.
 - **Para grabar mejor:** el micrófono principal del Honor está abajo. En la bolsa del pantalón el audio sale apagado; en la bolsa de la camisa, con el micrófono hacia afuera, o sobre la mesa se entiende mucho mejor.
+
+## Activar con la voz: «Eco, recuérdame…»
+
+Sin tocar nada: dices **«Eco»** y una orden, y Eco guarda lo que ya estaba escuchando **más lo que le pides**, hasta que te callas (máximo 30 segundos). Lo que pediste queda como tarea o dato, con fecha y hora si las dices, y por Telegram te llega **«Me pediste: …»**.
+
+- Ejemplos: *«Eco, recuérdame pagarle a Steven el viernes»*, *«Eco, anota que el examen es el martes a las 2»*, *«Eco, recuérdame eso»* (usa lo que se acababa de decir), *«Eco, haz una lista de lo que falta para el robot»*.
+- Palabras que lo activan, después de «Eco»: recuérdame / recordame / acordate, anota, apunta, guarda, haz / haceme, pon / poneme, avísame, agenda, escribe, toma (nota), busca.
+- Cuando te escucha, el teléfono **vibra dos veces** (el toque de Guardar vibra una).
+- **Encenderlo:** en la app, sección del momento (el cronómetro) → **Activar con la voz**. La primera vez el teléfono baja un modelo de voz de tu laptop (unos 40 MB, una sola vez; la laptop lo baja de internet si no lo tiene).
+- **Privacidad:** el modelo corre **dentro del teléfono, sin internet**, y solo entiende «Eco + orden»: todo lo demás le suena a ruido. Solo trabaja cuando hay voz cerca, para no gastar batería.
+- **Doble revisión:** en la laptop, Whisper confirma que de verdad dijiste «Eco». Si el teléfono se activó por error (nadie dijo «Eco»), ese audio se borra y no se guarda nada.
+- Funciona con la pantalla apagada, mientras Eco está escuchando (no en pausa ni en modo reunión).
 
 ## Emergencia: «¿Estás bien?»
 
@@ -355,7 +368,7 @@ La app se le actualiza sola, igual que la tuya: tu Eco baja cada versión de Git
 
 - El audio vive **solo en la RAM** del teléfono y se sobrescribe cada pocos minutos.
 - Al **pausar** o **apagar** Eco, lo que había en memoria se borra.
-- Se crea un archivo **solo cuando tú tocas Guardar**. Ese archivo se borra del teléfono apenas llega a la laptop, y se borra de la laptop apenas se transcribe (`guardar_audio = false`).
+- Se crea un archivo **solo cuando tú tocas Guardar** (o dices «Eco, …»: eso lo reconoce el teléfono sin internet). Ese archivo se borra del teléfono apenas llega a la laptop, y se borra de la laptop apenas se transcribe (`guardar_audio = false`).
 - Por defecto se guardan **las notas, no la conversación completa** (`guardar_transcripcion = false`).
 - A la IA se le pide anotar de otras personas solo lo necesario para tus tareas, y **nunca** contraseñas, códigos ni tarjetas.
 - La laptop solo acepta audios que traen tu token. El bot de Telegram solo le responde a tu `chat_id`.

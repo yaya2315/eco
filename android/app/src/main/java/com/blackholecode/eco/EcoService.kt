@@ -58,6 +58,8 @@ class EcoService : Service() {
         const val ACTION_STOP = "com.blackholecode.eco.STOP"
         const val ACTION_REUNION_INICIAR = "com.blackholecode.eco.REUNION_INICIAR"
         const val ACTION_REUNION_TERMINAR = "com.blackholecode.eco.REUNION_TERMINAR"
+        /** Encender o apagar «Eco, recuérdame…» (cuando cambias el interruptor o llega el modelo). */
+        const val ACTION_VOZ = "com.blackholecode.eco.VOZ"
 
         /** Modo reunión: AAC mono a 32 kbps (~15 MB por hora), una parte cada 10 minutos. */
         private const val REUNION_PARTE_MS = 10 * 60_000L
@@ -112,7 +114,8 @@ class EcoService : Service() {
     }
 
     /** toqueS: en qué segundo del audio tocaste Guardar (a la IA le dice qué es lo tuyo y qué era fondo). */
-    private class Clip(val pcm: ShortArray, val startMs: Long, val location: Location?, val toqueS: Double)
+    private class Clip(val pcm: ShortArray, val startMs: Long, val location: Location?, val toqueS: Double,
+                       val frase: String? = null)
 
     private lateinit var prefs: Prefs
     private val main = Handler(Looper.getMainLooper())
@@ -125,6 +128,9 @@ class EcoService : Service() {
     private var saveStart = -1L     // rango del momento pendiente [saveStart, saveEnd)
     private var saveEnd = -1L
     private var saveTap = -1L       // muestra en la que tocaste Guardar
+    private var saveFinToque = -1L  // hasta dónde llega el momento por el toque (sin contar la orden de voz)
+    private var saveFrase: String? = null   // "eco recuérdame": se guardó por voz
+    private var esperandoFinOrden = false
     private var activeBefore = Prefs.DEFAULT_BEFORE
     private var activeAfter = Prefs.DEFAULT_AFTER
 
@@ -146,6 +152,7 @@ class EcoService : Service() {
     private var bateriaRegistrada = false
     private var uploadRounds = 0
     private var volumen: VolumeKeys? = null
+    private var voz: DetectorVoz? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -154,6 +161,7 @@ class EcoService : Service() {
         prefs = Prefs(this)
         createChannels(this)
         volumen = VolumeKeys(this) { requestSave() }
+        voz = DetectorVoz(this, { frase, desde -> ordenDeVoz(frase, desde) }, { finDeOrden() })
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -164,6 +172,10 @@ class EcoService : Service() {
             notifyStopped()
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (action == ACTION_VOZ) {
+            aplicarVoz()
+            return if (EcoState.running) START_STICKY else START_NOT_STICKY
         }
         if (!EcoState.running && (action == ACTION_SAVE || action == ACTION_PAUSE)) {
             // Se tocó el widget o la notificación, pero Android ya había cerrado Eco.
@@ -201,6 +213,7 @@ class EcoService : Service() {
         EcoState.pausaBateria = false
         unregisterBattery()
         volumen?.cerrar()
+        voz?.cerrar()
         main.removeCallbacksAndMessages(null)
         io.shutdown()
         EcoWidget.refresh(this)
@@ -374,8 +387,8 @@ class EcoService : Service() {
         activeAfter = prefs.afterSec
         EcoState.beforeSec = activeBefore
         synchronized(lock) {
-            // Espacio para "antes" + "después" + 5 s de margen.
-            ring = ShortArray((activeBefore + activeAfter + 5) * SAMPLE_RATE)
+            // Espacio para "antes" + "después" (o lo que dura una orden de voz) + 5 s de margen.
+            ring = ShortArray((activeBefore + max(activeAfter, DetectorVoz.ORDEN_MAX_S) + 5) * SAMPLE_RATE)
             total = 0
             saveStart = -1
             saveEnd = -1
@@ -408,10 +421,23 @@ class EcoService : Service() {
             priority = Thread.MAX_PRIORITY
             start()
         }
+        aplicarVoz()
+    }
+
+    /** «Eco, recuérdame…» escucha mientras el micrófono de momentos está abierto (y lo activaste). */
+    private fun aplicarVoz() {
+        val d = voz ?: return
+        val quiere = prefs.vozActiva && capturing && EcoState.running && !EcoState.paused
+        when {
+            quiere && VozModelo.listo(this) -> d.iniciar()
+            quiere -> { d.detener(); VozModelo.asegurar(this) }
+            else -> d.detener()
+        }
     }
 
     private fun stopRecorder(flushSave: Boolean) {
         if (flushSave) finishPendingSaveNow()
+        voz?.detener()
         capturing = false
         audioThread?.join(1_500)
         audioThread = null
@@ -444,12 +470,15 @@ class EcoService : Service() {
                 continue
             }
             var finished: Clip? = null
+            var fin = -1L
             synchronized(lock) {
                 if (ring.isNotEmpty()) {
                     writeToRingLocked(chunk, n)
+                    fin = total
                     if (saveEnd in 0..total) finished = takeClipLocked()
                 }
             }
+            if (fin >= 0) voz?.alimentar(chunk, n, fin)
             val clip = finished
             if (clip != null) runIo { writeClip(clip) }
         }
@@ -484,10 +513,14 @@ class EcoService : Service() {
         }
         val startMs = System.currentTimeMillis() - (total - start) * 1000L / SAMPLE_RATE
         val toqueS = if (saveTap >= start) (saveTap - start).toDouble() / SAMPLE_RATE else 0.0
+        val frase = saveFrase
         saveStart = -1
         saveEnd = -1
         saveTap = -1
-        return Clip(out, startMs, lastLocation, toqueS)
+        saveFinToque = -1
+        saveFrase = null
+        esperandoFinOrden = false
+        return Clip(out, startMs, lastLocation, toqueS, frase)
     }
 
     private fun finishPendingSaveNow() {
@@ -511,18 +544,60 @@ class EcoService : Service() {
             val maxLen = ring.size.toLong() - SAMPLE_RATE
             if (saveEnd < 0) {
                 saveStart = max(0L, total - activeBefore.toLong() * SAMPLE_RATE)
-                saveEnd = total + activeAfter.toLong() * SAMPLE_RATE
+                saveEnd = min(saveStart + maxLen, total + activeAfter.toLong() * SAMPLE_RATE)
                 saveTap = total
             } else {
                 // Tocar otra vez mientras se guarda = alargar el momento.
-                saveEnd = min(saveStart + maxLen, total + activeAfter.toLong() * SAMPLE_RATE)
+                saveEnd = min(saveStart + maxLen, max(saveEnd, total + activeAfter.toLong() * SAMPLE_RATE))
             }
+            saveFinToque = saveEnd
         }
         EcoState.lastSaved = ""
         buzz()
         refreshLocation()
         updateLiveState()
         refreshNotification()
+    }
+
+    /**
+     * Oyó "Eco, recuérdame…": guarda lo que ya escuchó y sigue grabando mientras dictas la orden
+     * (hasta que te callas, máximo 30 s). Vibra dos veces para que sepas que te escuchó.
+     */
+    private fun ordenDeVoz(frase: String, desde: Long) {
+        synchronized(lock) {
+            if (ring.isEmpty() || !EcoState.running || EcoState.paused) return
+            val maxLen = ring.size.toLong() - SAMPLE_RATE
+            val tope = total + DetectorVoz.ORDEN_MAX_S.toLong() * SAMPLE_RATE
+            if (saveEnd < 0) {
+                saveStart = max(0L, total - activeBefore.toLong() * SAMPLE_RATE)
+                saveEnd = min(saveStart + maxLen, tope)
+                saveFinToque = -1
+            } else {
+                saveEnd = min(saveStart + maxLen, max(saveEnd, tope))
+            }
+            saveTap = max(saveStart, desde)  // ahí empieza la orden: la laptop la busca justo ahí
+            saveFrase = frase
+            esperandoFinOrden = true
+        }
+        main.post {
+            EcoState.vozUltimaMs = System.currentTimeMillis()
+            EcoState.vozFrase = frase
+            EcoState.lastSaved = ""
+            buzzVoz()
+            refreshLocation()
+            updateLiveState()
+            refreshNotification()
+        }
+    }
+
+    /** Te callaste después de la orden: el momento termina medio segundo después (o cuando pedía el toque). */
+    private fun finDeOrden() {
+        synchronized(lock) {
+            if (!esperandoFinOrden || saveEnd < 0) return
+            esperandoFinOrden = false
+            saveEnd = max(saveFinToque, min(saveEnd, total + SAMPLE_RATE / 2))
+        }
+        main.post { updateLiveState() }
     }
 
     private fun writeClip(clip: Clip) {
@@ -536,6 +611,7 @@ class EcoService : Service() {
             .put("duracion_s", clip.pcm.size.toDouble() / SAMPLE_RATE)
             .put("toque_s", clip.toqueS)
             .put("app", "eco-android-1")
+        if (clip.frase != null) meta.put("orden", true).put("frase", clip.frase)
         clip.location?.let {
             meta.put("lat", it.latitude)
                 .put("lon", it.longitude)
@@ -997,6 +1073,14 @@ class EcoService : Service() {
     private fun buzz() {
         try {
             vibrator()?.vibrate(VibrationEffect.createOneShot(70, VibrationEffect.DEFAULT_AMPLITUDE))
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Dos toquecitos: "te escuché, sigue hablando". Distinto del toque de Guardar. */
+    private fun buzzVoz() {
+        try {
+            vibrator()?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 45, 90, 45), -1))
         } catch (_: Exception) {
         }
     }

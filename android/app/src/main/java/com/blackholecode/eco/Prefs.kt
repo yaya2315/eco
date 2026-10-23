@@ -41,6 +41,11 @@ class Prefs(context: Context) {
         get() = sp.getInt(K_PRESTADO, 0)
         set(value) = sp.edit().putInt(K_PRESTADO, value.coerceAtLeast(0)).apply()
 
+    /** «Eco, recuérdame…»: activar Eco con la voz (el modelo se baja una vez desde la laptop). */
+    var vozActiva: Boolean
+        get() = sp.getBoolean(K_VOZ, false)
+        set(value) = sp.edit().putBoolean(K_VOZ, value).apply()
+
     /** Contactos de emergencia (nombre y número), en JSON. Solo viven en el teléfono. */
     var contactosJson: String
         get() = sp.getString(K_CONTACTOS, "[]") ?: "[]"
@@ -96,5 +101,6 @@ class Prefs(context: Context) {
         private const val K_NOMBRE = "nombre"
         private const val K_WHATSAPP = "usar_whatsapp"
         private const val K_SMS_SIEMPRE = "sms_siempre"
+        private const val K_VOZ = "voz_activa"
     }
 }

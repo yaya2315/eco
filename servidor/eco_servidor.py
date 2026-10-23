@@ -701,7 +701,7 @@ def vocabulario() -> str:
     anotó (así escribe "Steven" y no "estiven"). Se arma cada 10 minutos."""
     if time.time() - _vocab_cache["cuando"] < 600:
         return _vocab_cache["texto"]
-    palabras: list[str] = []
+    palabras: list[str] = ["Eco"]  # para que escriba "Eco, recuérdame…" y no "hecho" o "ego"
     nombre = str(CFG["usuario"].get("nombre") or "").strip()
     if nombre and nombre != "el usuario":
         palabras.append(nombre)
@@ -837,6 +837,60 @@ def sin_marcas(texto: str) -> str:
     return re.sub(r"\s*\[TOQUE\]\s*", " ", texto or "").strip()
 
 
+# ── Órdenes de voz: "Eco, recuérdame…", "Eco, anota…", "Eco, haz…" ──
+# El teléfono las detecta con un modelo chiquito; aquí Whisper (mucho más preciso) confirma que de
+# verdad dijiste "Eco" y saca exactamente lo que pediste.
+_VERBOS_ORDEN = (
+    r"recuerdame|recordame|acuerdame|acordame|acordate|acuerdate|recuerda|anota(me)?|anote|apunta(me)?|"
+    r"guarda(me)?|guarde|haz(me)?|hace(me)?|haga|pon(me)?|pone(me)?|avisa(me)?|agenda(me)?|escribe(me)?|"
+    r"escribi|toma nota|tome nota|no me dejes olvidar|no dejes que (se me olvide|olvide)|que no se me olvide|"
+    r"dile|manda(me)?|busca(me)?"
+)
+# "hecho", "ego" y "echo" son lo que Whisper a veces escribe cuando dices "Eco": solo valen
+# si después viene una orden ("hecho, recuérdame…"), para no confundirlas con su uso normal.
+_ORDEN_FUERTE = re.compile(r"\b(eco|ecco|eko|echo|ego|hecho|heco)\b[\s,.:;!¡¿?-]*(" + _VERBOS_ORDEN + r")\b")
+_ORDEN_SUAVE = re.compile(r"\b(eco|ecco|eko)\b[\s,.:;!¡¿?-]*")
+
+
+def _plano(texto: str) -> tuple[str, list[int]]:
+    """Texto sin tildes ni mayúsculas, y para cada letra su posición en el original."""
+    plano, mapa = [], []
+    for i, c in enumerate(texto):
+        for d in unicodedata.normalize("NFKD", c.lower()):
+            if not unicodedata.combining(d):
+                plano.append(d)
+                mapa.append(i)
+    return "".join(plano), mapa
+
+
+def buscar_orden(marcado: str) -> str | None:
+    """Lo que le pediste a Eco, con tus palabras. Busca "Eco + orden" lo más cerca de donde el
+    teléfono te escuchó ([TOQUE]); devuelve el texto desde la orden hasta el final, o None si en el
+    audio no aparece "Eco" (el teléfono se activó por error)."""
+    plano, mapa = _plano(marcado or "")
+    marca = plano.find(MARCA_TOQUE.lower())
+    marca = len(plano) if marca < 0 else marca
+    candidatos = list(_ORDEN_FUERTE.finditer(plano)) or list(_ORDEN_SUAVE.finditer(plano))
+    if not candidatos:
+        return None
+    m = min(candidatos, key=lambda x: abs(x.start() - marca))
+    inicio = m.start(2) if m.lastindex and m.lastindex >= 2 and m.group(2) else m.end()
+    orden = sin_marcas(marcado[mapa[inicio]:] if inicio < len(mapa) else "")
+    orden = orden.strip(" ,.;:-")
+    palabras = orden.split()
+    if len(palabras) > 60:  # siguió hablando de otra cosa: lo de la orden va al principio
+        orden = " ".join(palabras[:60]) + "…"
+    return (orden[:1].upper() + orden[1:]) if orden else None
+
+
+def _orden_como_tarea(orden: str) -> str:
+    t = re.sub(r"^(recu[eé]rdame|record[aá]me|acu[eé]rdame|acord[aá]me|acord[aá]te|acu[eé]rdate|recuerda|"
+               r"an[oó]ta(me)?|ap[uú]nta(me)?|gu[aá]rda(me)?|toma nota|tome nota|que no se me olvide|"
+               r"no me dejes olvidar)\b[\s,:]*(de |que )?", "", orden.strip(), flags=re.I)
+    t = t.strip(" ,.;:") or orden.strip()
+    return (t[:1].upper() + t[1:])[:300]
+
+
 def estado_whisper() -> str:
     nombre, _beam, motivo = elegir_modelo()
     return nombre + (f" · {motivo}" if motivo else "")
@@ -955,6 +1009,17 @@ def _prompt_usuario(texto: str, cuando: datetime, lugar: str | None, origen: str
         partes.append(f"Lugar: {lugar}.")
     partes.append(f'{tipo}:\n"""\n{texto}\n"""')
     return "\n".join(partes)
+
+
+def contexto_orden(orden: str) -> str:
+    nombre = CFG["usuario"]["nombre"]
+    return (
+        f"ORDEN DIRECTA: donde dice [ORDEN], {nombre} le habló a Eco y le pidió: «{orden}». Eso es lo principal "
+        f"de este momento: anótalo exactamente como lo pidió. «Recuérdame…», «haz…», «avísame…», «pon…» = una "
+        "TAREA (con la fecha y la hora que diga; si dice «mañana» o «a las 5», resuélvelas). «Anota…» o «guarda…» "
+        "= una TAREA si es algo por hacer, o un DATO si es información. El título es sobre lo que pidió. Lo de "
+        f"antes de [ORDEN] es lo que el teléfono ya estaba escuchando: úsalo para completar la orden (por ejemplo, "
+        "«recuérdame eso» = lo que se acababa de decir) y anota además lo importante que haya ahí.")
 
 
 def _json_de(texto: str) -> dict:
@@ -1726,28 +1791,43 @@ def procesar(ruta: Path) -> int | None:
     marcado = transcribir(ruta, toque)  # con la marca [TOQUE] donde tocaste Guardar
     texto = sin_marcas(marcado)
     log.info("Transcrito %s (%s de audio) en %.0f s", archivo, duracion(dur), time.time() - t0)
+    # ¿Lo guardaste diciendo "Eco, …"? Entonces lo principal es lo que le pediste.
+    orden = buscar_orden(marcado) if meta.get("orden") else None
     if origen == "voz" and meta.get("texto"):
         texto = f"{meta['texto']}\n{texto}".strip()  # lo que escribiste junto a la nota de voz
         marcado = f"{meta['texto']}\n{marcado}".strip()
 
     # ¿Suena a peligro? Va antes que todo lo demás para que la pregunta te llegue rápido.
     alerta_id = revisar_peligro(marcado, inicio, origen, lugar, lat, lon, archivo)
+    if meta.get("orden") and not orden and not alerta_id:
+        # El teléfono creyó oír "Eco" pero Whisper no lo encontró: no lo pediste, así que no se guarda.
+        log.info("Activación por voz sin «Eco» en el audio (%s): no lo guardo", archivo)
+        _limpiar(ruta, meta_ruta)
+        return None
 
     # Tus notas de voz son tuyas: su texto se guarda siempre. Lo que escucha el teléfono, solo si lo pides.
     guardar_texto = origen == "voz" or bool(CFG["notas"].get("guardar_transcripcion"))
-    minimo = 1 if origen == "voz" else 4  # "comprar pan" es una nota de voz válida
+    minimo = 1 if origen == "voz" or orden else 4  # "comprar pan" es una nota de voz válida
     if len(texto.split()) < minimo:
         info = normalizar({"titulo": "Sin voz clara", "resumen": "No se entendió lo suficiente en este momento."})
         cid = guardar_captura(archivo=archivo, origen=origen, inicio=inicio, dur=dur, lat=lat, lon=lon,
                               lugar=lugar, info=info, transcripcion=texto or None, ia_ok=True)
     else:
         try:
-            info = extraer(marcado, inicio, lugar, origen)
+            if orden:
+                info = extraer(marcado.replace(MARCA_TOQUE, "[ORDEN]"), inicio, lugar, origen, contexto_orden(orden))
+            else:
+                info = extraer(marcado, inicio, lugar, origen)
             ia_ok = True
         except Exception as ex:
             log.warning("La IA falló (%s); guardo la transcripción para no perder nada", ex)
             info = normalizar({"titulo": "Momento guardado", "resumen": texto[:200] + ("…" if len(texto) > 200 else "")})
             ia_ok = False
+        if orden and not (info["tareas"] or info["datos"] or info["ideas"]):
+            # Lo que pediste nunca se pierde, aunque la IA no lo haya entendido.
+            info["tareas"].append({"texto": _orden_como_tarea(orden), "fecha": None, "hora": None})
+            if info["titulo"] in ("Momento guardado", "Sin voz clara"):
+                info["titulo"] = _orden_como_tarea(orden)[:80]
         cid = guardar_captura(archivo=archivo, origen=origen, inicio=inicio, dur=dur, lat=lat, lon=lon,
                               lugar=lugar, info=info, transcripcion=texto if (guardar_texto or not ia_ok) else None,
                               ia_ok=ia_ok)
@@ -1756,7 +1836,11 @@ def procesar(ruta: Path) -> int | None:
         with closing(db()) as con, con:
             con.execute("UPDATE alertas_peligro SET captura_id=? WHERE id=?", (cid, alerta_id))
     actualizar_notas(inicio.date())
-    enviar_o_guardar(mensaje_captura(cid))
+    if orden:
+        log.info("Orden de voz: %s", orden[:120])
+        enviar_o_guardar(f"🎙️ <b>Me pediste:</b> «{e(orden)}»\n\n" + mensaje_captura(cid))
+    else:
+        enviar_o_guardar(mensaje_captura(cid))
 
     if CFG["notas"].get("guardar_audio"):
         AUDIOS.mkdir(parents=True, exist_ok=True)
@@ -3535,6 +3619,74 @@ def revisar_app() -> None:
                          "Abre Eco en tu teléfono y toca <b>Actualizar</b>.")
 
 
+# ── Modelo de voz del teléfono ("Eco, recuérdame…") ──
+# Un modelo chiquito de reconocimiento (Vosk, español, unos 40 MB) que corre en el teléfono sin
+# internet y solo sirve para oír "Eco + orden". La laptop lo baja una vez y se lo pasa al teléfono,
+# así la app no pesa 40 MB más en cada actualización.
+VOZ_MODELO = "vosk-model-small-es-0.42"
+VOZ_URL = f"https://alphacephei.com/vosk/models/{VOZ_MODELO}.zip"
+_voz_lock = threading.Lock()
+_voz_estado = {"bajando": False, "error": None}
+
+
+def _carpeta_voz() -> Path:
+    return BASE / "datos" / "voz"  # una sola copia para todos los perfiles
+
+
+def info_voz() -> dict | None:
+    try:
+        d = json.loads((_carpeta_voz() / "voz.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if (_carpeta_voz() / f"{d.get('modelo')}.zip").exists() else None
+
+
+def bajar_modelo_voz() -> None:
+    if not _voz_lock.acquire(blocking=False):
+        return  # ya se está bajando
+    _voz_estado.update(bajando=True, error=None)
+    try:
+        import zipfile
+        carpeta = _carpeta_voz()
+        carpeta.mkdir(parents=True, exist_ok=True)
+        destino = carpeta / f"{VOZ_MODELO}.zip"
+        parcial = carpeta / f"{VOZ_MODELO}.zip.part"
+        log.info("Bajando el modelo de voz para el teléfono (%s)…", VOZ_MODELO)
+        req = urllib.request.Request(VOZ_URL, headers={"User-Agent": "Eco-laptop"})
+        h = hashlib.sha256()
+        with urllib.request.urlopen(req, timeout=60) as r, open(parcial, "wb") as f:
+            while bloque := r.read(1 << 16):
+                f.write(bloque)
+                h.update(bloque)
+        with zipfile.ZipFile(parcial) as z:
+            nombres = z.namelist()
+            if not any(n.endswith("am/final.mdl") for n in nombres) or z.testzip() is not None:
+                raise ValueError("el archivo del modelo llegó dañado")
+        parcial.replace(destino)
+        info = {"modelo": VOZ_MODELO, "tamano": destino.stat().st_size, "sha256": h.hexdigest(),
+                "bajado": ahora().isoformat(timespec="seconds")}
+        (carpeta / "voz.json").write_text(json.dumps(info), encoding="utf-8")
+        log.info("Modelo de voz listo (%.0f MB)", info["tamano"] / 1048576)
+    except Exception as ex:
+        _voz_estado["error"] = f"No pude bajar el modelo de voz ({ex}). Reviso otra vez cuando el teléfono lo pida."
+        log.warning("%s", _voz_estado["error"])
+        _limpiar(_carpeta_voz() / f"{VOZ_MODELO}.zip.part")
+    finally:
+        _voz_estado["bajando"] = False
+        _voz_lock.release()
+
+
+def estado_voz(pedir: bool = False) -> dict:
+    """Lo que ve el teléfono. Con pedir=True, si la laptop no lo tiene, empieza a bajarlo."""
+    info = info_voz()
+    if info is None and pedir and not _voz_estado["bajando"]:
+        threading.Thread(target=bajar_modelo_voz, name="voz", daemon=True).start()
+        _voz_estado["bajando"] = True
+    if info:
+        return {"ok": True, "listo": True, **{k: info[k] for k in ("modelo", "tamano", "sha256")}}
+    return {"ok": True, "listo": False, "bajando": _voz_estado["bajando"], "error": _voz_estado["error"]}
+
+
 def actualizaciones_hilo() -> None:
     time.sleep(20)
     _app_evento.set()
@@ -4277,6 +4429,15 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
             return self._json(200, {"ok": True, "alerta": alerta_pendiente(), "nombre": CFG["usuario"]["nombre"]})
+        if ruta in ("/app/voz", "/app/voz.zip"):  # el modelo para "Eco, recuérdame…"
+            if not self._autorizado():
+                return self._json(401, {"ok": False, "error": "token"})
+            if ruta == "/app/voz":
+                return self._json(200, estado_voz(pedir=True))
+            info = info_voz()
+            if not info:
+                return self._json(404, {"ok": False})
+            return self._archivo(_carpeta_voz() / f"{info['modelo']}.zip", "application/zip")
         if ruta in ("/app/version", "/app/eco.apk"):  # la app del teléfono pregunta si hay versión nueva
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
