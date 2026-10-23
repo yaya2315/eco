@@ -52,6 +52,8 @@ object EcoState {
     /** Última vez que te oyó decir "Eco, …" y qué frase reconoció. */
     @Volatile var vozUltimaMs = 0L
     @Volatile var vozFrase = ""
+    /** Última vez que el detector oyó voz cerca (para la prueba en pantalla). */
+    @Volatile var vozOyendoMs = 0L
 
     @Volatile var lastSaved = ""
     @Volatile var lastUpload = "Todavía no se ha subido nada"

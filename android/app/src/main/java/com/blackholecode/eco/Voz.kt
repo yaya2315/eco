@@ -236,6 +236,7 @@ class DetectorVoz(
                 val nivel = rms(t.pcm)
                 val hayVoz = nivel > max(ruido * 3.0, 150.0)
                 if (!hayVoz) ruido = ruido * 0.97 + nivel * 0.03 else ruido = ruido * 0.999 + nivel * 0.001
+                if (hayVoz) EcoState.vozOyendoMs = System.currentTimeMillis()
 
                 // Después de una orden: ¿ya te callaste? (2 s de silencio y al menos 3 s de orden)
                 if (activadoEn >= 0) {

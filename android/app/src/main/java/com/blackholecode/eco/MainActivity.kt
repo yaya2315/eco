@@ -134,6 +134,8 @@ class MainActivity : Activity() {
     private lateinit var volumenEstado: TextView
     private lateinit var vozSwitch: Switch
     private lateinit var vozEstadoTexto: TextView
+    private lateinit var bordeBoton: Button
+    private lateinit var filaBorde: Fila
 
     // Permisos y batería
     private lateinit var filaMic: Fila
@@ -282,6 +284,7 @@ class MainActivity : Activity() {
         paintRow(filaMic, hasMic())
         paintRow(filaNotif, hasNotifications())
         paintRow(filaUbicacion, hasLocation(), opcional = true)
+        paintRow(filaBorde, Settings.canDrawOverlays(this), opcional = !prefs.vozActiva, noTexto = if (prefs.vozActiva) "Falta" else "Opcional")
         permsButton.visibility = if (missingPerms().isEmpty()) View.GONE else View.VISIBLE
         permsButton.text = if (hasMic() && hasNotifications()) "Activar ubicación" else "Dar permisos"
         val sinLimite = sinLimiteDeBateria()
@@ -439,14 +442,35 @@ class MainActivity : Activity() {
             ahora - s.vozUltimaMs < 60_000 ->
                 "✓ Te escuché («${s.vozFrase}») a las ${SimpleDateFormat("HH:mm", Locale.US).format(Date(s.vozUltimaMs))}. " +
                     "Tu laptop lo anota en un par de minutos." to C_LIVE
+            s.vozEstado == "escuchando" && ahora - s.vozOyendoMs < 2_000 ->
+                "Oigo voz… Di «Eco, recuérdame…» y lo que quieres." to C_ACCENT_SOFT
             s.vozEstado == "escuchando" ->
                 "Listo. Di «Eco, recuérdame…», «Eco, anota…» o «Eco, haz…» y lo que quieres. " +
-                    "Vibra dos veces cuando te escucha." to C_MUTED
+                    "Cuando te escucha, vibra dos veces y la pantalla se ilumina con un borde azul." to C_MUTED
             else -> "Se activa cuando Eco está escuchando." to C_MUTED
         }
         vozEstadoTexto.text = texto
         vozEstadoTexto.setTextColor(color)
+        bordeBoton.visibility = if (prefs.vozActiva && !BordeVoz.disponible(this)) View.VISIBLE else View.GONE
         if (vozSwitch.isChecked != prefs.vozActiva) vozSwitch.isChecked = prefs.vozActiva
+    }
+
+    /** «Mostrar sobre otras apps»: Android lo da desde Ajustes, no con un cuadro de permiso. */
+    private fun pedirBorde() {
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Borde azul al escucharte")
+            .setMessage("Para que la pantalla se ilumine cuando dices «Eco, …», Android pide el permiso " +
+                "«Mostrar sobre otras apps». En la pantalla que se abre, busca Eco y actívalo. " +
+                "El borde no tapa nada ni bloquea tus toques.")
+            .setPositiveButton("Abrir ajustes") { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                } catch (_: Exception) {
+                    openAppSettings()
+                }
+            }
+            .setNegativeButton("Ahora no", null)
+            .show()
     }
 
     private fun renderCarga() {
@@ -1154,6 +1178,8 @@ class MainActivity : Activity() {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         card.addView(vozEstadoTexto, lp(top = 2))
+        bordeBoton = button("Permitir el borde azul", primary = false) { pedirBorde() }
+        card.addView(bordeBoton, lp(top = 10))
         card.addView(
             label("Escucha solo «Eco» + una orden, dentro del teléfono y sin internet. Guarda lo que ya estaba " +
                 "escuchando más lo que le dices, hasta que te callas.", 13f, C_MUTED).apply { setLineSpacing(0f, 1.2f) },
@@ -1212,8 +1238,10 @@ class MainActivity : Activity() {
         filaMic = statusRow(card, "Micrófono", top = 8)
         filaNotif = statusRow(card, "Notificaciones")
         filaUbicacion = statusRow(card, "Ubicación")
+        filaBorde = statusRow(card, "Mostrar sobre otras apps")
         card.addView(
-            label("La ubicación es opcional: sirve para saber dónde pasó cada momento.", 13f, C_MUTED)
+            label("La ubicación es opcional: sirve para saber dónde pasó cada momento. «Mostrar sobre otras " +
+                "apps» es para el borde azul que aparece cuando dices «Eco, …».", 13f, C_MUTED)
                 .apply { setLineSpacing(0f, 1.2f) },
             lp(top = 6)
         )

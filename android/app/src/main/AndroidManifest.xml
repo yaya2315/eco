@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- El borde azul que aparece cuando dices «Eco, …» (encima de cualquier app, sin bloquear toques). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Solo para el mensaje de emergencia, y solo cuando tú lo confirmas manteniendo el botón. -->
     <uses-permission android:name="android.permission.SEND_SMS" />

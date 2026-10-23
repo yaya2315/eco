@@ -16,6 +16,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.location.Location
 import android.location.LocationManager
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -27,6 +28,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -438,6 +440,7 @@ class EcoService : Service() {
     private fun stopRecorder(flushSave: Boolean) {
         if (flushSave) finishPendingSaveNow()
         voz?.detener()
+        BordeVoz.ocultar()
         capturing = false
         audioThread?.join(1_500)
         audioThread = null
@@ -579,6 +582,7 @@ class EcoService : Service() {
             saveFrase = frase
             esperandoFinOrden = true
         }
+        BordeVoz.mostrar(this)
         main.post {
             EcoState.vozUltimaMs = System.currentTimeMillis()
             EcoState.vozFrase = frase
@@ -597,6 +601,7 @@ class EcoService : Service() {
             esperandoFinOrden = false
             saveEnd = max(saveFinToque, min(saveEnd, total + SAMPLE_RATE / 2))
         }
+        BordeVoz.ocultar()
         main.post { updateLiveState() }
     }
 
@@ -1077,11 +1082,24 @@ class EcoService : Service() {
         }
     }
 
-    /** Dos toquecitos: "te escuché, sigue hablando". Distinto del toque de Guardar. */
+    /**
+     * Dos toques firmes: "te escuché, sigue hablando". Distinto del toque de Guardar.
+     * Va como alarma para que Android no lo calle aunque tengas apagada la vibración al tocar.
+     */
+    @Suppress("DEPRECATION")
     private fun buzzVoz() {
+        val v = vibrator() ?: return
+        val tiempos = longArrayOf(0, 110, 110, 110)
+        val efecto = if (v.hasAmplitudeControl()) VibrationEffect.createWaveform(tiempos, intArrayOf(0, 255, 0, 255), -1)
+        else VibrationEffect.createWaveform(tiempos, -1)
         try {
-            vibrator()?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 45, 90, 45), -1))
+            if (Build.VERSION.SDK_INT >= 33) {
+                v.vibrate(efecto, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
+            } else {
+                v.vibrate(efecto, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
+            }
         } catch (_: Exception) {
+            try { v.vibrate(efecto) } catch (_: Exception) {}
         }
     }
 

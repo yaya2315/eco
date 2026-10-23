@@ -317,7 +317,8 @@ Sin tocar nada: dices **«Eco»** y una orden, y Eco guarda lo que ya estaba esc
 
 - Ejemplos: *«Eco, recuérdame pagarle a Steven el viernes»*, *«Eco, anota que el examen es el martes a las 2»*, *«Eco, recuérdame eso»* (usa lo que se acababa de decir), *«Eco, haz una lista de lo que falta para el robot»*.
 - Palabras que lo activan, después de «Eco»: recuérdame / recordame / acordate, anota, apunta, guarda, haz / haceme, pon / poneme, avísame, agenda, escribe, toma (nota), busca.
-- Cuando te escucha, el teléfono **vibra dos veces** (el toque de Guardar vibra una).
+- Cuando te escucha, la pantalla se ilumina con un **borde azul difuminado** mientras hablas (se va cuando te callas) y el teléfono **vibra dos veces**. El borde necesita el permiso **Mostrar sobre otras apps**: la app te ofrece el botón *Permitir el borde azul*. No tapa nada ni bloquea tus toques.
+- Para probarlo con la app abierta: debajo del interruptor dice **«Oigo voz…»** cuando escucha a alguien hablar cerca.
 - **Encenderlo:** en la app, sección del momento (el cronómetro) → **Activar con la voz**. La primera vez el teléfono baja un modelo de voz de tu laptop (unos 40 MB, una sola vez; la laptop lo baja de internet si no lo tiene).
 - **Privacidad:** el modelo corre **dentro del teléfono, sin internet**, y solo entiende «Eco + orden»: todo lo demás le suena a ruido. Solo trabaja cuando hay voz cerca, para no gastar batería.
 - **Doble revisión:** en la laptop, Whisper confirma que de verdad dijiste «Eco». Si el teléfono se activó por error (nadie dijo «Eco»), ese audio se borra y no se guarda nada.
