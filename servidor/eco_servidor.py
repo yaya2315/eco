@@ -73,6 +73,9 @@ DEFAULTS: dict = {
         # Con la laptop enchufada usa el más preciso que aguanta tu Ryzen ("" = siempre el de arriba).
         # large-v3-turbo: casi tan preciso como el más grande de Whisper y bastante más rápido.
         "modelo_preciso": "large-v3-turbo", "beam_preciso": 3,
+        # true = SIEMPRE el preciso: con batería, con cola larga y aunque haya que bajarlo primero. Más lento, pero
+        # nunca se cambia solo a uno peor (si no se puede bajar, el audio espera y se reintenta).
+        "siempre": False,
         # Nombres y palabras que Whisper debe esperar (además de tus clases y los nombres que ya anotó).
         "palabras": [],
         # Minutos sin usarlo para sacarlo de la memoria (0 = siempre listo). Útil con varios perfiles.
@@ -85,6 +88,9 @@ DEFAULTS: dict = {
         "ollama_modelo": "qwen2.5:3b",
         # Si lo instalaste (ollama pull qwen3.5:4b), Eco lo usa en vez del de arriba: entiende mucho mejor.
         "ollama_mejor": "qwen3.5:4b",
+        # true = SIEMPRE ollama_mejor, nunca el de reserva; si no está instalado, Eco lo baja solo (puede tardar).
+        "ollama_siempre": False,
+        "ollama_espera_s": 900,            # cuánto espera cada respuesta (un modelo grande en CPU puede necesitar más)
         "ollama_vision": "qwen2.5vl:3b",   # lee las fotos que mandas por Telegram
         "ollama_embed": "embeddinggemma",  # entiende el significado para "pregúntale a Eco" ("" = apagado)
         "ollama_url": "http://localhost:11434",
@@ -627,6 +633,8 @@ def elegir_modelo() -> tuple[str, int, str]:
     mejor = str(w.get("modelo_preciso") if "modelo_preciso" in w else w.get("modelo_corriente") or "").strip()
     if not mejor or mejor == rapido[0]:
         return (*rapido, "")
+    if w.get("siempre"):  # sin excepciones: ni batería, ni cola, ni "todavía no está bajado" (se baja al cargarlo)
+        return mejor, int(w.get("beam_preciso") or w.get("beam_corriente") or rapido[1]), "siempre el preciso"
     enchufada = con_corriente()
     if not enchufada:
         return (*rapido, "con batería" if enchufada is False else "")
@@ -1153,6 +1161,8 @@ def modelo_chat() -> str:
     """El modelo que entiende tus momentos: el mejor si ya lo instalaste; si no, el de siempre."""
     ia = CFG["ia"]
     mejor = str(ia.get("ollama_mejor") or "").strip()
+    if mejor and ia.get("ollama_siempre"):
+        return mejor  # sin reserva: si falta, _llamar_ollama lo baja
     if mejor:
         instalados = modelos_ollama()
         if instalados and _tiene(instalados, mejor):
@@ -1164,9 +1174,33 @@ def modelo_chat() -> str:
 _PIENSAN = ("qwen3", "deepseek-r1", "gpt-oss", "gemma4", "magistral", "phi4-reasoning")
 
 
+_ollama_asegurado: set[str] = set()
+
+
+def _asegurar_ollama(modelo: str) -> None:
+    """Con ollama_siempre: si el modelo no está instalado, se baja ahora (una sola vez, puede tardar mucho)."""
+    if modelo in _ollama_asegurado:
+        return
+    instalados = modelos_ollama(forzar=True)
+    if instalados is not None and any(m == modelo or m == f"{modelo}:latest" for m in instalados):
+        _ollama_asegurado.add(modelo)
+        return
+    log.info("Bajando el modelo %s con Ollama (puede tardar bastante; no lo cierres)…", modelo)
+    req = urllib.request.Request(CFG["ia"]["ollama_url"].rstrip("/") + "/api/pull",
+                                 data=json.dumps({"model": modelo, "stream": False}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=4 * 3600) as r:
+        r.read()
+    _modelos_ollama["cuando"] = 0.0
+    _ollama_asegurado.add(modelo)
+    log.info("Modelo %s listo", modelo)
+
+
 def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True, max_tokens: int | None = None) -> str:
     ia = CFG["ia"]
     modelo = modelo_chat()
+    if ia.get("ollama_siempre"):
+        _asegurar_ollama(modelo)
     pedido = {
         "model": modelo, "stream": False, "keep_alive": "15m",
         # num_ctx: Ollama trae 2048-4096 de fábrica y recorta en silencio lo que no cabe.
@@ -1183,7 +1217,7 @@ def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True, max_token
 
     def pedir(datos: dict) -> str:
         req = urllib.request.Request(url, data=json.dumps(datos).encode(), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=900) as r:
+        with urllib.request.urlopen(req, timeout=int(ia.get("ollama_espera_s") or 900)) as r:
             return json.load(r)["message"]["content"]
 
     try:

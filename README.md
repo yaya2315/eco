@@ -96,6 +96,25 @@ La primera vez que llegue un audio, Whisper descarga el modelo `small` (unos 500
 - En `config.toml` pon `proveedor = "ollama"`.
 - Es más lento en tu Ryzen que en la nube, pero nada sale de tu casa.
 
+**Siempre el mejor modelo (sin importar cuánto tarde).** Por defecto Eco cambia solo a uno más rápido y peor cuando la laptop va con batería, hay mucha cola o el modelo bueno todavía no está bajado. Para que **nunca** lo haga, en `config.toml`:
+
+```toml
+[whisper]
+modelo_preciso = "large-v3"   # el Whisper más preciso (se baja solo la primera vez, ~3 GB)
+beam_preciso = 5
+siempre = true                # nunca cambia a uno rápido
+liberar_min = 3               # suelta la memoria entre partes para que quepa la IA
+
+[ia]
+proveedor = "ollama"
+ollama_mejor = "qwen3.5:9b"   # ollama pull qwen3.5:9b
+ollama_siempre = true         # nunca usa el modelo de reserva; si falta, Eco lo baja solo
+ollama_espera_s = 3600        # un modelo grande en CPU tarda más en cada respuesta
+ollama_contexto = 12288
+```
+
+Con `siempre = true`, si no hay internet para bajar el modelo, el audio espera en cola y se reintenta: nunca se transcribe con uno peor.
+
 ### 6. Conecta Telegram
 
 1. En Telegram, abre **@BotFather**, escribe `/newbot` y ponle un nombre. Copia el **token** que te da y pégalo en `[telegram] token`.

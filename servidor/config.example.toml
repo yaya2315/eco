@@ -23,6 +23,9 @@ hilos = 0       # 0 = automático (enchufada usa todos los núcleos, con priorid
 # "" = usar siempre el de arriba.
 modelo_preciso = "large-v3-turbo"
 beam_preciso = 3
+# true = SIEMPRE el preciso (con batería, con cola larga, siempre). Más lento, pero nunca baja de calidad.
+# Si el modelo todavía no está bajado, Eco lo baja la primera vez y espera (necesita internet esa vez).
+siempre = false
 # Nombres o palabras raras que dices seguido (Eco ya usa tus clases y los nombres que anotó).
 palabras = []   # por ejemplo ["Steven", "Market Conexión", "Tinkercad"]
 liberar_min = 0 # minutos sin audios para sacar Whisper de la memoria (0 = siempre listo)
@@ -35,6 +38,9 @@ claude_modelo = "claude-haiku-5-5"
 claude_api_key = ""             # o deja vacío y usa la variable de entorno ANTHROPIC_API_KEY
 ollama_modelo = "qwen2.5:3b"
 ollama_mejor = "qwen3.5:4b"     # si lo instalas (ollama pull qwen3.5:4b), Eco lo usa: entiende mucho mejor
+ollama_siempre = false          # true = SIEMPRE ollama_mejor (si falta, Eco lo baja solo). Nunca usa el de reserva.
+ollama_espera_s = 900           # segundos que espera cada respuesta; con un modelo grande en CPU sube a 3600
+ollama_contexto = 8192          # memoria de lectura del modelo; con crónicas largas conviene 12288
 ollama_vision = "qwen2.5vl:3b"  # lee las fotos que le mandas al bot (ollama pull qwen2.5vl:3b)
 ollama_embed = "embeddinggemma" # entiende el significado al preguntarle a Eco (ollama pull embeddinggemma)
 ollama_url = "http://localhost:11434"
