@@ -105,6 +105,11 @@ DEFAULTS: dict = {
         "guardar_transcripcion_clase": True,
         "guardar_transcripcion_reunion": True,
         "clase_auto_terminar_min": 20,   # si la clase lleva este tiempo en silencio, se termina sola
+        # Crónica: la IA te cuenta la grabación completa, como una charla, en vez de solo puntos clave.
+        "cronica_reunion": True,
+        "cronica_clase": False,
+        "silencio_marca_s": 20,          # una pausa de este tiempo o más se anota como "[silencio de …]"
+        "marca_hora_s": 120,             # cada cuántos segundos se anota la hora en la transcripción
     },
     "respaldo": {
         "activo": True,
@@ -305,11 +310,25 @@ def configurar(cfg: dict, base_datos: Path | None = None) -> None:
     for d in (DATOS, ENTRADA, NOTAS):
         d.mkdir(parents=True, exist_ok=True)
     init_db()
-    if not str(cfg["telegram"].get("chat_id") or "").strip():
-        try:  # el chat que se conectó solo con el enlace de Telegram del panel
-            cfg["telegram"]["chat_id"] = str(json.loads((DATOS / "telegram.json").read_text(encoding="utf-8"))["chat_id"])
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
+    # El bot y el chat que se conectaron desde el panel (sin tocar config.toml).
+    guardado = _telegram_guardado()
+    for clave in ("token", "chat_id"):
+        if not str(cfg["telegram"].get(clave) or "").strip() and guardado.get(clave):
+            cfg["telegram"][clave] = str(guardado[clave])
+
+
+def _telegram_guardado() -> dict:
+    try:
+        d = json.loads((DATOS / "telegram.json").read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _guardar_telegram(**cambios) -> None:
+    d = _telegram_guardado()
+    d.update(cambios)
+    (DATOS / "telegram.json").write_text(json.dumps(d), encoding="utf-8")
 
 
 def _hhmm(texto: str, defecto: tuple[int, int]) -> tuple[int, int]:
@@ -445,7 +464,8 @@ CREATE TABLE IF NOT EXISTS vectores (     -- "significado" de cada pedazo, para 
 
 # Columnas que se agregaron después: se añaden solas a una base de datos vieja.
 MIGRACIONES = {
-    "capturas": [("adjunto", "TEXT")],                      # foto guardada en notas/fotos
+    "capturas": [("adjunto", "TEXT"),                       # foto guardada en notas/fotos
+                 ("cronica", "TEXT")],                      # reunión/clase contada como una charla
     "items": [("origen", "TEXT"), ("externo", "TEXT"),      # 'classroom' + id de Classroom
               ("enlace", "TEXT"), ("detalle", "TEXT")],     # link para abrirla + nombre de la clase
 }
@@ -735,11 +755,28 @@ def vocabulario() -> str:
 
 
 MARCA_TOQUE = "[TOQUE]"
+# Marcas que se dejan en las grabaciones largas: "[20:41]" (hora real) y "[silencio de 45 s]".
+RE_MARCAS = re.compile(r"\[(?:\d{1,2}:\d{2}|silencio de [^\]]+)\]")
 
 
-def transcribir(ruta: Path, toque_s: float | None = None) -> str:
+def _dur_corta(seg: float) -> str:
+    seg = int(round(seg))
+    if seg < 90:
+        return f"{seg} s"
+    m, s = divmod(seg, 60)
+    return f"{m} min" + (f" {s} s" if s >= 10 and m < 5 else "")
+
+
+def sin_marcas_largas(texto: str) -> str:
+    """La transcripción sin las marcas de hora y silencio (para contar palabras y extraer tareas)."""
+    return re.sub(r"\s+", " ", RE_MARCAS.sub(" ", texto or "")).strip()
+
+
+def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None = None) -> str:
     """Texto del audio. Con toque_s (segundo en que tocaste Guardar), deja la marca [TOQUE] ahí:
-    a la IA le sirve para saber qué es lo tuyo y qué era ruido de antes."""
+    a la IA le sirve para saber qué es lo tuyo y qué era ruido de antes.
+    Con inicio_ms (grabaciones largas: momento en que empieza esta parte) deja además la hora cada
+    cierto tiempo y los silencios largos, para que la crónica pueda decir "hubo un silencio"."""
     w = CFG["whisper"]
     nombre, beam, motivo = elegir_modelo()
     with _whisper_lock, turno_whisper():
@@ -761,15 +798,30 @@ def transcribir(ruta: Path, toque_s: float | None = None) -> str:
         )
         partes: list[str] = []
         marcado = toque_s is None or toque_s <= 3
+        con_marcas = inicio_ms is not None
+        umbral = float(CFG["sesiones"].get("silencio_marca_s") or 0)
+        cada = float(CFG["sesiones"].get("marca_hora_s") or 0)
+        ultimo_fin, ultima_hora = 0.0, None
         for seg in segmentos:
             if not _segmento_valido(seg):
                 continue
+            if con_marcas:
+                if umbral and seg.start - ultimo_fin >= umbral:
+                    partes.append(f"[silencio de {_dur_corta(seg.start - ultimo_fin)}]")
+                if cada and (ultima_hora is None or seg.start - ultima_hora >= cada):
+                    partes.append(f"[{datetime.fromtimestamp(inicio_ms / 1000 + seg.start, TZ):%H:%M}]")
+                    ultima_hora = seg.start
+                ultimo_fin = seg.end
             if not marcado and seg.end > toque_s:  # el primer pedazo que llega hasta el toque o después
                 partes.append(MARCA_TOQUE)
                 marcado = True
             partes.append(seg.text.strip())
         if not marcado and partes:
             partes.append(MARCA_TOQUE)  # tocaste al final: todo lo dicho fue antes
+        if con_marcas and umbral:  # lo que queda callado hasta el final de esta parte
+            total = float(getattr(_info, "duration", 0) or 0)
+            if total - ultimo_fin >= umbral:
+                partes.append(f"[silencio de {_dur_corta(total - ultimo_fin)}]")
         _whisper_uso["t"] = time.time()
         return " ".join(partes).strip()
 
@@ -1073,7 +1125,7 @@ def normalizar(d: dict) -> dict:
     }
 
 
-def _llamar_claude(sistema: str, usuario: str, json_mode: bool = True) -> str:
+def _llamar_claude(sistema: str, usuario: str, json_mode: bool = True, max_tokens: int | None = None) -> str:
     try:
         import anthropic
     except ImportError as e:
@@ -1081,7 +1133,7 @@ def _llamar_claude(sistema: str, usuario: str, json_mode: bool = True) -> str:
     ia = CFG["ia"]
     cliente = anthropic.Anthropic(api_key=ia.get("claude_api_key") or None)
     msg = cliente.messages.create(
-        model=ia["claude_modelo"], max_tokens=2000, temperature=0.2,
+        model=ia["claude_modelo"], max_tokens=max_tokens or 2000, temperature=0.2,
         system=sistema, messages=[{"role": "user", "content": usuario}],
     )
     return "".join(getattr(b, "text", "") for b in msg.content)
@@ -1112,7 +1164,7 @@ def modelo_chat() -> str:
 _PIENSAN = ("qwen3", "deepseek-r1", "gpt-oss", "gemma4", "magistral", "phi4-reasoning")
 
 
-def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True) -> str:
+def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True, max_tokens: int | None = None) -> str:
     ia = CFG["ia"]
     modelo = modelo_chat()
     pedido = {
@@ -1123,6 +1175,8 @@ def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True) -> str:
     }
     if json_mode:
         pedido["format"] = "json"
+    if max_tokens:
+        pedido["options"]["num_predict"] = max_tokens
     if modelo.lower().startswith(_PIENSAN):
         pedido["think"] = False
     url = ia["ollama_url"].rstrip("/") + "/api/chat"
@@ -1143,10 +1197,10 @@ def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True) -> str:
     return re.sub(r"<think>.*?</think>", "", respuesta or "", flags=re.S).strip()
 
 
-def llamar_ia(sistema: str, usuario: str, json_mode: bool = True) -> str:
+def llamar_ia(sistema: str, usuario: str, json_mode: bool = True, max_tokens: int | None = None) -> str:
     proveedor = str(CFG["ia"].get("proveedor", "claude")).lower()
     llamar = _llamar_ollama if proveedor == "ollama" else _llamar_claude
-    return llamar(sistema, usuario, json_mode)
+    return llamar(sistema, usuario, json_mode, max_tokens)
 
 
 def extraer(texto: str, cuando: datetime, lugar: str | None, origen: str = "audio",
@@ -1264,14 +1318,15 @@ def calcular_recordatorio(fecha: str | None, hora: str | None, referencia: datet
 
 def guardar_captura(*, archivo: str | None, origen: str, inicio: datetime, dur: float | None,
                     lat: float | None, lon: float | None, lugar: str | None, info: dict,
-                    transcripcion: str | None, ia_ok: bool, adjunto: str | None = None) -> int:
+                    transcripcion: str | None, ia_ok: bool, adjunto: str | None = None,
+                    cronica: str | None = None) -> int:
     with closing(db()) as con, con:
         cur = con.execute(
             "INSERT INTO capturas(archivo, origen, inicio, duracion, lat, lon, lugar, titulo, resumen, "
-            "transcripcion, importancia, ia_ok, procesado, adjunto) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "transcripcion, importancia, ia_ok, procesado, adjunto, cronica) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (archivo, origen, inicio.isoformat(timespec="seconds"), dur, lat, lon, lugar, info["titulo"],
              info["resumen"], transcripcion, info["importancia"], int(ia_ok), ahora().isoformat(timespec="seconds"),
-             adjunto),
+             adjunto, cronica),
         )
         cid = cur.lastrowid
         for t in info["tareas"]:
@@ -1342,9 +1397,9 @@ def render_dia(d: date) -> Path:
                     lineas.append(titulo)
                     lineas += [f"- {i['texto']}" for i in grupo]
                     lineas.append("")
-            if c["transcripcion"] and c["origen"] in TIPOS_SESION:
+            if (c["transcripcion"] or c["cronica"]) and c["origen"] in TIPOS_SESION:
                 enlace = archivo_transcripcion(c).relative_to(NOTAS).as_posix().removesuffix(".md")
-                lineas += [f"📄 Transcripción completa: [[{enlace}]]", ""]
+                lineas += [f"📖 {'Crónica y transcripción' if c['cronica'] else 'Transcripción'} completa: [[{enlace}]]", ""]
             elif c["transcripcion"]:
                 resumen = "Lo que se lee en la foto" if c["origen"] == "foto" else "Transcripción"
                 lineas += [f"<details><summary>{resumen}</summary>", "", c["transcripcion"], "", "</details>", ""]
@@ -1463,6 +1518,8 @@ def mensaje_captura(cid: int) -> str:
         grupo = [i for i in its if i["tipo"] == tipo]
         if grupo:
             partes += ["", titulo] + [f"• {e(i['texto'])}" for i in grupo]
+    if c["cronica"]:
+        partes += ["", "📖 Te conté todo lo que pasó, completo, en tus notas y en el panel."]
     if not c["ia_ok"]:
         partes += ["", "⚠️ No pude analizarlo con IA; guardé la transcripción en tus notas."]
     return "\n".join(partes)
@@ -1553,7 +1610,7 @@ def manejar_mensaje(chat: str, texto: str) -> None:
     if not dueño:
         if texto.split() == ["/start", codigo_telegram()]:
             # Llegó con el enlace del panel o de la página de instalación: este chat es el dueño.
-            (DATOS / "telegram.json").write_text(json.dumps({"chat_id": chat}), encoding="utf-8")
+            _guardar_telegram(chat_id=chat)
             CFG["telegram"]["chat_id"] = chat
             log.info("Telegram conectado con el enlace del panel")
             nombre = str(CFG["usuario"].get("nombre") or "").strip()
@@ -1652,13 +1709,66 @@ def manejar_mensaje(chat: str, texto: str) -> None:
         enviar("📝 Anotado.\n\n" + mensaje_captura(cid))
 
 
+_bot_hilo: dict = {"hilo": None}
+
+
+def encender_bot() -> None:
+    """Enciende el bot si todavía no está escuchando (al arrancar, o cuando pegas su token en el panel)."""
+    h = _bot_hilo["hilo"]
+    if h is not None and h.is_alive():
+        return
+    _bot_hilo["hilo"] = threading.Thread(target=bot, name="bot", daemon=True)
+    _bot_hilo["hilo"].start()
+
+
+def guardar_bot_token(token: str) -> str:
+    """El token que te da @BotFather, pegado en el panel. Se prueba con Telegram antes de guardarlo."""
+    token = token.strip()
+    if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", token):
+        raise ValueError("Eso no parece el token de un bot. Se ve así: 1234567890:AAH… (lo da @BotFather).")
+    if PERFIL:
+        principal = str((_leer_toml(BASE / "config.toml").get("telegram") or {}).get("token") or "").strip()
+        try:
+            principal = principal or str(json.loads((BASE / "datos" / "telegram.json").read_text(encoding="utf-8")).get("token") or "")
+        except (OSError, ValueError, AttributeError):
+            pass
+        if token == principal:
+            raise ValueError("Ese es el bot de tu Eco. Crea otro con @BotFather (/newbot) para esta persona.")
+    try:
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/getMe")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            usuario = (json.load(r).get("result") or {}).get("username") or ""
+    except urllib.error.HTTPError as ex:
+        if ex.code in (401, 404):
+            raise ValueError("Telegram dice que ese token no sirve. Cópialo otra vez de @BotFather.") from None
+        raise ValueError(f"Telegram respondió con error {ex.code}. Prueba en un rato.") from None
+    except (OSError, ValueError):
+        raise ValueError("No pude hablar con Telegram. Revisa el internet de la laptop.") from None
+    anterior = str(CFG["telegram"].get("token") or "")
+    cambios: dict = {"token": token}
+    if anterior and anterior != token:
+        cambios["chat_id"] = ""          # bot nuevo: hay que volver a conectar el chat
+        CFG["telegram"]["chat_id"] = ""
+        estado_set("tg_offset", 0)
+    _guardar_telegram(**cambios)
+    CFG["telegram"]["token"] = token
+    _bot_nombre.update(valor=usuario or None, cuando=time.time())
+    log.info("Bot de Telegram guardado desde el panel (@%s)", usuario)
+    encender_bot()
+    return usuario
+
+
 def bot() -> None:
     if not CFG["telegram"].get("token"):
-        log.info("Telegram desactivado (falta el token en config.toml)")
+        log.info("Telegram desactivado (falta el token: pégalo en el panel o en config.toml)")
         return
     offset = int(estado_get("tg_offset") or 0)
+    token_actual = CFG["telegram"].get("token")
     log.info("Bot de Telegram escuchando")
     while True:
+        if CFG["telegram"].get("token") != token_actual:  # cambiaste el bot desde el panel
+            token_actual = CFG["telegram"].get("token")
+            offset = int(estado_get("tg_offset") or 0)
         try:
             r = tg("getUpdates", offset=offset, timeout=30, allowed_updates=["message"]) or {}
             for u in r.get("result", []):
@@ -2157,7 +2267,7 @@ def procesar_parte(ruta: Path, meta: dict) -> int | None:
 
     if ya["texto"] is None:
         t0 = time.time()
-        texto = transcribir(ruta)
+        texto = transcribir(ruta, inicio_ms=inicio_ms)
         log.info("%s %s · parte %d transcrita (%s de audio) en %.0f s",
                  TIPOS_SESION[tipo], clave, n, duracion(dur), time.time() - t0)
         with closing(db()) as con, con:
@@ -2229,6 +2339,95 @@ def extraer_largo(texto: str, inicio: datetime, lugar: str | None, tipo: str, no
     return pulir(unido, texto)
 
 
+# ════════════════════════════ Crónica (la grabación contada como una charla) ════════════════════════════
+
+PALABRAS_POR_BLOQUE_CRONICA = 1200  # lo que se narra de una vez (~9 min de habla)
+
+
+def _bloques_marcados(texto: str, palabras: int) -> list[str]:
+    """Como _bloques, pero sin partir por la mitad una marca como "[silencio de 2 min]"."""
+    piezas = re.findall(r"\[[^\]]+\]|\S+", texto)
+    return [" ".join(piezas[i:i + palabras]) for i in range(0, len(piezas), palabras)]
+
+
+def _prompt_cronica(tipo: str) -> str:
+    nombre = CFG["usuario"]["nombre"]
+    cosa = "clase" if tipo == "clase" else "reunión o conversación"
+    return f"""Eres Eco, el asistente de memoria de {nombre}. {nombre} te dejó escuchar una {cosa} y ahora quiere que
+se la cuentes tú, platicándosela, como si hubieras estado ahí y se lo contaras después a alguien que no
+alcanzó a oírla. No quiere puntos sueltos ni una lista: quiere entender qué pasó, sin haberla escuchado.
+
+Recibes la transcripción automática de una parte de la grabación. Trae marcas: "[20:41]" es la hora real
+en que se dijo lo que sigue, y "[silencio de 45 s]" es una pausa en la que nadie habló.
+
+CÓMO ESCRIBIR
+- Cuéntalo en prosa, en párrafos, de tú a tú con {nombre}, con un tono natural y cálido ("Al principio…",
+  "Después alguien preguntó si…", "Ahí se empezó a hablar de…"). Nada de viñetas, tablas ni resúmenes
+  telegráficos.
+- Sigue el orden en que pasó todo. Cada vez que cambie el tema, empieza con una línea de título corta con
+  "### " y, entre paréntesis, la hora aproximada: "### Plan para el proyecto (20:41)". Debajo, explica TODO lo
+  que se habló de ese tema: qué se planteó, los argumentos, los ejemplos, las cifras, las fechas, los nombres,
+  las dudas, los desacuerdos y en qué quedaron. Si alguien explicó un concepto, explícalo completo con tus
+  palabras, de modo que se entienda sin haber oído la grabación.
+- No resumas por encima ni dejes temas fuera: mientras haya contenido, el texto debe ser casi tan completo
+  como lo dicho. Si en un tramo casi no se dijo nada, basta una frase.
+- Los silencios cuéntalos donde ocurrieron y con naturalidad: "Hubo un momento de silencio de casi un
+  minuto." o "Durante unos ocho minutos no se escuchó a nadie hablar." Si la pausa fue en medio de un tema,
+  dilo ahí. Una pausa corta de un par de segundos no merece mención.
+- Los compromisos, fechas y acuerdos van dentro de la narración, con naturalidad: "Quedaron en que el viernes
+  cada quien trae su parte."
+
+HONESTIDAD
+- La transcripción no distingue voces. No inventes quién dijo qué: usa "alguien", "una persona", "la otra
+  persona" y, solo si se deduce claramente, "el profesor", o el nombre si lo dicen ("gracias, Carlos"). Si se
+  nota que habla {nombre}, di que fuiste tú o que fue {nombre}.
+- La transcripción automática se equivoca. Corrige una palabra solo si el contexto lo deja claro. Si un
+  tramo no se entiende o no tiene sentido, dilo: "Aquí la grabación no se entiende bien; parece que hablaban
+  de…" en vez de inventar. Nunca inventes datos, cifras, nombres ni conversaciones que no estén.
+- Nunca escribas contraseñas, códigos de verificación ni números de tarjeta: di que los dictaron, sin ponerlos.
+
+FORMATO
+- Español. Solo los títulos "### " y los párrafos. Sin introducción general, sin conclusión final y sin
+  explicar lo que haces (el resumen general se pone aparte).
+- Si te doy "Lo que ya se contó antes", continúa desde ahí sin saludar, sin repetir y sin volver a abrir
+  lo que ya está contado. Si el tema continúa, sigue el párrafo sin un título nuevo."""
+
+
+def _limpiar_cronica(t: str) -> str:
+    t = re.sub(r"<think>.*?</think>", "", t or "", flags=re.S)
+    t = re.sub(r"^```[a-z]*\s*|\s*```$", "", t.strip())
+    return t.strip()
+
+
+def narrar_largo(texto: str, inicio: datetime, tipo: str, nombre: str | None) -> str:
+    """La IA cuenta la grabación completa, bloque por bloque, con el hilo de lo anterior."""
+    bloques = _bloques_marcados(texto, PALABRAS_POR_BLOQUE_CRONICA)
+    sistema = _prompt_cronica(tipo)
+    partes, previo, fallos = [], "", 0
+    for i, b in enumerate(bloques, 1):
+        lineas = [f"Empezó: {fecha_larga(inicio.date())}, {inicio:%H:%M} ({CFG['notas']['zona_horaria']})."]
+        if nombre:
+            lineas.append(f"Nombre de la {TIPOS_SESION[tipo].lower()}: {nombre}.")
+        lineas.append(f"Esta es la parte {i} de {len(bloques)}.")
+        if previo:
+            lineas += ["", "Lo que ya se contó antes (solo para que sigas el hilo, no lo repitas):", previo]
+        lineas += ["", "Transcripción de esta parte:", b]
+        try:
+            t = _limpiar_cronica(llamar_ia(sistema, "\n".join(lineas), json_mode=False, max_tokens=4000))
+        except Exception as ex:
+            log.warning("No pude narrar la parte %d de %d (%s)", i, len(bloques), ex)
+            t = ""
+        if t:
+            partes.append(t)
+            previo = t[-900:]
+        else:
+            fallos += 1
+            partes.append("### (Parte sin narrar)\n\nNo pude contar esta parte con la IA; lo que se dijo está en la "
+                          "transcripción literal.")
+        log.info("%s · crónica: parte %d de %d", TIPOS_SESION[tipo], i, len(bloques))
+    return "" if fallos == len(bloques) else "\n\n".join(partes)
+
+
 def cerrar_sesion(sid: int) -> int:
     with closing(db()) as con, con:
         ses = con.execute("SELECT * FROM sesiones WHERE id=?", (sid,)).fetchone()
@@ -2244,19 +2443,26 @@ def cerrar_sesion(sid: int) -> int:
     log.info("Analizando %s %s (%s, %d partes)…", etiqueta.lower(), ses["clave"], duracion(dur), len(partes))
 
     ia_ok = True
-    if len(texto.split()) < 20:
+    cronica = None
+    quiere_cronica = bool(CFG["sesiones"].get(f"cronica_{tipo}", tipo == "reunion"))
+    limpio = sin_marcas_largas(texto)  # sin "[20:41]" ni "[silencio de …]": así lo analiza la IA de siempre
+    if len(limpio.split()) < 20:
         info = normalizar({"titulo": f"{etiqueta} sin voz clara",
                            "resumen": "Casi no se escuchó voz en esta grabación."})
     else:
         try:
             with despierta():
-                info = extraer_largo(texto, inicio, lugar, tipo, nombre)
+                info = extraer_largo(limpio, inicio, lugar, tipo, nombre)
+                if quiere_cronica and len(limpio.split()) >= 60:
+                    cronica = narrar_largo(texto, inicio, tipo, nombre) or None
         except Exception as ex:
             log.warning("La IA falló con la %s (%s); guardo la transcripción completa", etiqueta.lower(), ex)
             info = normalizar({"titulo": f"{etiqueta} sin analizar",
                                "resumen": "No pude analizarla con IA; la transcripción completa está en tus notas."})
             ia_ok = False
     info["resumen"] = info["resumen"][:1200]
+    if ia_ok and quiere_cronica and cronica is None and len(limpio.split()) >= 60:
+        info["resumen"] += " (No pude escribir la crónica con la IA; la transcripción literal está en tus notas.)"
     if nombre and not info["titulo"].lower().startswith(nombre.lower()):
         info["titulo"] = f"{nombre}: {info['titulo']}"[:90]
     if faltan:
@@ -2266,17 +2472,17 @@ def cerrar_sesion(sid: int) -> int:
     guardar = bool(CFG["sesiones"].get(clave_cfg, True)) or not ia_ok
     cid = guardar_captura(archivo=f"sesion:{ses['clave']}", origen=tipo, inicio=inicio, dur=dur,
                           lat=ses["lat"], lon=ses["lon"], lugar=lugar, info=info,
-                          transcripcion=texto if guardar else None, ia_ok=ia_ok)
+                          transcripcion=texto if guardar else None, ia_ok=ia_ok, cronica=cronica)
     with closing(db()) as con, con:
         con.execute("UPDATE sesiones SET estado='lista', captura_id=?, actualizado=? WHERE id=?",
                     (cid, ahora().isoformat(), sid))
         if not guardar:  # sin transcripción guardada, los pedazos tampoco se quedan
             con.execute("UPDATE sesion_partes SET texto='' WHERE sesion_id=?", (sid,))
-    if guardar:
+    if guardar or cronica:
         escribir_transcripcion(cid)
     actualizar_notas(inicio.date())
     enviar_o_guardar(mensaje_captura(cid))
-    log.info("%s lista: %s", etiqueta, info["titulo"])
+    log.info("%s lista: %s%s", etiqueta, info["titulo"], " (con crónica)" if cronica else "")
     return cid
 
 
@@ -2289,13 +2495,21 @@ def archivo_transcripcion(c) -> Path:
 def escribir_transcripcion(cid: int) -> None:
     with closing(db()) as con:
         c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
-    if not c or not c["transcripcion"]:
+    if not c or not (c["transcripcion"] or c["cronica"]):
         return
     ruta = archivo_transcripcion(c)
     ruta.parent.mkdir(parents=True, exist_ok=True)
     ini = datetime.fromisoformat(c["inicio"])
-    cuerpo = (f"# {c['titulo']}\n\n{fecha_larga(ini.date()).capitalize()}, {ini:%H:%M} · "
-              f"{duracion(c['duracion'])}\n\n> {c['resumen']}\n\n---\n\n{c['transcripcion']}\n")
+    cabeza = (f"# {c['titulo']}\n\n{fecha_larga(ini.date()).capitalize()}, {ini:%H:%M} · "
+              f"{duracion(c['duracion'])}\n\n> {c['resumen']}\n\n---\n\n")
+    if c["cronica"]:
+        cuerpo = cabeza + f"## Lo que pasó\n\n{c['cronica']}\n"
+        if c["transcripcion"]:
+            cuerpo += ("\n---\n\n## Transcripción literal\n\n"
+                       "*Con la hora y los silencios anotados entre corchetes.*\n\n"
+                       f"{c['transcripcion']}\n")
+    else:
+        cuerpo = cabeza + f"{c['transcripcion']}\n"
     ruta.write_text(cuerpo, encoding="utf-8")
 
 
@@ -3901,6 +4115,7 @@ def _captura_json(con: sqlite3.Connection, c) -> dict:
         "duracion": c["duracion"], "lugar": c["lugar"], "lat": c["lat"], "lon": c["lon"],
         "titulo": c["titulo"], "resumen": c["resumen"], "importancia": c["importancia"] or 3,
         "origen": c["origen"], "ia_ok": bool(c["ia_ok"]), "transcripcion": c["transcripcion"],
+        "cronica": c["cronica"],
         "foto": bool(c["adjunto"]),
         "tareas": [_tarea_json(i) for i in its if i["tipo"] == "tarea"],
         "datos": [i["texto"] for i in its if i["tipo"] == "dato"],
@@ -3932,6 +4147,7 @@ def api_estado(es_local: bool) -> dict:
         "telefono": estado_telefono(), "alertas": [{"clave": k, "texto": t} for k, t in ALERTAS.items()],
         "semantica": estado_semantica() if es_local else None,
         "telegram": bool(CFG["telegram"].get("token") and CFG["telegram"].get("chat_id")),
+        "telegram_bot": (bot_usuario() or True) if es_local and CFG["telegram"].get("token") else None,
         "momentos_hoy": momentos_hoy, "pendientes": pendientes_n,
         "proximo": _tarea_json(prox) if prox else None,
         "hoy": hoy, "es_local": es_local, "notas": str(NOTAS) if es_local else None,
@@ -4106,7 +4322,8 @@ def api_guardar_momento(datos: dict) -> dict | None:
             importancia = max(1, min(5, int(datos.get("importancia") or c["importancia"] or 3)))
         except (TypeError, ValueError):
             importancia = c["importancia"] or 3
-        transcripcion_vieja = archivo_transcripcion(c) if c["origen"] in TIPOS_SESION and c["transcripcion"] else None
+        transcripcion_vieja = (archivo_transcripcion(c) if c["origen"] in TIPOS_SESION
+                               and (c["transcripcion"] or c["cronica"]) else None)
         con.execute("UPDATE capturas SET titulo=?, resumen=?, importancia=? WHERE id=?",
                     (titulo, resumen, importancia, cid))
 
@@ -4172,7 +4389,7 @@ def api_borrar_momento(cid: int) -> bool:
             con.execute("UPDATE sesiones SET captura_id=NULL, estado='lista' WHERE id=?", (s["id"],))
             con.execute("UPDATE sesion_partes SET texto='' WHERE sesion_id=?", (s["id"],))
         con.execute("DELETE FROM capturas WHERE id=?", (cid,))
-    if c["origen"] in TIPOS_SESION and c["transcripcion"]:
+    if c["origen"] in TIPOS_SESION and (c["transcripcion"] or c["cronica"]):
         _limpiar(archivo_transcripcion(c))
     if c["adjunto"]:
         _limpiar(NOTAS / c["adjunto"])
@@ -4522,7 +4739,7 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 except (KeyError, TypeError, ValueError):
                     return self._json(400, {"ok": False})
                 return self._json(200 if ok else 404, {"ok": ok})
-            if ruta.startswith(("/api/google", "/api/github")) and not self._es_local():
+            if ruta.startswith(("/api/google", "/api/github", "/api/telegram")) and not self._es_local():
                 return self._json(403, {"ok": False, "error": "Solo desde la laptop"})
             if ruta == "/api/google/cliente":
                 try:
@@ -4536,6 +4753,12 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 else:
                     avisar_google(classroom=True)
                 return self._json(200, {"ok": True, "google": estado_google()})
+            if ruta == "/api/telegram":
+                try:
+                    usuario = guardar_bot_token(str(datos.get("token") or ""))
+                except ValueError as ex:
+                    return self._json(200, {"ok": False, "error": str(ex)})
+                return self._json(200, {"ok": True, "bot": usuario, "enlace": enlace_telegram()})
             if ruta == "/api/github":
                 if datos.get("token"):
                     try:
@@ -4849,7 +5072,8 @@ def arrancar(consola: bool = True) -> ServidorEco:
             COLA.put(f)
     threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
     migrar_recordar()
-    for destino in (trabajador, bot, reloj, google_hilo, actualizaciones_hilo, vectores_hilo, liberar_whisper_hilo):
+    encender_bot()
+    for destino in (trabajador, reloj, google_hilo, actualizaciones_hilo, vectores_hilo, liberar_whisper_hilo):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
     log.info("Eco encendido (puerto %d)%s", puerto, f" · perfil {PERFIL}" if PERFIL else "")
     return servidor

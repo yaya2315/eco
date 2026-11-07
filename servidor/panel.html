@@ -204,6 +204,10 @@ a.chip:hover { border-color: var(--violet); color: var(--text); }
 .grupo ul.tareas { padding-left: 0; color: inherit; }
 details { margin-top: var(--s4); }
 summary { cursor: pointer; color: var(--violet-soft); font-size: var(--t-sm); min-height: 32px; display: inline-flex; align-items: center; }
+.cronica { margin: var(--s4) 0 0; padding: var(--s4) var(--s5, 20px); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); max-width: 72ch; }
+.cronica summary { font-weight: 600; color: var(--violet-soft); cursor: pointer; }
+.cronica h5 { margin: var(--s4) 0 var(--s1); font: 600 var(--t-md)/1.4 var(--body); color: var(--text); }
+.cronica p { margin: var(--s2) 0 0; padding: 0; border: 0; background: none; border-radius: 0; color: var(--text); font-size: var(--t-md); line-height: 1.7; max-width: none; white-space: normal; }
 details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: var(--t-sm); max-width: 72ch; white-space: pre-wrap; }
 
 /* ── Tareas (en momentos y en Pendientes) ── */
@@ -815,8 +819,17 @@ function pintarEstado(e) {
       : sm.listos >= sm.total ? `<span class="ok">listo</span> · ${plural(sm.total, "momento", "momentos")}`
       : `preparando… ${sm.listos} de ${sm.total}`);
   }
-  fila("Telegram", e.telegram ? '<span class="ok">conectado</span>'
-    : e.telegram_enlace ? `<span class="no">falta conectar el chat</span> <a class="copiar" href="${esc(e.telegram_enlace)}" target="_blank" rel="noopener noreferrer">Conectar Telegram</a>`
+  const bot = typeof e.telegram_bot === "string" ? ` · @${esc(e.telegram_bot)}` : "";
+  fila("Telegram", e.telegram ? `<span class="ok">conectado</span>${bot}`
+    : e.telegram_enlace ? `<span class="no">falta conectar el chat</span>${bot}
+        <a class="copiar" href="${esc(e.telegram_enlace)}" target="_blank" rel="noopener noreferrer">Abrir aquí</a>
+        <button class="copiar" type="button" data-copiar="${esc(e.telegram_enlace)}">Copiar</button>
+        <br><span style="color:var(--faint)">${e.perfil ? "Ábrelo en el teléfono de esa persona y que toque Iniciar (también viene en su enlace de instalación)."
+          : "Ábrelo en el Telegram donde quieres recibir los avisos y toca Iniciar."}</span>`
+    : e.es_local ? `<span class="no">sin bot</span><br><span style="color:var(--faint)">En Telegram, @BotFather → /newbot. Pega aquí el token que te da:</span>
+        <form class="mini-form" id="telegram-form"><label class="oculto" for="telegram-token">Token del bot de Telegram</label>
+        <input class="control" id="telegram-token" type="password" placeholder="1234567890:AAH…" autocomplete="off" spellcheck="false">
+        <button class="copiar" type="submit">Guardar</button></form><span class="no" id="telegram-error" hidden></span>`
     : '<span class="no">sin configurar</span>');
   if (e.inicio) fila("Encendido", esc(hace(e.inicio)));
   if (e.notas) fila("Tus notas", `${esc(e.notas)} <button class="copiar" type="button" data-copiar="${esc(e.notas)}">Copiar</button>`);
@@ -850,7 +863,7 @@ function pintarEstado(e) {
   }
   // No se repinta mientras escribes el token (el panel se actualiza solo cada 15 s).
   const html = filas.join("");
-  const escribiendo = $("github-token") && ($("github-token").value || document.activeElement === $("github-token"));
+  const escribiendo = ["github-token", "telegram-token"].some((id) => $(id) && ($(id).value || document.activeElement === $(id)));
   if (!escribiendo && $("sistema").dataset.html !== html) { $("sistema").innerHTML = html; $("sistema").dataset.html = html; }
   pintarAlertas(e.alertas || []);
   $("abrir-qr").hidden = !e.es_local;
@@ -937,6 +950,20 @@ document.addEventListener("drop", (ev) => {
   ev.preventDefault();
   zona.classList.remove("encima");
   subirLlaveGoogle(ev.dataTransfer.files[0]);
+});
+document.addEventListener("submit", async (ev) => {
+  if (ev.target.id !== "telegram-form") return;
+  ev.preventDefault();
+  const campo = $("telegram-token"), error = $("telegram-error"), boton = ev.target.querySelector("button");
+  boton.disabled = true; boton.textContent = "Probando…"; error.hidden = true;
+  try {
+    const r = await post("/api/telegram", { token: campo.value });
+    if (!r.ok) { error.textContent = " " + r.error; error.hidden = false; return; }
+    campo.value = "";
+    avisar(`Listo: @${r.bot} ya escucha. Falta conectar el chat con el enlace.`);
+    refrescar(true);
+  } catch { error.textContent = " No se pudo guardar."; error.hidden = false; }
+  finally { boton.disabled = false; boton.textContent = "Guardar"; }
 });
 document.addEventListener("submit", async (ev) => {
   if (ev.target.id !== "github-form") return;
@@ -1059,6 +1086,16 @@ function tareaHTML(t, conOrigen) {
     </label>${fecha}</li>`;
 }
 
+// La crónica llega como texto con "### título" y párrafos: se pinta como una lectura, no como puntos.
+function cronicaHTML(texto) {
+  const cuerpo = String(texto).split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean).map((b) => {
+    const m = b.match(/^###\s+(.+?)\s*(?:\n([\s\S]*))?$/);
+    if (!m) return `<p>${esc(b)}</p>`;
+    return `<h5>${esc(m[1])}</h5>` + (m[2] ? `<p>${esc(m[2].trim())}</p>` : "");
+  }).join("");
+  return `<details class="cronica" open><summary>Lo que pasó, contado paso a paso</summary>${cuerpo}</details>`;
+}
+
 function momentoHTML(m, conFecha) {
   const imp = Array.from({ length: 5 }, (_, i) => `<i class="${i < m.importancia ? "lleno" : ""}"></i>`).join("");
   const chips = [];
@@ -1077,10 +1114,11 @@ function momentoHTML(m, conFecha) {
   if (!m.ia_ok) chips.push(`<span class="chip chip-aviso">Sin analizar: revisa la transcripción</span>`);
 
   let grupos = "";
+  if (m.cronica) grupos += cronicaHTML(m.cronica);
   if (m.tareas.length) grupos += `<div class="grupo"><h4>Por hacer</h4><ul class="tareas">${m.tareas.map((t) => tareaHTML(t, false)).join("")}</ul></div>`;
   if (m.datos.length) grupos += `<div class="grupo"><h4>Para no olvidar</h4><ul>${m.datos.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>`;
   if (m.ideas.length) grupos += `<div class="grupo"><h4>Ideas</h4><ul>${m.ideas.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>`;
-  if (m.transcripcion) grupos += `<details><summary>${m.origen === "foto" ? "Ver lo que se leyó en la foto" : "Ver lo que se dijo"}</summary><p>${esc(m.transcripcion)}</p></details>`;
+  if (m.transcripcion) grupos += `<details><summary>${m.origen === "foto" ? "Ver lo que se leyó en la foto" : m.cronica ? "Ver la transcripción literal" : "Ver lo que se dijo"}</summary><p>${esc(m.transcripcion)}</p></details>`;
   const foto = m.foto ? `<button class="foto-boton" type="button" data-ver-foto="${m.id}" aria-label="Ver la foto completa"><img data-foto="${m.id}" alt="Foto: ${esc(m.titulo)}"${fotos.has(String(m.id)) ? ` src="${fotos.get(String(m.id))}"` : ""}></button>` : "";
 
   return `<li class="momento${ui.seleccion === m.id ? " destacado" : ""}" id="m${m.id}" data-imp="${m.importancia}">

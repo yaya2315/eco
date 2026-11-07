@@ -64,6 +64,14 @@ guardar_transcripcion_clase = true
 guardar_transcripcion_reunion = true
 clase_auto_terminar_min = 20    # la clase se termina sola tras este tiempo en silencio
 
+# Crónica: al terminar una reunión, la IA te la cuenta completa, como una charla (temas explicados,
+# silencios, acuerdos), además del resumen y los puntos clave. Queda en la nota y en el panel.
+# Cuesta más IA que un resumen: una reunión de una hora son varias llamadas largas.
+cronica_reunion = true
+cronica_clase = false
+silencio_marca_s = 20           # una pausa de este tiempo o más cuenta como "hubo un silencio"
+marca_hora_s = 120              # cada cuánto se anota la hora para que la IA ubique los momentos
+
 [respaldo]
 activo = true
 carpeta = ""        # vacío = tu OneDrive\Eco respaldos
