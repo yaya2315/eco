@@ -81,6 +81,11 @@ class Prefs(context: Context) {
         get() = sp.getLong(K_AVISO, 0L)
         set(value) = sp.edit().putLong(K_AVISO, value).apply()
 
+    /** Reuniones que terminaste de grabar y que la laptop todavía puede estar contando ("clave|desde_ms"). */
+    var reunionesEsperando: Set<String>
+        get() = sp.getStringSet(K_REUNIONES, emptySet()) ?: emptySet()
+        set(value) = sp.edit().putStringSet(K_REUNIONES, HashSet(value)).apply()
+
     companion object {
         const val DEFAULT_BEFORE = 180
         const val DEFAULT_AFTER = 60
@@ -102,5 +107,6 @@ class Prefs(context: Context) {
         private const val K_WHATSAPP = "usar_whatsapp"
         private const val K_SMS_SIEMPRE = "sms_siempre"
         private const val K_VOZ = "voz_activa"
+        private const val K_REUNIONES = "reuniones_esperando"
     }
 }

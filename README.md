@@ -149,6 +149,9 @@ Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 **Modo reunión (teléfono).** Botón **Iniciar modo reunión** en la app: graba por horas hasta que tocas **Terminar reunión** (en la app o en la notificación).
 - Usa unos 15 MB por hora y sube una parte cada 10 minutos, así que la laptop va adelantando el trabajo.
 - Mientras dura la reunión, el botón de momentos se apaga: la reunión ya lo graba todo.
+- **Crónica:** al terminar, la IA de la laptop te cuenta toda la reunión como una charla, no como puntos sueltos: un título por tema, todo lo que se habló explicado, los acuerdos y los silencios ("hubo un momento de silencio de casi un minuto"). Eco anota la hora y las pausas de 20 s o más en la transcripción para poder contarlo. Te llega completa por Telegram (después del resumen, en uno o varios mensajes), y queda en `notas/transcripciones/`, en el panel y en el teléfono.
+- **En el teléfono:** cuando la laptop termina de contártela, llega una notificación "Tu reunión ya está lista". Tócala, o abre **Ver mis reuniones** en la pantalla principal, para leerla y compartirla. La lista y la crónica se piden a la laptop, así que necesitas estar en tu red o en Tailscale.
+- En `config.toml`, sección `[sesiones]`: `cronica_reunion` (por defecto `true`), `cronica_clase` (`false`), `silencio_marca_s` (20) y `marca_hora_s` (120). Cuesta más IA que un resumen: una reunión de una hora son varias llamadas largas.
 
 **Pregúntale a Eco.**
 - En Telegram, escribe una pregunta con signo de interrogación: *¿Qué dejó de tarea el profe de física?*

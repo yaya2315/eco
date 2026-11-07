@@ -1479,6 +1479,51 @@ def enviar_o_guardar(texto: str) -> None:
                         (texto, ahora().isoformat(timespec="seconds")))
 
 
+def mensajes_cronica(cronica: str, limite: int = 3800) -> list[str]:
+    """La crónica en mensajes de Telegram (4096 caracteres como máximo cada uno): los títulos en negrita
+    y cada mensaje corta entre párrafos, nunca a la mitad de una frase si se puede evitar."""
+    piezas: list[str] = []
+    for bloque in re.split(r"\n\s*\n", cronica or ""):
+        bloque = bloque.strip()
+        if not bloque:
+            continue
+        if bloque.startswith("###"):
+            titulo, _, bloque = bloque.removeprefix("###").strip().partition("\n")
+            piezas.append(f"<b>{e(titulo.strip())}</b>")
+            bloque = bloque.strip()
+            if not bloque:
+                continue
+        if len(e(bloque)) <= limite:
+            piezas.append(e(bloque))
+            continue
+        actual = ""  # un párrafo larguísimo: se parte por frases
+        for frase in re.split(r"(?<=[.!?…])\s+", bloque):
+            frase = e(frase)
+            while len(frase) > limite:  # una "frase" sin puntos: corte duro
+                if actual:
+                    piezas.append(actual)
+                    actual = ""
+                piezas.append(frase[:limite])
+                frase = frase[limite:]
+            if actual and len(actual) + 1 + len(frase) > limite:
+                piezas.append(actual)
+                actual = ""
+            actual = f"{actual} {frase}".strip()
+        if actual:
+            piezas.append(actual)
+    mensajes: list[str] = []
+    actual = "📖 <b>Lo que pasó</b>"
+    for pieza in piezas:
+        if len(actual) + 2 + len(pieza) > limite:
+            mensajes.append(actual)
+            actual = pieza
+        else:
+            actual = f"{actual}\n\n{pieza}"
+    if actual:
+        mensajes.append(actual)
+    return mensajes
+
+
 def vaciar_salida() -> None:
     with closing(db()) as con:
         filas = con.execute("SELECT * FROM salida ORDER BY id").fetchall()
@@ -1519,7 +1564,7 @@ def mensaje_captura(cid: int) -> str:
         if grupo:
             partes += ["", titulo] + [f"• {e(i['texto'])}" for i in grupo]
     if c["cronica"]:
-        partes += ["", "📖 Te conté todo lo que pasó, completo, en tus notas y en el panel."]
+        partes += ["", "📖 Aquí abajo te cuento todo lo que pasó (también está en tus notas, el panel y la app)."]
     if not c["ia_ok"]:
         partes += ["", "⚠️ No pude analizarlo con IA; guardé la transcripción en tus notas."]
     return "\n".join(partes)
@@ -2482,6 +2527,10 @@ def cerrar_sesion(sid: int) -> int:
         escribir_transcripcion(cid)
     actualizar_notas(inicio.date())
     enviar_o_guardar(mensaje_captura(cid))
+    if cronica and CFG["telegram"].get("token") and CFG["telegram"].get("chat_id"):
+        for parte in mensajes_cronica(cronica):  # la crónica completa, en uno o varios mensajes
+            enviar_o_guardar(parte)
+            time.sleep(1.1)  # Telegram limita a ~1 mensaje por segundo en el mismo chat
     log.info("%s lista: %s%s", etiqueta, info["titulo"], " (con crónica)" if cronica else "")
     return cid
 
@@ -4126,6 +4175,56 @@ def _captura_json(con: sqlite3.Connection, c) -> dict:
     }
 
 
+def api_reuniones() -> dict:
+    """Para la app del teléfono: las reuniones recientes y las que la laptop todavía está procesando."""
+    with closing(db()) as con:
+        filas = con.execute(
+            "SELECT id, inicio, duracion, titulo, resumen, cronica FROM capturas "
+            "WHERE origen='reunion' ORDER BY inicio DESC LIMIT 30").fetchall()
+        en_curso = con.execute(
+            "SELECT clave, nombre, inicio, estado FROM sesiones "
+            "WHERE tipo='reunion' AND estado != 'lista' ORDER BY inicio DESC").fetchall()
+    reuniones = []
+    for c in filas:
+        ini = datetime.fromisoformat(c["inicio"])
+        reuniones.append({
+            "id": c["id"], "fecha": fecha_larga(ini.date()), "hora": f"{ini:%H:%M}", "duracion": c["duracion"],
+            "titulo": c["titulo"] or "Reunión", "resumen": (c["resumen"] or "")[:240], "cronica": bool(c["cronica"]),
+        })
+    procesando = []
+    for s in en_curso:
+        ini = datetime.fromisoformat(s["inicio"])
+        procesando.append({"clave": s["clave"], "nombre": s["nombre"], "hora": f"{ini:%H:%M}",
+                           "estado": s["estado"]})
+    return {"ok": True, "reuniones": reuniones, "procesando": procesando}
+
+
+def api_reunion(cid: int | None = None, clave: str | None = None) -> dict | None:
+    """Una reunión completa (con su crónica) para la app del teléfono. Con `clave` (la de la grabación)
+    dice en qué va: grabando, procesando o lista. None = no existe."""
+    with closing(db()) as con:
+        if cid is None:
+            ses = con.execute("SELECT * FROM sesiones WHERE clave=?", (_clave_segura(clave),)).fetchone() if clave else None
+            if ses is None:
+                return None
+            if ses["captura_id"] is None:
+                return {"ok": True, "estado": "borrada" if ses["estado"] == "lista" else ses["estado"], "reunion": None}
+            cid = ses["captura_id"]
+        c = con.execute("SELECT * FROM capturas WHERE id=? AND origen='reunion'", (cid,)).fetchone()
+        if not c:
+            return None
+        its = items_de(con, c["id"])
+    ini = datetime.fromisoformat(c["inicio"])
+    return {"ok": True, "estado": "lista", "reunion": {
+        "id": c["id"], "titulo": c["titulo"] or "Reunión", "fecha": fecha_larga(ini.date()), "hora": f"{ini:%H:%M}",
+        "duracion": c["duracion"], "lugar": c["lugar"], "resumen": c["resumen"] or "", "cronica": c["cronica"],
+        "tareas": [{"texto": i["texto"], "cuando": _cuando_tarea(i), "hecho": bool(i["hecho"])}
+                   for i in its if i["tipo"] == "tarea"],
+        "datos": [i["texto"] for i in its if i["tipo"] == "dato"],
+        "ideas": [i["texto"] for i in its if i["tipo"] == "idea"],
+    }}
+
+
 def api_estado(es_local: bool) -> dict:
     hoy = ahora().date().isoformat()
     with closing(db()) as con:
@@ -4646,6 +4745,17 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
             return self._json(200, {"ok": True, "alerta": alerta_pendiente(), "nombre": CFG["usuario"]["nombre"]})
+        if ruta in ("/reuniones", "/reunion"):  # el teléfono lee las reuniones y su crónica
+            if not self._autorizado():
+                return self._json(401, {"ok": False, "error": "token"})
+            if ruta == "/reuniones":
+                return self._json(200, api_reuniones())
+            try:
+                cid = int(params["id"]) if params.get("id") else None
+            except ValueError:
+                return self._json(400, {"ok": False})
+            r = api_reunion(cid, (params.get("clave") or "")[:80] or None)
+            return self._json(200 if r else 404, r or {"ok": False})
         if ruta in ("/app/voz", "/app/voz.zip"):  # el modelo para "Eco, recuérdame…"
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})

@@ -65,6 +65,12 @@
             android:excludeFromRecents="true"
             android:taskAffinity="com.blackholecode.eco.emergencia" />
 
+        <!-- Tus reuniones: la lista y la crónica de cada una, leídas desde la laptop -->
+        <activity
+            android:name=".ReunionesActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
         <!-- Toca "Enviar" en WhatsApp por ti, solo en la alerta que confirmaste (lo activas en Accesibilidad) -->
         <service
             android:name=".EnvioWhatsappService"

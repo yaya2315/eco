@@ -73,6 +73,8 @@ class EcoService : Service() {
         private const val NOTIF_ID = 7
         private const val NOTIF_STOPPED = 8
         private const val NOTIF_UPDATE = 9
+        private const val NOTIF_REUNION = 2000   // + id de la reunión: una notificación por cada una
+        private const val REUNION_ESPERA_MAX_MS = 12 * 60 * 60_000L  // tras 12 h dejamos de esperar su crónica
         const val NOTIF_UPDATED = 10
         private const val UPLOAD_EVERY_MS = 120_000L
         /** Cada cuántas vueltas de subida (de 2 min) se pregunta a la laptop si hay app nueva: 3 h. */
@@ -108,7 +110,7 @@ class EcoService : Service() {
             )
             nm.createNotificationChannel(
                 NotificationChannel(CH_ALERTS, "Avisos de Eco", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "Cuando Eco se detiene, se actualiza o necesita que lo reactives"
+                    description = "Cuando Eco se detiene, se actualiza, tu reunión está lista o necesita que lo reactives"
                 }
             )
             Emergencia.crearCanal(context)
@@ -667,9 +669,10 @@ class EcoService : Service() {
         if (EcoState.reunionInicioMs == 0L) return
         main.removeCallbacks(rotarParte)
         closePart(final = true)
+        esperarReunion(reunionClave)
         EcoState.reunionInicioMs = 0
         buzz()
-        Toast.makeText(this, "Reunión guardada. Se sube a tu laptop.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Reunión guardada. Te aviso cuando tu laptop la cuente.", Toast.LENGTH_SHORT).show()
         EcoState.paused = estabaEnPausa
         if (!EcoState.paused) startRecorder()
         checkBatteryNow()
@@ -689,6 +692,7 @@ class EcoService : Service() {
             if (!openPart()) {
                 // No se pudo seguir: lo grabado ya quedó guardado; cerramos la reunión con una marca final.
                 finishMarker()
+                esperarReunion(reunionClave)
                 EcoState.reunionInicioMs = 0
                 EcoState.paused = estabaEnPausa
                 if (!EcoState.paused) startRecorder()
@@ -803,11 +807,77 @@ class EcoService : Service() {
             runIo {
                 uploadPending()
                 revisarAlerta()
+                revisarReuniones()
                 if (ronda % LATIDO_EVERY_ROUNDS == 0) latido(estadoTexto())
                 if (ronda % UPDATE_EVERY_ROUNDS == 0) checkForUpdate()
             }
             main.postDelayed(this, UPLOAD_EVERY_MS)
         }
+    }
+
+    // ───────────────────────── Tu reunión está lista ─────────────────────────
+    // Al terminar una reunión la laptop tarda unos minutos en contártela (crónica). Apuntamos su clave y, en
+    // cada vuelta de subida, preguntamos si ya está; cuando sí, una notificación lleva directo a leerla.
+
+    private fun esperarReunion(clave: String) {
+        if (clave.isBlank()) return
+        val otras = prefs.reunionesEsperando.filterNot { it.substringBefore('|') == clave }
+        prefs.reunionesEsperando = (otras + "$clave|${System.currentTimeMillis()}").toSet()
+    }
+
+    private fun dejarDeEsperarReunion(clave: String) {
+        prefs.reunionesEsperando = prefs.reunionesEsperando.filterNot { it.substringBefore('|') == clave }.toSet()
+    }
+
+    private fun revisarReuniones() {
+        if (prefs.server.isBlank()) return
+        val ahora = System.currentTimeMillis()
+        for (entrada in prefs.reunionesEsperando) {
+            val clave = entrada.substringBefore('|')
+            val desde = entrada.substringAfter('|', "").toLongOrNull() ?: 0L
+            if (ahora - desde > REUNION_ESPERA_MAX_MS) {
+                dejarDeEsperarReunion(clave)
+                continue
+            }
+            // Sin conexión o la laptop todavía no recibe nada de esta reunión: se intenta en la siguiente vuelta.
+            val r = Net.reunion(prefs.server, prefs.token, clave = clave) ?: continue
+            val j = r.json ?: continue
+            when (j.optString("estado")) {
+                "lista" -> {
+                    dejarDeEsperarReunion(clave)
+                    val m = j.optJSONObject("reunion") ?: continue
+                    val id = m.optLong("id", -1L)
+                    if (id > 0) {
+                        val titulo = m.optString("titulo").ifBlank { "Tu reunión" }
+                        val conCronica = !m.isNull("cronica") && m.optString("cronica").isNotBlank()
+                        main.post { avisarReunionLista(id, titulo, conCronica) }
+                    }
+                }
+                "borrada" -> dejarDeEsperarReunion(clave)
+            }
+        }
+    }
+
+    private fun avisarReunionLista(id: Long, titulo: String, conCronica: Boolean) {
+        val intent = Intent(this, ReunionesActivity::class.java)
+            .putExtra(ReunionesActivity.EXTRA_ID, id)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val clave = (id % 1000).toInt()
+        val abrir = PendingIntent.getActivity(
+            this, NOTIF_REUNION + clave, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val texto = if (conCronica) "«$titulo». Toca para leer lo que pasó, contado paso a paso."
+        else "«$titulo». Toca para ver el resumen."
+        val n = Notification.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_eco)
+            .setColor(ACCENT)
+            .setContentTitle("Tu reunión ya está lista")
+            .setContentText(texto)
+            .setStyle(Notification.BigTextStyle().bigText(texto))
+            .setContentIntent(abrir)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(NOTIF_REUNION + clave, n)
     }
 
     // ───────────────────────── ¿Estás bien? ─────────────────────────

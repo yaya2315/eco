@@ -1061,6 +1061,12 @@ class MainActivity : Activity() {
         })
         meetingButton = button("Iniciar modo reunión", primary = false) { startMeeting() }
         wrap.addView(meetingButton, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+            bottomMargin = dp(8)
+        })
+        // Las reuniones ya grabadas: la lista y la crónica de cada una (la laptop las cuenta como una charla).
+        wrap.addView(button("Ver mis reuniones", primary = false) {
+            startActivity(Intent(this, ReunionesActivity::class.java))
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(16)
         })
         return wrap

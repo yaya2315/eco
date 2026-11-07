@@ -146,6 +146,39 @@ object Net {
         }
     }
 
+    /** Lo que contestó la laptop a una pregunta: el código HTTP y el JSON (si lo hubo). */
+    class Respuesta(val codigo: Int, val json: JSONObject?)
+
+    private fun leer(server: String, token: String, ruta: String): Respuesta? {
+        val base = baseUrl(server) ?: return null
+        var c: HttpURLConnection? = null
+        return try {
+            c = (URL("$base$ruta").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 10000
+                setRequestProperty("X-Eco-Token", token)
+            }
+            val codigo = c.responseCode
+            val json = if (codigo == 200) {
+                JSONObject(c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            } else null
+            Respuesta(codigo, json)
+        } catch (_: Exception) {
+            null  // sin conexión con la laptop
+        } finally {
+            c?.disconnect()
+        }
+    }
+
+    /** Las reuniones recientes (y las que la laptop todavía está procesando). */
+    fun reuniones(server: String, token: String): Respuesta? = leer(server, token, "/reuniones")
+
+    /** Una reunión con su crónica, por id o por la clave con que se grabó. */
+    fun reunion(server: String, token: String, id: Long? = null, clave: String? = null): Respuesta? {
+        val consulta = if (id != null) "id=$id" else "clave=" + java.net.URLEncoder.encode(clave.orEmpty(), "UTF-8")
+        return leer(server, token, "/reunion?$consulta")
+    }
+
     fun upload(server: String, token: String, wav: File, metaJson: String?): Result {
         val tipo = if (wav.name.endsWith(".m4a")) "audio/mp4" else "audio/wav"
         val base = baseUrl(server) ?: return Result(false, "Falta la dirección de tu laptop")
