@@ -1067,6 +1067,12 @@ class MainActivity : Activity() {
         wrap.addView(button("Ver mis reuniones", primary = false) {
             startActivity(Intent(this, ReunionesActivity::class.java))
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+            bottomMargin = dp(8)
+        })
+        // Tus pendientes (los mismos del panel de la laptop): verlos, marcarlos y agregar uno.
+        wrap.addView(button("Ver mis pendientes", primary = false) {
+            startActivity(Intent(this, PendientesActivity::class.java))
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(16)
         })
         return wrap

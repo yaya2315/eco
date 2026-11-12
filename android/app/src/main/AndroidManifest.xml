@@ -71,6 +71,13 @@
             android:exported="false"
             android:launchMode="singleTop" />
 
+        <!-- Tus pendientes: verlos, marcarlos y agregar uno desde el teléfono -->
+        <activity
+            android:name=".PendientesActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Toca "Enviar" en WhatsApp por ti, solo en la alerta que confirmaste (lo activas en Accesibilidad) -->
         <service
             android:name=".EnvioWhatsappService"

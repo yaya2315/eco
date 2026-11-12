@@ -1,6 +1,7 @@
 package com.blackholecode.eco
 
 import android.util.Base64
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -177,6 +178,77 @@ object Net {
     fun reunion(server: String, token: String, id: Long? = null, clave: String? = null): Respuesta? {
         val consulta = if (id != null) "id=$id" else "clave=" + java.net.URLEncoder.encode(clave.orEmpty(), "UTF-8")
         return leer(server, token, "/reunion?$consulta")
+    }
+
+    /** Una respuesta que es una lista (tus pendientes): el código HTTP y la lista (si la hubo). */
+    class Lista(val codigo: Int, val json: JSONArray?)
+
+    private fun leerLista(server: String, token: String, ruta: String): Lista? {
+        val base = baseUrl(server) ?: return null
+        var c: HttpURLConnection? = null
+        return try {
+            c = (URL("$base$ruta").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 10000
+                setRequestProperty("X-Eco-Token", token)
+            }
+            val codigo = c.responseCode
+            val json = if (codigo == 200) {
+                JSONArray(c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            } else null
+            Lista(codigo, json)
+        } catch (_: Exception) {
+            null  // sin conexión con la laptop
+        } finally {
+            c?.disconnect()
+        }
+    }
+
+    /** Lo mismo que hace el panel de la laptop: mandar un cambio (marcar una tarea, agregar un pendiente). */
+    private fun enviar(server: String, token: String, ruta: String, datos: JSONObject): Respuesta? {
+        val base = baseUrl(server) ?: return null
+        var c: HttpURLConnection? = null
+        return try {
+            val cuerpo = datos.toString().toByteArray(Charsets.UTF_8)
+            c = (URL("$base$ruta").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 4000
+                readTimeout = 10000
+                setFixedLengthStreamingMode(cuerpo.size)
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("X-Eco-Token", token)
+                setRequestProperty("X-Eco-Panel", "1")  // la laptop la pide en todo lo que cambia datos
+            }
+            c.outputStream.use { it.write(cuerpo) }
+            val codigo = c.responseCode
+            val json = if (codigo == 200) {
+                JSONObject(c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            } else null
+            Respuesta(codigo, json)
+        } catch (_: Exception) {
+            null
+        } finally {
+            c?.disconnect()
+        }
+    }
+
+    /** Todo lo que tienes por hacer (lo mismo que la columna Pendientes del panel). */
+    fun pendientes(server: String, token: String): Lista? = leerLista(server, token, "/api/pendientes")
+
+    /** Lo que dijiste para no olvidar (datos e ideas). */
+    fun recordar(server: String, token: String): Lista? = leerLista(server, token, "/api/recordar")
+
+    /** Marca una tarea como hecha (o la desmarca). true si la laptop lo guardó. */
+    fun marcarTarea(server: String, token: String, id: Long, hecho: Boolean): Boolean =
+        enviar(server, token, "/api/tarea", JSONObject().put("id", id).put("hecho", hecho))?.codigo == 200
+
+    /** Agrega un pendiente escrito en el teléfono; fecha "2026-11-13" y hora "14:00" son opcionales. */
+    fun nuevoPendiente(server: String, token: String, texto: String, fecha: String?, hora: String?): Respuesta? {
+        val datos = JSONObject().put("texto", texto)
+        if (fecha != null) datos.put("fecha", fecha)
+        if (fecha != null && hora != null) datos.put("hora", hora)
+        return enviar(server, token, "/api/pendiente", datos)
     }
 
     fun upload(server: String, token: String, wav: File, metaJson: String?): Result {
