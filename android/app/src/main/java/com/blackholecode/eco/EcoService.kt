@@ -157,6 +157,7 @@ class EcoService : Service() {
     private var uploadRounds = 0
     private var volumen: VolumeKeys? = null
     private var voz: DetectorVoz? = null
+    private var multimedia: Multimedia? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -166,6 +167,7 @@ class EcoService : Service() {
         createChannels(this)
         volumen = VolumeKeys(this) { requestSave() }
         voz = DetectorVoz(this, { frase, desde -> ordenDeVoz(frase, desde) }, { finDeOrden() })
+        multimedia = Multimedia(this) { refreshNotification() }.also { it.iniciar() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -218,6 +220,7 @@ class EcoService : Service() {
         unregisterBattery()
         volumen?.cerrar()
         voz?.cerrar()
+        multimedia?.detener()
         main.removeCallbacksAndMessages(null)
         io.shutdown()
         EcoWidget.refresh(this)
@@ -474,6 +477,8 @@ class EcoService : Service() {
                 }
                 continue
             }
+            // Suena un video o música del teléfono: el micrófono lo oiría por el altavoz. Se graba silencio.
+            if (multimedia?.sonando == true && prefs.ignorarMultimedia) chunk.fill(0.toShort(), 0, n)
             var finished: Clip? = null
             var fin = -1L
             synchronized(lock) {
@@ -619,6 +624,9 @@ class EcoService : Service() {
             .put("toque_s", clip.toqueS)
             .put("app", "eco-android-1")
         if (clip.frase != null) meta.put("orden", true).put("frase", clip.frase)
+        meta.put("filtrar_multimedia", prefs.ignorarMultimedia)
+        multimedia?.tramosEntre(clip.startMs, clip.startMs + clip.pcm.size * 1000L / SAMPLE_RATE)
+            ?.let { if (it.length() > 0) meta.put("multimedia_ms", it) }
         clip.location?.let {
             meta.put("lat", it.latitude)
                 .put("lon", it.longitude)
@@ -791,6 +799,8 @@ class EcoService : Service() {
                     .put("parte", n)
                     .put("final", final)
             )
+        meta.put("filtrar_multimedia", prefs.ignorarMultimedia)
+        multimedia?.tramosEntre(inicio, fin)?.let { if (it.length() > 0) meta.put("multimedia_ms", it) }
         lastLocation?.let {
             meta.put("lat", it.latitude).put("lon", it.longitude)
                 .put("precision_m", it.accuracy.toDouble()).put("loc_ms", it.time)
@@ -1036,6 +1046,8 @@ class EcoService : Service() {
                 val pct = EcoState.batteryPct
                 text = if (pct in 0..BATERIA_PAUSA && !EcoState.charging) {
                     "Batería en $pct %: la reunión sigue grabando. Conecta el cargador si puedes."
+                } else if (EcoState.multimedia && prefs.ignorarMultimedia) {
+                    "Suena un video o música del teléfono: Eco lo deja fuera de la reunión."
                 } else {
                     "Parte ${EcoState.reunionParte} · cada 10 min se sube sola a tu laptop"
                 }
@@ -1047,6 +1059,10 @@ class EcoService : Service() {
             EcoState.paused -> {
                 title = "Eco en pausa"
                 text = "Micrófono apagado. Nada se está escuchando."
+            }
+            EcoState.multimedia && prefs.ignorarMultimedia && !saving -> {
+                title = "Eco escuchando"
+                text = "Suena un video o música del teléfono: no se guarda lo que suena."
             }
             saving -> {
                 title = "Guardando momento…"

@@ -1177,6 +1177,26 @@ class MainActivity : Activity() {
         }
         card.addView(volumenEstado, lp(top = 2))
 
+        val ignorarMultimedia = Switch(this).apply {
+            text = "No grabar videos ni música del teléfono"
+            textSize = 15f
+            setTextColor(C_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            isChecked = prefs.ignorarMultimedia
+            minHeight = dp(48)
+            thumbTintList = ColorStateList(estados, intArrayOf(0xFFFFFFFF.toInt(), C_MUTED))
+            trackTintList = ColorStateList(estados, intArrayOf(C_ACCENT, C_BORDER))
+            setOnCheckedChangeListener { _, activo -> prefs.ignorarMultimedia = activo }
+        }
+        card.addView(ignorarMultimedia, lp(top = 8))
+        card.addView(
+            label(
+                "Cuando YouTube, TikTok, música o un juego suenan por el altavoz, Eco no guarda ese audio ni lo manda a tu laptop. Con audífonos no hace falta.",
+                13f, C_MUTED
+            ).apply { setLineSpacing(0f, 1.2f) },
+            lp(top = 2)
+        )
+
         vozSwitch = Switch(this).apply {
             text = "Activar con la voz: «Eco, …»"
             textSize = 15f

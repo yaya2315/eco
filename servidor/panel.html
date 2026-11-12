@@ -64,14 +64,20 @@ button, input { font: inherit; color: inherit; }
 
 .pagina {
   position: relative; z-index: 1;
-  max-width: 1180px; margin: 0 auto;
+  max-width: 2200px; margin: 0 auto;
   padding: max(var(--s5), env(safe-area-inset-top)) var(--s4) var(--s7);
 }
-@media (min-width: 720px) { .pagina { padding-inline: var(--s6); } }
+@media (min-width: 720px) { .pagina { padding-inline: clamp(24px, 2.4vw, 56px); } }
 
 /* ── Encabezado ── */
-.cabecera { display: grid; gap: var(--s4); align-items: center; grid-template-columns: 1fr; }
-@media (min-width: 720px) { .cabecera { grid-template-columns: 1fr minmax(260px, 360px); } }
+.barra { display: grid; gap: var(--s3) var(--s5); align-items: center; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .barra { grid-template-columns: minmax(260px, auto) minmax(380px, 760px); justify-content: space-between; } }
+.barra-marca { display: flex; align-items: center; gap: var(--s3) var(--s5); flex-wrap: wrap; min-width: 0; }
+.barra .marca svg { width: 36px; height: 36px; }
+.barra .marca h1 { font-size: var(--t-xl); letter-spacing: -0.02em; }
+.barra .estado { margin-top: 0; }
+.barra .buscador { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--s3); }
+@media (max-width: 599px) { .barra .buscador { grid-template-columns: minmax(0, 1fr); } }
 .marca { display: flex; align-items: center; gap: var(--s3); }
 .marca svg { flex: none; width: 44px; height: 44px; }
 .marca h1 { margin: 0; font: 600 var(--t-hero)/1 var(--display); letter-spacing: -0.03em; }
@@ -105,7 +111,7 @@ button, input { font: inherit; color: inherit; }
 .campo input:focus { outline: none; border-color: var(--violet); background: var(--surface-2); }
 
 /* ── Respuesta de Eco ── */
-.respuesta { margin-top: var(--s5); padding: var(--s5); border-radius: var(--r-lg); background: linear-gradient(160deg, rgba(107, 91, 245, 0.14), rgba(20, 20, 31, 0.9) 60%); border: 1px solid rgba(184, 174, 255, 0.28); max-width: 820px; }
+.respuesta { margin-top: var(--s5); padding: var(--s5); border-radius: var(--r-lg); background: linear-gradient(160deg, rgba(107, 91, 245, 0.14), rgba(20, 20, 31, 0.9) 60%); border: 1px solid rgba(184, 174, 255, 0.28); max-width: 980px; max-height: 38dvh; overflow-y: auto; flex: none; }
 .respuesta-cabeza { display: flex; justify-content: space-between; gap: var(--s3); align-items: baseline; }
 .respuesta-pregunta { margin: 0; color: var(--muted); font-size: var(--t-sm); }
 .respuesta-texto { margin: var(--s2) 0 0; font-size: var(--t-lg); line-height: 1.55; white-space: pre-wrap; max-width: 70ch; }
@@ -117,7 +123,8 @@ button.chip { cursor: pointer; font: inherit; font-size: var(--t-xs); }
 button.chip:hover { border-color: var(--violet); color: var(--text); }
 
 /* ── La línea del día (el elemento protagonista) ── */
-.dia { margin-top: var(--s6); }
+.dia { margin-top: 0; padding: var(--s5) var(--s5) 0; }
+.dia-nav .boton-chico { margin-left: auto; }
 .dia-nav { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
 .dia-nav h2 { margin: 0 var(--s2) 0 0; font: 600 var(--t-xl)/1.2 var(--display); letter-spacing: -0.015em; }
 .dia-nav h2 span { color: var(--muted); font-weight: 400; }
@@ -165,8 +172,7 @@ button.chip:hover { border-color: var(--violet); color: var(--text); }
 .linea-vacia { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: var(--t-sm); padding: 0 var(--s4); text-align: center; }
 
 /* ── Distribución ── */
-.cuerpo { display: grid; gap: var(--s6); margin-top: var(--s6); grid-template-columns: 1fr; align-items: start; }
-@media (min-width: 960px) { .cuerpo { grid-template-columns: minmax(0, 1fr) 340px; gap: var(--s7); } }
+.cuerpo { display: grid; gap: var(--s4); margin-top: var(--s4); grid-template-columns: minmax(0, 1fr); align-items: start; }
 .seccion-titulo { margin: 0 0 var(--s4); font: 600 var(--t-lg)/1.3 var(--display); }
 .seccion-titulo small { margin-left: var(--s2); color: var(--faint); font: 400 var(--t-sm) var(--body); }
 
@@ -230,8 +236,7 @@ details p { margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-radius: 
 .tarea-info .vencida { color: var(--rec); }
 
 /* ── Columna lateral ── */
-.lateral { display: grid; gap: var(--s5); }
-@media (min-width: 960px) { .lateral { position: sticky; top: var(--s5); } }
+.lateral { display: grid; gap: var(--s4); }
 .panel { padding: var(--s5); border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); }
 .panel .seccion-titulo { margin-bottom: var(--s2); }
 .panel-vacio { margin: var(--s2) 0 0; color: var(--faint); font-size: var(--t-sm); }
@@ -482,6 +487,119 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
 .alerta strong { font-weight: 600; }
 .alerta code { font-size: 0.8125rem; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); }
 .chip-parecido { color: var(--violet-soft); border-color: rgba(184, 174, 255, 0.35); }
+/* ───────── Panel a pantalla completa: tres columnas que se mueven solas ───────── */
+.col { min-width: 0; }
+.col-momentos, .col-pendientes {
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--surface), rgba(20, 20, 31, 0.92));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -28px rgba(0, 0, 0, 0.8);
+}
+.col-momentos > main { padding: var(--s4) var(--s5) var(--s6); }
+.col-momentos .seccion-titulo { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.col-pendientes { container-type: inline-size; container-name: pend; }
+.col-pendientes .panel-pend { padding: 0; border: 0; background: none; }
+.col-lateral { display: grid; gap: var(--s4); align-content: start; }
+.col-lateral > * { min-width: 0; }
+.col-lateral .panel { box-shadow: 0 18px 40px -30px rgba(0, 0, 0, 0.8); }
+
+/* Cabecera de Pendientes: se queda arriba mientras bajas la lista. */
+.pend-cabeza { position: sticky; top: 0; z-index: 2; padding: var(--s5) var(--s5) var(--s3); background: var(--surface); border-radius: var(--r-lg) var(--r-lg) 0 0; border-bottom: 1px solid var(--line); }
+.pend-titulo-fila { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
+.pend-titulo-fila .seccion-titulo { margin: 0; }
+.boton-chico { min-height: 32px; padding: 0 var(--s3); font-size: var(--t-xs); }
+.pend-cabeza .agregar { margin: var(--s3) 0 0; }
+.pend-herramientas { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin-top: var(--s3); }
+.filtros { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
+.filtro {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: var(--t-xs); font-weight: 600; cursor: pointer;
+  transition: border-color .15s, background-color .15s, color .15s;
+}
+.filtro b { font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
+.filtro:hover { border-color: #3a3a52; color: var(--text); }
+.filtro[aria-pressed="true"] { background: var(--surface-2); color: var(--text); border-color: var(--violet); }
+.filtro[data-f="vencidas"] b { color: var(--rec); }
+.filtro[data-f="hoy"] b { color: var(--warn); }
+.pend-filtro { flex: 0 1 180px; min-height: 32px; padding: 4px var(--s3); font-size: var(--t-xs); }
+.pend-cuerpo { padding: var(--s2) var(--s5) var(--s6); }
+.pend-cuerpo > .pend-nota { margin: var(--s5) 0 0; }
+
+/* Pendientes agrupados por urgencia. En una columna ancha, los grupos se reparten en dos. */
+.grupo-pend { margin: var(--s3) 0 0; break-inside: avoid; }
+.grupo-pend > summary {
+  list-style: none; display: flex; align-items: center; gap: var(--s2); min-height: 36px; cursor: pointer;
+  font: 600 var(--t-xs)/1 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+}
+.grupo-pend > summary::-webkit-details-marker { display: none; }
+.grupo-pend > summary::before {
+  content: ""; flex: none; width: 7px; height: 7px; margin: 0 4px 3px 2px;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; rotate: -45deg; transition: rotate .15s;
+}
+.grupo-pend[open] > summary::before { rotate: 45deg; margin-bottom: 4px; }
+.grupo-pend .g-n { padding: 1px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--faint); font-weight: 600; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.grupo-pend[data-g="vencidas"] > summary { color: var(--rec); }
+.grupo-pend[data-g="hoy"] > summary { color: var(--warn); }
+.grupo-pend[data-g="proximas"] > summary { color: var(--live); }
+.grupo-pend[data-g="sin"] > summary { color: var(--faint); }
+.grupo-pend .tareas { margin-top: 2px; }
+.grupo-pend .tarea { padding: 0 var(--s3); border: 1px solid transparent; border-radius: var(--r-md); transition: background-color .15s, border-color .15s; }
+.grupo-pend .tarea:hover, .grupo-pend .tarea:focus-within { background: var(--surface-2); border-color: var(--line); }
+.grupo-pend .tarea + .tarea { margin-top: 0; }
+.grupo-pend .tarea label { min-width: 0; padding: 8px 0; }
+.grupo-pend .tarea label > span { min-width: 0; }
+.grupo-pend .tarea-texto { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.grupo-pend .tarea-info { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grupo-pend .tarea:hover .tarea-texto, .grupo-pend .tarea:focus-within .tarea-texto { -webkit-line-clamp: unset; }
+.grupo-pend .tarea:hover .tarea-info, .grupo-pend .tarea:focus-within .tarea-info { white-space: normal; }
+@container pend (min-width: 560px) {
+  .pend-grupos { columns: 2; column-gap: var(--s6); }
+  .pend-grupos .grupo-pend:first-child { margin-top: var(--s3); }
+}
+
+/* Teclas */
+kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line); border-bottom-width: 2px; background: var(--surface-2); color: var(--text); font: 600 0.75rem/1.5 var(--body); text-align: center; }
+.atajos { display: grid; gap: var(--s2); margin: var(--s2) 0 0; padding: 0; list-style: none; color: var(--muted); font-size: var(--t-sm); }
+.atajos li { display: flex; align-items: center; gap: var(--s3); }
+.atajos kbd { flex: none; }
+
+/* Barras de desplazamiento discretas dentro de las columnas */
+.col-momentos, .col-pendientes, .col-lateral { scrollbar-width: thin; scrollbar-color: #34344a transparent; }
+
+/* Pestañas (pantallas pequeñas y ventanas bajitas) */
+.pestanas { display: none; }
+@media not all and (min-width: 1100px) and (min-height: 600px) {
+  .pestanas {
+    display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; padding: 4px; margin-top: var(--s4);
+    border-radius: 999px; background: var(--surface); border: 1px solid var(--line); position: sticky; top: var(--s2); z-index: 5;
+    box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.7);
+  }
+  .pestanas button { min-height: 44px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-weight: 600; cursor: pointer; transition: background-color .15s, color .15s; }
+  .pestanas button:hover { color: var(--text); }
+  .pestanas button[aria-pressed="true"] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+  .pestana-n { margin-left: 6px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .pestanas, .cuerpo { max-width: 880px; margin-inline: auto; width: 100%; }
+  .col { display: none; }
+  .cuerpo[data-vista="momentos"] .col-momentos,
+  .cuerpo[data-vista="pendientes"] .col-pendientes { display: block; }
+  .cuerpo[data-vista="eco"] .col-lateral { display: grid; }
+  .pend-cabeza { top: 64px; }
+}
+
+/* Pantalla de escritorio: tres columnas a todo el ancho; cada una baja por su cuenta, la página no. */
+@media (min-width: 1100px) and (min-height: 600px) {
+  html, body { height: 100%; overflow: hidden; }
+  .pagina { height: 100dvh; display: flex; flex-direction: column; padding-bottom: var(--s4); }
+  .pagina > * { flex: none; }
+  .cuerpo {
+    flex: 1 1 auto; min-height: 0; align-items: stretch;
+    grid-template-columns: minmax(340px, 1fr) minmax(440px, 1.45fr) minmax(260px, 300px);
+  }
+  .col { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+  .col-lateral { padding-right: 4px; }
+}
+@media (min-width: 1700px) and (min-height: 600px) {
+  .cuerpo { grid-template-columns: minmax(460px, 1fr) minmax(620px, 1.5fr) minmax(300px, 360px); gap: var(--s5); }
+}
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -489,8 +607,8 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
 <a class="saltar" href="#momentos">Ir a los momentos</a>
 
 <div class="pagina" id="app" hidden>
-  <header class="cabecera">
-    <div>
+  <header class="barra">
+    <div class="barra-marca">
       <div class="marca">
         <svg viewBox="0 0 44 44" aria-hidden="true">
           <circle class="pulso" cx="22" cy="22" r="21" fill="none" stroke="#6B5BF5" stroke-width="1.5"/>
@@ -529,29 +647,79 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
 
   <div id="aviso-red" class="aviso-red" role="alert" hidden>Eco no responde. Revisa que siga encendido en la laptop; esta página se actualiza sola cuando vuelva.</div>
 
-  <section class="dia" aria-labelledby="dia-titulo">
-    <div class="dia-nav">
-      <h2 id="dia-titulo">Hoy</h2>
-      <button class="boton-icono" id="dia-anterior" type="button" aria-label="Día anterior con momentos">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
-      </button>
-      <button class="boton-icono" id="dia-siguiente" type="button" aria-label="Día siguiente con momentos">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
-      </button>
-      <button class="boton-texto" id="ir-hoy" type="button" hidden>Volver a hoy</button>
-      <button class="boton-texto" id="limpiar" type="button" hidden>Quitar búsqueda</button>
-    </div>
-    <p class="resumen-dia" id="resumen-dia"></p>
-    <div class="linea" id="linea" role="group" aria-label="Momentos del día según la hora"></div>
-  </section>
+  <nav class="pestanas" id="pestanas" aria-label="Secciones del panel">
+    <button type="button" data-vista="momentos" aria-pressed="true">Momentos</button>
+    <button type="button" data-vista="pendientes" aria-pressed="false">Pendientes<span class="pestana-n" id="pestana-pend"></span></button>
+    <button type="button" data-vista="eco" aria-pressed="false">Eco</button>
+  </nav>
 
-  <div class="cuerpo">
-    <main id="momentos" tabindex="-1" aria-labelledby="momentos-titulo">
-      <h3 class="seccion-titulo" id="momentos-titulo">Momentos</h3>
-      <ol class="momentos" id="lista-momentos"></ol>
-    </main>
+  <div class="cuerpo" id="cuerpo" data-vista="momentos">
+    <section class="col col-momentos" aria-label="Línea del día y momentos">
+      <section class="dia" aria-labelledby="dia-titulo">
+        <div class="dia-nav">
+          <h2 id="dia-titulo">Hoy</h2>
+          <button class="boton-icono" id="dia-anterior" type="button" aria-label="Día anterior con momentos">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <button class="boton-icono" id="dia-siguiente" type="button" aria-label="Día siguiente con momentos">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+          <button class="boton-texto" id="ir-hoy" type="button" hidden>Volver a hoy</button>
+          <button class="boton-texto" id="limpiar" type="button" hidden>Quitar búsqueda</button>
+          <button class="boton-texto boton-chico" id="copiar-dia" type="button" title="Copiar los momentos que ves como texto (Markdown)" disabled>Copiar el día</button>
+        </div>
+        <p class="resumen-dia" id="resumen-dia"></p>
+        <div class="linea" id="linea" role="group" aria-label="Momentos del día según la hora"></div>
+      </section>
 
-    <aside class="lateral">
+      <main id="momentos" tabindex="-1" aria-labelledby="momentos-titulo">
+        <h3 class="seccion-titulo" id="momentos-titulo">Momentos</h3>
+        <ol class="momentos" id="lista-momentos"></ol>
+      </main>
+    </section>
+
+    <section class="col col-pendientes" aria-labelledby="pend-titulo">
+      <div class="panel-pend">
+        <div class="pend-cabeza">
+          <div class="pend-titulo-fila">
+            <h3 class="seccion-titulo" id="pend-titulo">Pendientes <small id="pend-n"></small></h3>
+            <button class="boton-texto boton-chico" type="button" id="pend-copiar" title="Copiar lo que ves como checklist" disabled>Copiar lista</button>
+          </div>
+          <form class="agregar" id="agregar" autocomplete="off">
+            <label for="agregar-texto" class="oculto">Agregar un pendiente</label>
+            <div class="agregar-fila">
+              <input class="control" id="agregar-texto" type="text" maxlength="300" placeholder="Agregar un pendiente…" enterkeyhint="done">
+              <button class="agregar-boton" type="submit" aria-label="Agregar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+            <div class="agregar-cuando" id="agregar-cuando" hidden>
+              <label class="oculto" for="agregar-fecha">Fecha (opcional)</label>
+              <input class="control" id="agregar-fecha" type="date">
+              <label class="oculto" for="agregar-hora">Hora (opcional)</label>
+              <input class="control" id="agregar-hora" type="time">
+            </div>
+          </form>
+          <div class="pend-herramientas">
+            <div class="filtros" id="filtros" role="group" aria-label="Ver pendientes por urgencia"></div>
+            <label class="oculto" for="pend-filtro">Filtrar pendientes por texto</label>
+            <input class="control pend-filtro" id="pend-filtro" type="search" placeholder="Filtrar…" autocomplete="off">
+          </div>
+        </div>
+        <div class="pend-cuerpo">
+          <div class="pend-grupos" id="lista-pendientes"></div>
+          <p class="panel-vacio" id="pend-vacio" hidden>Nada pendiente. Cuando digas algo que tengas que hacer, aparece aquí.</p>
+          <p class="panel-vacio" id="pend-nada" hidden></p>
+          <div class="recordar" id="recordar" hidden>
+            <h4 class="sub-titulo">Para recordar <small id="rec-n"></small></h4>
+            <ul class="tareas" id="lista-recordar"></ul>
+          </div>
+          <p class="pend-nota" id="pend-nota">Se quedan aquí hasta que los marques. Los que tienen fecha van a tu Google Calendar.</p>
+        </div>
+      </div>
+    </section>
+
+    <aside class="col col-lateral lateral" aria-label="Clase, Google y estado de Eco">
       <section class="panel clase-panel" id="clase" aria-labelledby="clase-titulo" hidden>
         <h3 class="seccion-titulo" id="clase-titulo">Modo clase</h3>
         <div id="clase-libre">
@@ -568,32 +736,6 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
         <p class="error-texto" id="clase-error" hidden></p>
       </section>
 
-      <section class="panel" aria-labelledby="pend-titulo">
-        <h3 class="seccion-titulo" id="pend-titulo">Pendientes <small id="pend-n"></small></h3>
-        <p class="pend-nota" id="pend-nota">Se quedan aquí hasta que los marques. Los que tienen fecha van a tu Google Calendar.</p>
-        <form class="agregar" id="agregar" autocomplete="off">
-          <label for="agregar-texto" class="oculto">Agregar un pendiente</label>
-          <div class="agregar-fila">
-            <input class="control" id="agregar-texto" type="text" maxlength="300" placeholder="Agregar un pendiente…" enterkeyhint="done">
-            <button class="agregar-boton" type="submit" aria-label="Agregar">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-            </button>
-          </div>
-          <div class="agregar-cuando" id="agregar-cuando" hidden>
-            <label class="oculto" for="agregar-fecha">Fecha (opcional)</label>
-            <input class="control" id="agregar-fecha" type="date">
-            <label class="oculto" for="agregar-hora">Hora (opcional)</label>
-            <input class="control" id="agregar-hora" type="time">
-          </div>
-        </form>
-        <ul class="tareas" id="lista-pendientes"></ul>
-        <p class="panel-vacio" id="pend-vacio" hidden>Nada pendiente. Cuando digas algo que tengas que hacer, aparece aquí.</p>
-        <div class="recordar" id="recordar" hidden>
-          <h4 class="sub-titulo">Para recordar <small id="rec-n"></small></h4>
-          <ul class="tareas" id="lista-recordar"></ul>
-        </div>
-      </section>
-
       <section class="panel" id="google" aria-labelledby="google-titulo" hidden>
         <h3 class="seccion-titulo" id="google-titulo">Classroom y Calendar</h3>
         <div class="google-cuerpo" id="google-cuerpo"></div>
@@ -604,6 +746,17 @@ a.boton-principal { display: grid; place-items: center; text-decoration: none; }
         <h3 class="seccion-titulo" id="sis-titulo">Eco en esta laptop</h3>
         <button class="boton-principal" type="button" id="abrir-qr" hidden>Conectar el teléfono con un QR</button>
         <dl class="datos" id="sistema"></dl>
+      </section>
+
+      <section class="panel" aria-labelledby="atajos-titulo">
+        <h3 class="seccion-titulo" id="atajos-titulo">Atajos del teclado</h3>
+        <ul class="atajos">
+          <li><kbd>/</kbd> Buscar en tus momentos</li>
+          <li><kbd>P</kbd> Preguntarle a Eco</li>
+          <li><kbd>N</kbd> Agregar un pendiente</li>
+          <li><kbd>←</kbd><kbd>→</kbd> Día anterior o siguiente</li>
+          <li><kbd>T</kbd> Volver a hoy</li>
+        </ul>
       </section>
     </aside>
   </div>
@@ -668,7 +821,10 @@ const guardado = {
 };
 
 const ui = { fecha: null, hoy: null, dias: [], busqueda: "", firma: "", seleccion: null, momentos: new Map(), editando: null,
-  fechaItem: null, items: new Map() };
+  fechaItem: null, items: new Map(),
+  pend: { tareas: [], recordar: [] }, pendFiltro: "todos", pendTexto: "", pendVisibles: [], gruposCerrados: new Set() };
+try { ui.gruposCerrados = new Set(JSON.parse(guardado.leer("eco-grupos-cerrados") || "[]")); } catch {}
+ui.pendFiltro = guardado.leer("eco-pend-filtro") || "todos";
 const fotos = new Map(); // id del momento → imagen ya descargada
 
 function esc(t) {
@@ -1320,6 +1476,7 @@ async function cargarMomentos() {
 
   $("dia-titulo").innerHTML = buscando ? `Búsqueda <span>“${esc(ui.busqueda)}”</span>` : esc(nombreDia(ui.fecha));
   $("limpiar").hidden = !buscando;
+  $("copiar-dia").disabled = !momentos.length;
   $("ir-hoy").hidden = buscando || esHoy;
   $("dia-anterior").disabled = buscando || !ui.dias.some((d) => d < ui.fecha);
   $("dia-siguiente").disabled = buscando || !ui.dias.some((d) => d > ui.fecha && d <= ui.hoy);
@@ -1345,17 +1502,133 @@ async function cargarMomentos() {
 }
 
 /** Pendientes y Para recordar: de todos los días, hasta que los marques. */
+const GRUPOS = [
+  { id: "vencidas", titulo: "Vencidos" },
+  { id: "hoy", titulo: "Hoy" },
+  { id: "proximas", titulo: "Próximos" },
+  { id: "sin", titulo: "Sin fecha" },
+];
+const grupoDe = (t) => (t.vencida ? "vencidas" : t.hoy ? "hoy" : t.cuando ? "proximas" : "sin");
+const sinAcentos = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+/** Pinta Pendientes desde lo último que mandó Eco, con el filtro y el texto que tengas puestos. */
+function pintarPendientes() {
+  const { tareas, recordar } = ui.pend;
+  const cuentas = { vencidas: 0, hoy: 0, proximas: 0, sin: 0 };
+  tareas.forEach((t) => { cuentas[grupoDe(t)]++; });
+  if (ui.pendFiltro !== "todos" && !cuentas[ui.pendFiltro]) ui.pendFiltro = "todos";
+
+  const q = sinAcentos(ui.pendTexto);
+  const coincide = (t) => !q || sinAcentos(`${t.texto} ${t.de || ""}`).includes(q);
+  ui.items.clear();
+  ui.pendVisibles = [];
+
+  const chips = [["todos", "Todo", tareas.length], ...GRUPOS.map((g) => [g.id, g.titulo, cuentas[g.id]])]
+    .filter(([id, , n]) => id === "todos" || n > 0)
+    .map(([id, txt, n]) => `<button class="filtro" type="button" data-f="${id}" aria-pressed="${ui.pendFiltro === id}">${txt} <b>${n}</b></button>`)
+    .join("");
+  $("filtros").innerHTML = tareas.length ? chips : "";
+
+  const plegable = ui.pendFiltro === "todos" && !q;
+  const html = GRUPOS.filter((g) => ui.pendFiltro === "todos" || ui.pendFiltro === g.id).map((g) => {
+    const lista = tareas.filter((t) => grupoDe(t) === g.id && coincide(t));
+    if (!lista.length) return "";
+    ui.pendVisibles.push(...lista);
+    const cerrado = plegable && ui.gruposCerrados.has(g.id);
+    return `<details class="grupo-pend" data-g="${g.id}"${cerrado ? "" : " open"}><summary>${g.titulo} <span class="g-n">${lista.length}</span></summary>`
+      + `<ul class="tareas">${lista.map((t) => tareaHTML(t, true)).join("")}</ul></details>`;
+  }).join("");
+  $("lista-pendientes").innerHTML = html;
+
+  const recVisibles = ui.pendFiltro === "todos" ? recordar.filter(coincide) : [];
+  $("pend-n").textContent = tareas.length ? `${tareas.length}` : "";
+  $("pestana-pend").textContent = tareas.length ? `${tareas.length}` : "";
+  $("pend-vacio").hidden = tareas.length > 0;
+  $("pend-nada").hidden = !(tareas.length > 0 && !html);
+  $("pend-nada").textContent = q ? `Ningún pendiente dice «${ui.pendTexto}».` : "Nada en esta lista.";
+  $("pend-copiar").disabled = ui.pendVisibles.length === 0;
+  $("recordar").hidden = recVisibles.length === 0;
+  $("rec-n").textContent = recordar.length ? `${recordar.length}` : "";
+  $("lista-recordar").innerHTML = recVisibles.map((t) => tareaHTML(t, true)).join("");
+}
+
 async function cargarPendientes() {
   if (ui.fechaItem) return; // no se repinta mientras le pones fecha a algo
   const [tareas, recordar] = await Promise.all([api("/api/pendientes"), api("/api/recordar").catch(() => [])]);
-  ui.items.clear();
-  $("pend-n").textContent = tareas.length ? `${tareas.length}` : "";
-  $("lista-pendientes").innerHTML = tareas.map((t) => tareaHTML(t, true)).join("");
-  $("pend-vacio").hidden = tareas.length > 0;
-  $("recordar").hidden = recordar.length === 0;
-  $("rec-n").textContent = recordar.length ? `${recordar.length}` : "";
-  $("lista-recordar").innerHTML = recordar.map((t) => tareaHTML(t, true)).join("");
+  ui.pend = { tareas, recordar };
+  pintarPendientes();
 }
+
+$("filtros").addEventListener("click", (ev) => {
+  const boton = ev.target.closest("[data-f]");
+  if (!boton) return;
+  cerrarFecha(false);
+  ui.pendFiltro = ui.pendFiltro === boton.dataset.f ? "todos" : boton.dataset.f; // tocar el activo lo quita
+  guardado.poner("eco-pend-filtro", ui.pendFiltro);
+  pintarPendientes();
+});
+$("pend-filtro").addEventListener("input", () => {
+  cerrarFecha(false);
+  ui.pendTexto = $("pend-filtro").value.trim();
+  pintarPendientes();
+});
+// Recuerda qué grupos dejaste cerrados (el evento «toggle» no sube, por eso va en captura).
+document.addEventListener("toggle", (ev) => {
+  const d = ev.target;
+  if (!d.classList?.contains("grupo-pend") || ui.pendFiltro !== "todos" || ui.pendTexto) return;
+  if (d.open) ui.gruposCerrados.delete(d.dataset.g); else ui.gruposCerrados.add(d.dataset.g);
+  guardado.poner("eco-grupos-cerrados", JSON.stringify([...ui.gruposCerrados]));
+}, true);
+
+/* ── Copiar: la lista de pendientes y el día, como texto para pegar donde quieras ── */
+async function copiarTexto(texto, aviso) {
+  try { await navigator.clipboard.writeText(texto); avisar(aviso); }
+  catch { avisar("No se pudo copiar. Abre el panel desde localhost o https."); }
+}
+$("pend-copiar").addEventListener("click", () => {
+  const lineas = ui.pendVisibles.map((t) => `- [ ] ${t.texto}${t.cuando ? ` (${t.vencida ? "venció " : ""}${t.cuando})` : ""}`);
+  copiarTexto(lineas.join("\n"), `${plural(lineas.length, "pendiente copiado", "pendientes copiados")}`);
+});
+$("copiar-dia").addEventListener("click", () => {
+  const titulo = ui.busqueda ? `Eco · búsqueda «${ui.busqueda}»` : `Eco · ${nombreDia(ui.fecha)}`;
+  let md = `# ${titulo}\n`;
+  for (const m of ui.momentos.values()) {
+    md += `\n## ${ui.busqueda ? `${nombreDia(m.fecha)}, ` : ""}${m.hora} · ${m.titulo}\n`;
+    if (m.resumen) md += `${m.resumen}\n`;
+    if (m.cronica) md += `\n${m.cronica}\n`;
+    if (m.tareas.length) md += `\n**Por hacer**\n${m.tareas.map((x) => `- [ ] ${x.texto}${x.cuando ? ` (${x.cuando})` : ""}`).join("\n")}\n`;
+    if (m.datos.length) md += `\n**Para no olvidar**\n${m.datos.map((x) => `- ${x}`).join("\n")}\n`;
+    if (m.ideas.length) md += `\n**Ideas**\n${m.ideas.map((x) => `- ${x}`).join("\n")}\n`;
+  }
+  copiarTexto(md, "Copiado: pégalo en Notas, Obsidian o donde quieras");
+});
+
+/* ── Secciones (en pantallas chicas se ve una a la vez; en grandes, las tres) ── */
+function ponerVista(v) {
+  if (!["momentos", "pendientes", "eco"].includes(v)) v = "momentos";
+  $("cuerpo").dataset.vista = v;
+  document.querySelectorAll("#pestanas [data-vista]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.vista === v)));
+  guardado.poner("eco-vista", v);
+}
+$("pestanas").addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-vista]");
+  if (b) ponerVista(b.dataset.vista);
+});
+ponerVista(guardado.leer("eco-vista"));
+
+/* ── Atajos de teclado ── */
+document.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.defaultPrevented) return;
+  if (ev.target.matches?.("input, textarea, select, [contenteditable='true']") || document.querySelector("dialog[open]")) return;
+  if (!ui.hoy || $("app").hidden) return;
+  const tecla = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+  if (tecla === "/") { ev.preventDefault(); ponerVista("momentos"); ponerModo("buscar"); }
+  else if (tecla === "p") { ev.preventDefault(); ponerModo("preguntar"); }
+  else if (tecla === "n") { ev.preventDefault(); ponerVista("pendientes"); $("agregar-texto").focus(); }
+  else if (tecla === "t") { ev.preventDefault(); ponerVista("momentos"); irA(ui.hoy); }
+  else if (tecla === "ArrowLeft") { ponerVista("momentos"); $("dia-anterior").click(); }
+  else if (tecla === "ArrowRight") { ponerVista("momentos"); $("dia-siguiente").click(); }
+});
 
 /* ── Ponerle fecha a un pendiente (o a algo de Para recordar: pasa a Pendientes y a tu Calendar) ── */
 function cerrarFecha(volverAlBoton = true) {
@@ -1626,7 +1899,7 @@ $("modo-preguntar").addEventListener("click", () => ponerModo("preguntar"));
 $("q").addEventListener("input", () => {
   if (ui.modo !== "buscar") return;
   clearTimeout(espera);
-  espera = setTimeout(() => { ui.busqueda = $("q").value.trim(); cargarMomentos().catch(() => {}); }, 300);
+  espera = setTimeout(() => { ui.busqueda = $("q").value.trim(); if (ui.busqueda) ponerVista("momentos"); cargarMomentos().catch(() => {}); }, 300);
 });
 $("buscador").addEventListener("submit", (ev) => {
   ev.preventDefault();
@@ -1662,6 +1935,7 @@ async function preguntar(pregunta) {
 $("respuesta-cerrar").addEventListener("click", () => { $("respuesta").hidden = true; $("q").focus(); });
 
 async function irAMomento(id, fecha) {
+  ponerVista("momentos");
   ui.busqueda = ""; $("q").value = ""; ui.fecha = fecha; ui.seleccion = Number(id);
   await cargarMomentos().catch(() => {});
   const destino = $("m" + id);

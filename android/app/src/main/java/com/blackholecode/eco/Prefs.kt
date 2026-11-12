@@ -46,6 +46,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(K_VOZ, false)
         set(value) = sp.edit().putBoolean(K_VOZ, value).apply()
 
+    /** No guardar lo que suena en videos, música o juegos del teléfono (el micrófono oye el altavoz). */
+    var ignorarMultimedia: Boolean
+        get() = sp.getBoolean(K_MULTIMEDIA, true)
+        set(value) = sp.edit().putBoolean(K_MULTIMEDIA, value).apply()
+
     /** Contactos de emergencia (nombre y número), en JSON. Solo viven en el teléfono. */
     var contactosJson: String
         get() = sp.getString(K_CONTACTOS, "[]") ?: "[]"
@@ -108,5 +113,6 @@ class Prefs(context: Context) {
         private const val K_SMS_SIEMPRE = "sms_siempre"
         private const val K_VOZ = "voz_activa"
         private const val K_REUNIONES = "reuniones_esperando"
+        private const val K_MULTIMEDIA = "ignorar_multimedia"
     }
 }

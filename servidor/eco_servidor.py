@@ -764,7 +764,8 @@ def vocabulario() -> str:
 
 MARCA_TOQUE = "[TOQUE]"
 # Marcas que se dejan en las grabaciones largas: "[20:41]" (hora real) y "[silencio de 45 s]".
-RE_MARCAS = re.compile(r"\[(?:\d{1,2}:\d{2}|silencio de [^\]]+)\]")
+MARCA_MULTIMEDIA = "[sonaba un video o música]"
+RE_MARCAS = re.compile(r"\[(?:\d{1,2}:\d{2}|silencio de [^\]]+|sonaba un video o música)\]")
 
 
 def _dur_corta(seg: float) -> str:
@@ -780,11 +781,40 @@ def sin_marcas_largas(texto: str) -> str:
     return re.sub(r"\s+", " ", RE_MARCAS.sub(" ", texto or "")).strip()
 
 
-def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None = None) -> str:
+def tramos_multimedia(meta: dict) -> list[tuple[float, float]]:
+    """Tramos (en ms de reloj) en que el teléfono notó que sonaba otra app (YouTube, TikTok, música, un
+    juego) por el altavoz. Lo que el micrófono oyó ahí no era tuyo. Se les da 1,5 s de margen por lado
+    porque Android avisa un poco tarde. Si en la app apagaste la opción, no hay nada que quitar."""
+    if meta.get("filtrar_multimedia") is False:
+        return []
+    salida: list[tuple[float, float]] = []
+    for par in meta.get("multimedia_ms") or []:
+        try:
+            a, b = float(par[0]), float(par[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if b > a:
+            salida.append((a - 1500.0, b + 1500.0))
+    return salida
+
+
+def _en_multimedia(ini_s: float, fin_s: float, base_ms: float, tramos: list[tuple[float, float]]) -> bool:
+    """¿Este pedazo de la transcripción cae (sobre todo) dentro de un tramo con video o música?"""
+    a, b = base_ms + ini_s * 1000.0, base_ms + fin_s * 1000.0
+    largo = max(b - a, 1.0)
+    dentro = sum(max(0.0, min(b, y) - max(a, x)) for x, y in tramos)
+    return dentro / largo >= 0.5
+
+
+def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None = None,
+                base_ms: float | None = None, multimedia: list[tuple[float, float]] | None = None,
+                stats: dict | None = None) -> str:
     """Texto del audio. Con toque_s (segundo en que tocaste Guardar), deja la marca [TOQUE] ahí:
     a la IA le sirve para saber qué es lo tuyo y qué era ruido de antes.
     Con inicio_ms (grabaciones largas: momento en que empieza esta parte) deja además la hora cada
-    cierto tiempo y los silencios largos, para que la crónica pueda decir "hubo un silencio"."""
+    cierto tiempo y los silencios largos, para que la crónica pueda decir "hubo un silencio".
+    Con base_ms (cuándo empieza este audio) y multimedia (tramos de tramos_multimedia) se descarta lo
+    que se dijo mientras sonaba un video o música del teléfono; stats["quitados"] dice cuántos pedazos."""
     w = CFG["whisper"]
     nombre, beam, motivo = elegir_modelo()
     with _whisper_lock, turno_whisper():
@@ -810,9 +840,19 @@ def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None 
         umbral = float(CFG["sesiones"].get("silencio_marca_s") or 0)
         cada = float(CFG["sesiones"].get("marca_hora_s") or 0)
         ultimo_fin, ultima_hora = 0.0, None
+        quitados, en_video = 0, False
         for seg in segmentos:
             if not _segmento_valido(seg):
                 continue
+            if multimedia and base_ms is not None and _en_multimedia(seg.start, seg.end, base_ms, multimedia):
+                quitados += 1
+                if con_marcas:
+                    if not en_video:
+                        partes.append(MARCA_MULTIMEDIA)  # una sola marca por tramo seguido
+                    ultimo_fin = seg.end  # no fue silencio: sonaba un video
+                en_video = True
+                continue
+            en_video = False
             if con_marcas:
                 if umbral and seg.start - ultimo_fin >= umbral:
                     partes.append(f"[silencio de {_dur_corta(seg.start - ultimo_fin)}]")
@@ -831,6 +871,8 @@ def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None 
             if total - ultimo_fin >= umbral:
                 partes.append(f"[silencio de {_dur_corta(total - ultimo_fin)}]")
         _whisper_uso["t"] = time.time()
+        if stats is not None:
+            stats["quitados"] = quitados
         return " ".join(partes).strip()
 
 
@@ -997,6 +1039,9 @@ Reglas:
   No anotes detalles íntimos, de salud o de la vida privada de terceros (lo que {nombre} debe o le
   deben sí se anota, como tarea).
 - Nunca anotes contraseñas, códigos de verificación ni números de tarjeta.
+- Si se oye algo que reproduce un aparato (un video de redes, anuncios, música, locutores de TV o radio,
+  personajes de una serie o película), no es de {nombre}: no lo conviertas en tareas, datos ni ideas.
+  Si todo el fragmento es así, deja las listas vacías y titúlalo «Audio de un video o música».
 - No mezcles: si se oyen varias conversaciones o temas, cada tarea y cada dato sale de UNO solo.
 - La transcripción automática se equivoca a veces. Corrige un error solo si el contexto lo deja claro
   (una marca, una materia, un nombre que ya aparece bien escrito); si no, no adivines.
@@ -1977,8 +2022,16 @@ def procesar(ruta: Path) -> int | None:
         toque = float(meta["toque_s"]) if meta.get("toque_s") is not None else None
     except (TypeError, ValueError):
         toque = None
-    marcado = transcribir(ruta, toque)  # con la marca [TOQUE] donde tocaste Guardar
+    tramos = tramos_multimedia(meta)
+    base_ms = float(meta["inicio_ms"]) if meta.get("inicio_ms") else None
+    quitado: dict = {}
+    marcado = transcribir(ruta, toque, base_ms=base_ms, multimedia=tramos, stats=quitado)  # con [TOQUE] donde tocaste
     texto = sin_marcas(marcado)
+    if quitado.get("quitados") and not texto.strip() and not meta.get("orden") and origen != "voz":
+        # Todo lo que se oyó era un video o música del propio teléfono: no es una nota tuya.
+        log.info("Solo sonaba un video o música en %s: no lo guardo", archivo)
+        _limpiar(ruta, meta_ruta)
+        return None
     log.info("Transcrito %s (%s de audio) en %.0f s", archivo, duracion(dur), time.time() - t0)
     # ¿Lo guardaste diciendo "Eco, …"? Entonces lo principal es lo que le pediste.
     orden = buscar_orden(marcado) if meta.get("orden") else None
@@ -2346,7 +2399,7 @@ def procesar_parte(ruta: Path, meta: dict) -> int | None:
 
     if ya["texto"] is None:
         t0 = time.time()
-        texto = transcribir(ruta, inicio_ms=inicio_ms)
+        texto = transcribir(ruta, inicio_ms=inicio_ms, base_ms=inicio_ms, multimedia=tramos_multimedia(meta))
         log.info("%s %s · parte %d transcrita (%s de audio) en %.0f s",
                  TIPOS_SESION[tipo], clave, n, duracion(dur), time.time() - t0)
         with closing(db()) as con, con:
@@ -2437,7 +2490,10 @@ se la cuentes tú, platicándosela, como si hubieras estado ahí y se lo contara
 alcanzó a oírla. No quiere puntos sueltos ni una lista: quiere entender qué pasó, sin haberla escuchado.
 
 Recibes la transcripción automática de una parte de la grabación. Trae marcas: "[20:41]" es la hora real
-en que se dijo lo que sigue, y "[silencio de 45 s]" es una pausa en la que nadie habló.
+en que se dijo lo que sigue, y "[silencio de 45 s]" es una pausa en la que nadie habló. "[sonaba un video o
+música]" es un tramo en que sonó un video, música o un juego del teléfono de {nombre}: Eco lo dejó fuera a
+propósito. Si la ves, menciónala una sola vez y breve ("Aquí sonó un video en tu teléfono y Eco no lo anotó.")
+sin inventar qué decía.
 
 CÓMO ESCRIBIR
 - Cuéntalo en prosa, en párrafos, de tú a tú con {nombre}, con un tono natural y cálido ("Al principio…",

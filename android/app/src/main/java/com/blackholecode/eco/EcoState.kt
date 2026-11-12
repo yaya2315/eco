@@ -58,6 +58,9 @@ object EcoState {
     /** Última vez que el detector oyó voz cerca (para la prueba en pantalla). */
     @Volatile var vozOyendoMs = 0L
 
+    /** Otra app (video, música, juego) suena por el altavoz: Eco no guarda ese audio. */
+    @Volatile var multimedia = false
+
     @Volatile var lastSaved = ""
     @Volatile var lastUpload = "Todavía no se ha subido nada"
     @Volatile var lastUploadOk = true
