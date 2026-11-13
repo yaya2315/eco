@@ -4982,10 +4982,11 @@ def _fin_totales(con: sqlite3.Connection, cuenta: int, desde: date, hasta: date)
     return t
 
 
-def _fin_por_categoria(con: sqlite3.Connection, cuenta: int, desde: date, hasta: date) -> list[dict]:
-    filas = con.execute("SELECT categoria, SUM(monto) AS s FROM fin_movimientos WHERE cuenta_id=? AND tipo='gasto' "
+def _fin_por_categoria(con: sqlite3.Connection, cuenta: int, desde: date, hasta: date,
+                       tipo: str = "gasto") -> list[dict]:
+    filas = con.execute("SELECT categoria, SUM(monto) AS s FROM fin_movimientos WHERE cuenta_id=? AND tipo=? "
                         "AND fecha>=? AND fecha<=? GROUP BY categoria ORDER BY s DESC",
-                        (cuenta, desde.isoformat(), hasta.isoformat())).fetchall()
+                        (cuenta, tipo, desde.isoformat(), hasta.isoformat())).fetchall()
     total = sum(f["s"] for f in filas) or 1
     salida = []
     for f in filas:
@@ -5163,6 +5164,7 @@ def api_finanzas(params: dict) -> dict:
             "antes": _fin_totales(con, cid, a_desde, a_hasta),
             "saldo": saldo,
             "por_categoria": _fin_por_categoria(con, cid, desde, hasta),
+            "por_categoria_ingreso": _fin_por_categoria(con, cid, desde, hasta, "ingreso"),
             "serie": _fin_serie(con, cid, tipo, ref),
             "presupuestos": _fin_presupuestos(con, cid, ref),
             "metas": metas, "fijos": fijos,

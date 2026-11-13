@@ -781,6 +781,12 @@ class MainActivity : Activity() {
             FrameLayout.LayoutParams(if (wide) dp(560) else MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL)
         )
 
+        // Igual que en el panel de la laptop: arriba eliges Eco o Finanzas.
+        col.addView(
+            Fin.selector(this, enFinanzas = false) { abrirFinanzas() },
+            LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { bottomMargin = dp(20) }
+        )
+
         // Encabezado
         col.addView(label("BLACK HOLE CODE", 11f, C_ACCENT_SOFT, medium = true).apply { letterSpacing = 0.18f })
         col.addView(label("Eco", 34f, C_TEXT, medium = true), lp(top = 4))
@@ -1059,29 +1065,92 @@ class MainActivity : Activity() {
         wrap.addView(saveCaption, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(12)
         })
-        meetingButton = button("Iniciar modo reunión", primary = false) { startMeeting() }
-        wrap.addView(meetingButton, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-            bottomMargin = dp(8)
-        })
-        // Las reuniones ya grabadas: la lista y la crónica de cada una (la laptop las cuenta como una charla).
-        wrap.addView(button("Ver mis reuniones", primary = false) {
-            startActivity(Intent(this, ReunionesActivity::class.java))
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-            bottomMargin = dp(8)
-        })
-        // Tus pendientes (los mismos del panel de la laptop): verlos, marcarlos y agregar uno.
-        wrap.addView(button("Ver mis pendientes", primary = false) {
-            startActivity(Intent(this, PendientesActivity::class.java))
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-            bottomMargin = dp(8)
-        })
-        // Tus finanzas: anotar gastos e ingresos, ver los gráficos y tus metas de ahorro.
-        wrap.addView(button("Ver mis finanzas", primary = false) {
-            startActivity(Intent(this, FinanzasActivity::class.java))
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+        wrap.addView(buildMas(), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(16)
         })
         return wrap
+    }
+
+    /**
+     * «Reuniones y pendientes»: una sola fila que se despliega, para que la pantalla no sea una
+     * columna de botones. Recuerda si la dejaste abierta. (Finanzas está arriba, junto a Eco.)
+     */
+    private fun buildMas(): View {
+        val guardado = getSharedPreferences("eco_ui", MODE_PRIVATE)
+        val caja = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(C_SURFACE, 16, C_BORDER)
+        }
+        val contenido = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), 0, dp(8), dp(8))
+        }
+        val flecha = label("▾", 18f, C_MUTED).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        val cabeza = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(52)
+            setPadding(dp(16), 0, dp(16), 0)
+            background = ripple(rounded(0, 16), 16)
+            isClickable = true
+            isFocusable = true
+        }
+        cabeza.addView(
+            label("Reuniones y pendientes", 15f, C_TEXT, medium = true),
+            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+        )
+        cabeza.addView(flecha)
+
+        fun reflejar(abierto: Boolean) {
+            contenido.visibility = if (abierto) View.VISIBLE else View.GONE
+            flecha.text = if (abierto) "▴" else "▾"
+            cabeza.contentDescription = "Reuniones y pendientes, " +
+                if (abierto) "abierto. Toca para ocultar." else "cerrado. Toca para ver las opciones."
+        }
+        cabeza.setOnClickListener {
+            val abierto = contenido.visibility != View.VISIBLE
+            guardado.edit().putBoolean("mas_abierto", abierto).apply()
+            reflejar(abierto)
+        }
+
+        meetingButton = opcion("Iniciar modo reunión") { startMeeting() }
+        contenido.addView(meetingButton, lp())
+        // Las reuniones ya grabadas: la lista y la crónica de cada una (la laptop las cuenta como una charla).
+        contenido.addView(opcion("Ver mis reuniones") {
+            startActivity(Intent(this, ReunionesActivity::class.java))
+        }, lp(top = 6))
+        // Tus pendientes (los mismos del panel de la laptop): verlos, marcarlos y agregar uno.
+        contenido.addView(opcion("Ver mis pendientes") {
+            startActivity(Intent(this, PendientesActivity::class.java))
+        }, lp(top = 6))
+
+        caja.addView(cabeza)
+        caja.addView(contenido)
+        reflejar(guardado.getBoolean("mas_abierto", false))
+        return caja
+    }
+
+    /** Una opción dentro de una fila desplegable: como un botón, pero plano y alineado a la izquierda. */
+    private fun opcion(text: String, onClick: () -> Unit) = Button(this).apply {
+        this.text = text
+        isAllCaps = false
+        textSize = 15f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        minHeight = dp(48)
+        minimumHeight = dp(48)
+        stateListAnimator = null
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        background = ripple(rounded(C_SURFACE_2, 12), 12)
+        setTextColor(C_TEXT)
+        setOnClickListener { onClick() }
+    }
+
+    /** Finanzas se abre sin animación, para que se sienta como cambiar de pestaña. */
+    @Suppress("DEPRECATION")
+    private fun abrirFinanzas() {
+        startActivity(Intent(this, FinanzasActivity::class.java))
+        overridePendingTransition(0, 0)
     }
 
     private fun buildConnectionCard(): View {

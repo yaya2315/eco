@@ -85,6 +85,12 @@
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Anotar un gasto o un ingreso (se abre con el botón «+» de Finanzas) -->
+        <activity
+            android:name=".FinanzasAnadirActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize|stateVisible" />
+
         <!-- Toca "Enviar" en WhatsApp por ti, solo en la alerta que confirmaste (lo activas en Accesibilidad) -->
         <service
             android:name=".EnvioWhatsappService"

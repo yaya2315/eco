@@ -165,12 +165,12 @@ Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 - Si pasan 20 minutos en silencio, se termina sola.
 - La transcripción completa queda en `notas/transcripciones/`.
 
-**Modo reunión (teléfono).** Botón **Iniciar modo reunión** en la app: graba por horas hasta que tocas **Terminar reunión** (en la app o en la notificación).
+**Modo reunión (teléfono).** En la app, despliega **Reuniones y pendientes** y toca **Iniciar modo reunión**: graba por horas hasta que tocas **Terminar reunión** (en la app o en la notificación).
 - Usa unos 15 MB por hora y sube una parte cada 10 minutos, así que la laptop va adelantando el trabajo.
 - Mientras dura la reunión, el botón de momentos se apaga: la reunión ya lo graba todo.
 - **Crónica:** al terminar, la IA de la laptop te cuenta toda la reunión como una charla, no como puntos sueltos: un título por tema, todo lo que se habló explicado, los acuerdos y los silencios ("hubo un momento de silencio de casi un minuto"). Eco anota la hora y las pausas de 20 s o más en la transcripción para poder contarlo. Te llega completa por Telegram (después del resumen, en uno o varios mensajes), y queda en `notas/transcripciones/`, en el panel y en el teléfono.
-- **En el teléfono:** cuando la laptop termina de contártela, llega una notificación "Tu reunión ya está lista". Tócala, o abre **Ver mis reuniones** en la pantalla principal, para leerla y compartirla. La lista y la crónica se piden a la laptop, así que necesitas estar en tu red o en Tailscale.
-- **Pendientes en el teléfono:** el botón **Ver mis pendientes** muestra lo mismo que la columna Pendientes del panel, agrupado en Vencidos, Hoy, Próximos y Sin fecha. Toca una tarea para marcarla (o desmarcarla) y usa la caja de arriba para agregar una, con fecha y hora si quieres. También se pide a la laptop: necesitas tu red o Tailscale.
+- **En el teléfono:** cuando la laptop termina de contártela, llega una notificación "Tu reunión ya está lista". Tócala, o despliega **Reuniones y pendientes** y abre **Ver mis reuniones**, para leerla y compartirla. La lista y la crónica se piden a la laptop, así que necesitas estar en tu red o en Tailscale.
+- **Pendientes en el teléfono:** en la pantalla de Eco, despliega **Reuniones y pendientes** y toca **Ver mis pendientes**: muestra lo mismo que la columna Pendientes del panel, agrupado en Vencidos, Hoy, Próximos y Sin fecha. Toca una tarea para marcarla (o desmarcarla) y usa la caja de arriba para agregar una, con fecha y hora si quieres. También se pide a la laptop: necesitas tu red o Tailscale.
 - En `config.toml`, sección `[sesiones]`: `cronica_reunion` (por defecto `true`), `cronica_clase` (`false`), `silencio_marca_s` (20) y `marca_hora_s` (120). Cuesta más IA que un resumen: una reunión de una hora son varias llamadas largas.
 
 **Pregúntale a Eco.**
@@ -320,7 +320,7 @@ Eco también lleva tu dinero. No se conecta a ningún banco ni pide contraseñas
 **Dónde está**
 
 - **Panel de la laptop:** arriba, junto al nombre, cambia de **Memoria** a **Finanzas** (o toca la tecla `G` para anotar un gasto).
-- **Teléfono:** botón **Ver mis finanzas**.
+- **Teléfono:** arriba de la app eliges **Eco** o **Finanzas** (igual que en el panel). En Finanzas: las pestañas *Gastos* e *Ingresos*, la dona del día, semana, mes o año con cada categoría debajo, el botón **+** para anotar y un menú lateral (☰) con Movimientos, Gráficos, Presupuestos, Metas de ahorro, Pagos de cada mes y Cuentas.
 - **Telegram y voz:** escríbele o dile a Eco lo que pasó (abajo están los ejemplos).
 
 **Qué tiene**
