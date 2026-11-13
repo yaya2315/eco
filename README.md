@@ -319,7 +319,7 @@ Eco también lleva tu dinero. No se conecta a ningún banco ni pide contraseñas
 
 **Dónde está**
 
-- **Panel de la laptop:** arriba, junto al nombre, cambia de **Memoria** a **Finanzas** (o toca la tecla `G` para anotar un gasto).
+- **Panel de la laptop:** arriba, junto al nombre, cambia de **Memoria** a **Finanzas** (o toca la tecla `G` para anotar un gasto). Todo cabe en la pantalla sin deslizar: a la izquierda anotas, al centro están los números, la dona y las barras, y debajo una tarjeta con pestañas (Presupuestos, Metas, Pagos fijos, Consejos); a la derecha, los movimientos. Para abrirlo directo: `http://localhost:8765/#finanzas`.
 - **Teléfono:** arriba de la app eliges **Eco** o **Finanzas** (igual que en el panel). En Finanzas: las pestañas *Gastos* e *Ingresos*, la dona del día, semana, mes o año con cada categoría debajo, el botón **+** para anotar y un menú lateral (☰) con Movimientos, Gráficos, Presupuestos, Metas de ahorro, Pagos de cada mes y Cuentas.
 - **Telegram y voz:** escríbele o dile a Eco lo que pasó (abajo están los ejemplos).
 
