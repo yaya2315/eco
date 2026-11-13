@@ -307,10 +307,61 @@ Cada vez que GitHub compila una versión nueva de la app, la laptop la baja sola
   - `/semana` — lo que viene en los próximos 7 días;
   - `/pendientes` — lo que tienes por hacer;
   - `/hecho 12` — marca como hecha la tarea número 12;
-  - `/buscar examen` — busca en todo lo guardado.
+  - `/buscar examen` — busca en todo lo guardado;
+  - `/finanzas`, `/gasto 3.50 almuerzo`, `/ingreso 150 logo`, `/deshacer` — tu dinero (sección [Finanzas](#finanzas-lo-que-ganas-y-lo-que-gastas)).
 - **Notas rápidas:** escríbele cualquier cosa al bot, por ejemplo *"examen de física el martes"*, y queda anotado con su fecha. También sirven una **nota de voz** o una **foto** de la pizarra.
 - **Panel:** el acceso directo **Eco** o el ícono junto al reloj abren tu panel con todo lo guardado.
 - **Notas en Markdown:** quedan en `servidor/notas/`, una por día más `Pendientes.md`. Si quieres verlas en Obsidian, apunta `carpeta` en `config.toml` a tu bóveda.
+
+## Finanzas: lo que ganas y lo que gastas
+
+Eco también lleva tu dinero. No se conecta a ningún banco ni pide contraseñas: solo guarda lo que tú anotas.
+
+**Dónde está**
+
+- **Panel de la laptop:** arriba, junto al nombre, cambia de **Memoria** a **Finanzas** (o toca la tecla `G` para anotar un gasto).
+- **Teléfono:** botón **Ver mis finanzas**.
+- **Telegram y voz:** escríbele o dile a Eco lo que pasó (abajo están los ejemplos).
+
+**Qué tiene**
+
+- **Cuentas separadas:** empiezas con *Personal* y *Empresa* (puedes cambiarles el nombre o agregar más, por ejemplo *Black Hole Code*). Una cuenta solo separa lo que anotas.
+- **Día, semana, mes y año:** los mismos números para el periodo que elijas, con flechas para ir hacia atrás.
+- **Números grandes:** lo que entró, lo que salió, lo que apartaste y **lo que te queda**.
+- **Gráficos:** una dona con tus gastos por categoría y barras con los últimos 7 días, 6 semanas, 6 meses o los 12 meses del año.
+- **Categorías:** comida y súper, comer fuera, transporte, educación, salud, trabajo y herramientas, tecnología, suscripciones, casa y servicios, ropa y cuidado, ocio, regalos y familia, saldo y recargas, deudas, publicidad, impuestos y otros. Para ingresos: clientes y proyectos, sueldo, mesada y familia, ventas, regalos, reembolsos y otros. Las que más usas salen primero.
+- **Movimientos:** la lista de todo lo anotado; en el panel puedes editarlos y borrarlos, en el teléfono borrarlos.
+
+**Cómo anotar un gasto o un ingreso**
+
+| Dónde | Cómo |
+|---|---|
+| Panel o app | Elige *Gasto* o *Ingreso*, escribe el monto, toca la categoría y **Añadir**. |
+| Telegram | Escribe `gasté 3.50 en almuerzo`, `pagué 25 de internet`, `me pagaron 150 por el logo`. También `/gasto 3.50 almuerzo` e `/ingreso 150 logo`. |
+| Voz | «**Eco, anota que gasté cinco dólares en pupusas**». También sirve una nota de voz por Telegram. |
+
+Eco reconoce la categoría por las palabras (almuerzo → Comer fuera, bus → Transporte) y te contesta con lo que anotó. Si se equivocó, `/deshacer` borra lo último. Lo de clientes y publicidad va a tu cuenta de empresa; lo demás, a la cuenta que elijas con `/cuenta personal` o `/cuenta empresa` (o di «…de la empresa» en la frase).
+
+Frases como *«pagar la luz el viernes»* o *«le debo 10 a Steven»* **no** son gastos: siguen yendo a Pendientes.
+
+**Sin conexión:** si anotas en el teléfono y la laptop no está al alcance, el movimiento se guarda en el teléfono y se sube solo cuando vuelva la conexión.
+
+**La ayuda para ahorrar**
+
+1. **Metas de ahorro:** dile a Eco para qué ahorras, cuánto y (si quieres) para cuándo. Calcula **cuánto apartar cada semana**. Con *Apartar dinero* (o `ahorré 10` por Telegram) ese dinero sale de «Te queda» y se suma a la meta.
+2. **Presupuestos:** un tope por mes para una categoría. Eco te avisa por Telegram al llegar al **80 %** y cuando te pasas.
+3. **Cuánto puedes gastar por día:** con lo que te queda del mes, menos tus pagos fijos, entre los días que faltan.
+4. **Sugerencia al cobrar:** cada vez que anotas un ingreso te propone apartar una parte (20 % si no lo cambias).
+5. **Pagos de cada mes:** internet, colegiatura, suscripciones… Te avisa **un día antes** y el mismo día; cuando lo pagues, `/pagado 3` (o el botón *Ya lo pagué*) lo anota.
+
+**Lo que Eco te manda por Telegram**
+
+- A las **8:30 pm**, si ese día no anotaste nada: te pregunta si gastaste o ganaste algo (solo si has usado Finanzas en el último mes).
+- Los **domingos a las 6 pm**: tu semana en dinero (cuánto entró y salió, en qué se fue, comparado con la semana pasada).
+- El **día 1**: cómo cerró el mes.
+- `/finanzas` (o `/finanzas semana`, `/finanzas hoy`, `/finanzas año`) cuando tú quieras, y preguntas como *«¿cuánto gasté esta semana?»*.
+
+Todo se ajusta en `config.toml`, sección `[finanzas]`: `moneda`, `ahorro_pct`, `hora_recordatorio`, `resumen_semanal`, `hora_semanal`, `resumen_mensual` y `activo = false` para apagar el apartado (por ejemplo, en el Eco de otra persona). Los datos van en la misma base de datos de Eco, así que entran en el respaldo diario.
 
 ## Actualizar la app
 

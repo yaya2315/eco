@@ -600,6 +600,168 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6
 @media (min-width: 1700px) and (min-height: 600px) {
   .cuerpo { grid-template-columns: minmax(460px, 1fr) minmax(620px, 1.5fr) minmax(300px, 360px); gap: var(--s5); }
 }
+/* ───────── Finanzas: otro apartado del panel (se cambia arriba, junto al nombre) ───────── */
+.zonas { align-self: center; }
+.zonas button { min-height: 36px; padding: 0 var(--s4); font-size: var(--t-sm); }
+.pagina[data-zona="finanzas"] :is(.buscador, .respuesta, .pestanas, .cuerpo) { display: none; }
+.pagina:not([data-zona="finanzas"]) .fin { display: none; }
+.fin { margin-top: var(--s4); display: grid; gap: var(--s4); grid-template-rows: auto minmax(0, 1fr); min-width: 0; }
+.fin-barra { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3) var(--s5); }
+.fin-cuentas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fin-cuentas .filtro { min-height: 36px; padding: 0 var(--s4); font-size: var(--t-sm); }
+.fin-cuentas .filtro[aria-pressed="true"] { background: var(--violet); border-color: var(--violet); color: #fff; }
+.fin-cuentas .fin-mas { border-style: dashed; color: var(--violet-soft); }
+.fin-lapiz { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; border: 1px solid transparent; background: transparent; color: var(--faint); cursor: pointer; }
+.fin-lapiz:hover { color: var(--text); border-color: var(--line); background: var(--surface-2); }
+.fin-lapiz svg { width: 16px; height: 16px; }
+.fin-barra .modos button { min-height: 36px; padding: 0 var(--s4); font-size: var(--t-sm); }
+.fin-nav { display: flex; align-items: center; gap: var(--s2); margin-left: auto; }
+.fin-nav strong { min-width: 12ch; text-align: center; font: 600 var(--t-lg)/1.2 var(--display); letter-spacing: -0.01em; }
+.fin-nav .boton-icono { width: 36px; height: 36px; }
+
+.fin-cuerpo { display: grid; gap: var(--s4); grid-template-columns: minmax(0, 1fr); align-items: start; min-height: 0; }
+.fin-col { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); align-content: start; min-width: 0; }
+.fin .panel { padding: var(--s4) var(--s5) var(--s5); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -30px rgba(0, 0, 0, 0.8); }
+.fin-etiqueta { margin: 0 0 var(--s3); font: 600 0.75rem/1.4 var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.fin-cabeza { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s3); }
+.fin-cabeza .fin-etiqueta { margin: 0; }
+.fin-cabeza small { color: var(--faint); font-size: var(--t-xs); }
+.fin-agregar { min-height: 32px; padding: 0 var(--s3); border-radius: 999px; border: 1px dashed #3a3a52; background: transparent; color: var(--violet-soft); font-size: var(--t-xs); font-weight: 600; cursor: pointer; }
+.fin-agregar:hover { border-color: var(--violet); background: rgba(107, 91, 245, 0.08); }
+
+/* Añadir movimiento */
+.fin-tipo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.fin-tipo button { min-height: 44px; border-radius: var(--r-sm); border: 1px solid var(--line); background: transparent; color: var(--muted); font-weight: 600; cursor: pointer; transition: border-color .15s, background-color .15s, color .15s; }
+.fin-tipo button:hover { color: var(--text); border-color: #3a3a52; }
+.fin-tipo button[aria-pressed="true"] { border-color: var(--violet-soft); background: rgba(107, 91, 245, 0.14); color: var(--text); }
+.fin-monto { display: flex; align-items: baseline; gap: var(--s1); margin: var(--s4) 0 var(--s3); padding-bottom: var(--s2); border-bottom: 1px solid var(--line); transition: border-color .15s; }
+.fin-monto:focus-within { border-color: var(--violet); }
+.fin-monto span { color: var(--faint); font: 600 1.5rem/1 var(--display); }
+.fin-monto input { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; font: 600 2.25rem/1.2 var(--display); letter-spacing: -0.02em; color: var(--text); }
+.fin-monto input::placeholder { color: #55556e; }
+.fin-monto input:focus { outline: none; }
+.fin-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.fin-cat { min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: var(--t-xs); font-weight: 600; cursor: pointer; transition: border-color .15s, background-color .15s, color .15s; }
+.fin-cat:hover { color: var(--text); border-color: #3a3a52; }
+.fin-cat[aria-pressed="true"] { background: var(--violet); border-color: var(--violet); color: #fff; }
+.fin-cat.fin-cat-mas { border-style: dashed; color: var(--violet-soft); }
+.fin-sub { display: block; margin: var(--s4) 0 var(--s1); color: var(--muted); font-size: var(--t-xs); }
+.fin-form .boton-principal { margin-top: var(--s4); }
+.fin-form .boton-texto { width: 100%; margin-top: var(--s2); }
+
+/* Para ahorrar */
+.fin-diario { margin: 0; font: 600 var(--t-xl)/1.2 var(--display); letter-spacing: -0.02em; }
+.fin-diario small { color: var(--muted); font: 400 var(--t-sm) var(--body); letter-spacing: 0; }
+.fin-tips { display: grid; gap: var(--s2); margin: var(--s3) 0 0; padding: 0; list-style: none; color: var(--muted); font-size: var(--t-sm); }
+.fin-tips li { padding-left: var(--s4); position: relative; }
+.fin-tips li::before { content: ""; position: absolute; left: 2px; top: .6em; width: 6px; height: 6px; border-radius: 50%; background: var(--violet-soft); }
+
+/* Números grandes */
+.fin-kpis { display: grid; gap: var(--s3); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 720px) { .fin-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.fin-kpi { padding: var(--s4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); min-width: 0; }
+.fin-kpi dt { font: 600 0.6875rem/1.4 var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.fin-kpi dd { margin: var(--s1) 0 0; font: 600 clamp(1.25rem, 1rem + 1vw, 1.75rem)/1.2 var(--display); letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.fin-kpi small { display: block; margin-top: 2px; color: var(--faint); font: 400 var(--t-xs)/1.4 var(--body); letter-spacing: 0; }
+.fin-kpi.queda { border-color: rgba(184, 174, 255, 0.5); background: linear-gradient(160deg, rgba(107, 91, 245, 0.16), var(--surface) 70%); }
+.fin-kpi.queda dd { color: var(--violet-soft); }
+.fin-kpi.queda.negativo { border-color: rgba(255, 92, 122, 0.45); background: linear-gradient(160deg, rgba(255, 92, 122, 0.12), var(--surface) 70%); }
+.fin-kpi.queda.negativo dd { color: var(--rec); }
+.fin-kpis { margin: 0; }
+
+.fin-par { display: grid; gap: var(--s4); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 720px) { .fin-par { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); } .fin-par.igual { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Dona de gastos por categoría */
+.fin-dona { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: var(--s5); align-items: center; }
+#fin-dona { container-type: inline-size; }
+@container (max-width: 359px) { .fin-dona { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: var(--s4); } }
+.fin-dona-grafico { position: relative; width: 132px; height: 132px; }
+.fin-dona-grafico svg { width: 100%; height: 100%; display: block; }
+.fin-dona-grafico circle { transition: opacity .15s; }
+.fin-dona-grafico svg:hover circle:not(:hover) { opacity: .45; }
+.fin-dona-centro { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; pointer-events: none; }
+.fin-dona-centro strong { font: 600 1.0625rem/1.2 var(--display); letter-spacing: -0.01em; }
+.fin-dona-centro small { color: var(--faint); font-size: 0.6875rem; }
+.fin-leyenda { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: var(--t-xs); width: 100%; }
+.fin-leyenda li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; gap: var(--s2); align-items: center; }
+.fin-leyenda i { width: 10px; height: 10px; border-radius: 3px; }
+.fin-leyenda span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-leyenda b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.fin-leyenda em { min-width: 4ch; text-align: right; color: var(--faint); font-style: normal; font-variant-numeric: tabular-nums; }
+
+/* Barras del periodo */
+.fin-barras { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--s2); align-items: end; }
+.fin-barra-col { display: grid; gap: 4px; justify-items: center; min-width: 0; }
+.fin-barra-area { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 132px; width: 100%; }
+.fin-barra-v { margin-bottom: 4px; color: var(--faint); font-size: 0.6875rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fin-barra-b { width: min(100%, 34px); border-radius: 4px 4px 0 0; background: #3A3A55; transition: background-color .15s; }
+.fin-barra-col:hover .fin-barra-b { background: #55557A; }
+.fin-barra-col.actual .fin-barra-b { background: var(--violet); }
+.fin-barra-col.actual .fin-barra-v { color: var(--text); }
+.fin-barra-e { color: var(--faint); font-size: 0.6875rem; white-space: nowrap; }
+.fin-barra-col.actual .fin-barra-e { color: var(--text); font-weight: 600; }
+.fin-barras-pie { margin: var(--s3) 0 0; padding-top: var(--s2); border-top: 1px solid var(--line); color: var(--faint); font-size: var(--t-xs); }
+
+/* Presupuestos, metas y pagos fijos */
+.fin-presu { display: grid; gap: var(--s4) var(--s5); grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.fin-item { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; border-radius: var(--r-sm); }
+.fin-item-fila { display: flex; min-width: 0; justify-content: space-between; gap: var(--s2); align-items: baseline; font-size: var(--t-sm); }
+.fin-item-fila span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-item-fila b { flex: none; font-weight: 400; color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.fin-progreso { display: block; height: 4px; margin-top: 6px; border-radius: 999px; background: #2E2E44; overflow: hidden; }
+.fin-progreso i { display: block; height: 100%; border-radius: 999px; background: var(--violet-soft); }
+.fin-progreso.cerca i { background: var(--warn); }
+.fin-progreso.pasado i { background: var(--rec); }
+.fin-progreso.logrado i { background: var(--live); }
+.fin-item-pie { display: block; margin-top: 4px; color: var(--faint); font-size: var(--t-xs); }
+.fin-item-pie.pasado { color: var(--rec); }
+.fin-item-pie.cerca { color: var(--warn); }
+.fin-item:hover .fin-item-fila span { color: var(--violet-soft); }
+.fin-lista { display: grid; gap: var(--s4); margin: 0; padding: 0; list-style: none; }
+.fin-meta-acc { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); }
+.fin-meta-acc .boton-texto { min-height: 32px; padding: 0 var(--s3); font-size: var(--t-xs); }
+.fin-fijo { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2) var(--s3); align-items: center; }
+.fin-fijo .boton-texto { min-height: 32px; padding: 0 var(--s3); font-size: var(--t-xs); }
+.fin-listo { color: var(--live); font-size: var(--t-xs); font-weight: 600; }
+
+/* Movimientos */
+.fin-movs-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); padding: 0 !important; overflow: hidden; }
+.fin-movs-cabeza { padding: var(--s4) var(--s5) var(--s3); border-bottom: 1px solid var(--line); }
+.fin-movs-cabeza .filtros { margin-top: var(--s2); }
+.fin-movs { margin: 0; padding: var(--s1) var(--s3) var(--s4); list-style: none; }
+.fin-mov { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: var(--s3); align-items: center; padding: var(--s2) var(--s2); border-radius: var(--r-sm); position: relative; }
+.fin-mov + .fin-mov { border-top: 1px solid rgba(42, 42, 61, 0.6); }
+.fin-mov:hover, .fin-mov:focus-within { background: var(--surface-2); }
+.fin-mov > i { width: 8px; height: 8px; border-radius: 50%; }
+.fin-mov-txt { min-width: 0; display: grid; }
+.fin-mov-txt strong { font-size: var(--t-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-mov-txt small { color: var(--faint); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-mov-monto { font-size: var(--t-sm); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fin-mov-monto.ingreso { color: var(--live); }
+.fin-mov-monto.ahorro { color: var(--violet-soft); }
+.fin-mov-acc { position: absolute; right: var(--s2); top: 50%; translate: 0 -50%; display: none; gap: 2px; padding-left: var(--s4); background: linear-gradient(90deg, transparent, var(--surface-2) 30%); }
+.fin-mov:hover .fin-mov-acc, .fin-mov:focus-within .fin-mov-acc { display: flex; }
+@media (hover: none) { .fin-mov { grid-template-columns: 8px minmax(0, 1fr) auto auto; } .fin-mov-acc { position: static; translate: none; display: flex; background: none; padding: 0; } }
+.fin-mov.editando { background: rgba(107, 91, 245, 0.12); }
+
+/* Ventanita de finanzas (presupuesto, meta, pago fijo, cuenta) */
+.fin-dialogo { text-align: left; }
+.fin-campos { display: grid; gap: var(--s3); margin-top: var(--s4); }
+.fin-campos label { display: grid; gap: var(--s1); color: var(--muted); font-size: var(--t-xs); }
+.fin-campos select.control { appearance: none; }
+.fin-dialogo .acciones-dialogo { align-items: center; }
+.fin-dialogo .quitar { margin-right: auto; min-height: 44px; padding: 0 var(--s2); border: 0; background: transparent; color: var(--rec); font-size: var(--t-sm); text-decoration: underline; cursor: pointer; }
+.fin-dialogo .boton-principal.peligro, .fin-dialogo .boton-principal { background: var(--violet); color: #fff; }
+
+@media (min-width: 1100px) and (min-height: 600px) {
+  .pagina > .fin { flex: 1 1 auto; min-height: 0; }
+  .fin-cuerpo { grid-template-columns: minmax(264px, 300px) minmax(0, 1fr) minmax(300px, 380px); align-items: stretch; }
+  .fin-col { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scrollbar-width: thin; scrollbar-color: #34344a transparent; padding-right: 2px; }
+  .fin-col.fin-der { overflow: hidden; align-content: stretch; }
+  .fin-movs-panel { min-height: 0; height: 100%; }
+  .fin-movs { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #34344a transparent; }
+}
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -618,6 +780,10 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6
         </svg>
         <h1>Eco</h1>
         <span class="perfil" id="perfil" hidden></span>
+      </div>
+      <div class="modos zonas" id="zonas" role="group" aria-label="Apartados de Eco" hidden>
+        <button type="button" data-zona="eco" aria-pressed="true">Memoria</button>
+        <button type="button" data-zona="finanzas" aria-pressed="false">Finanzas</button>
       </div>
       <p class="estado" id="estado" role="status" aria-live="polite"><span class="punto" aria-hidden="true"></span><span id="estado-texto">Conectando con Eco…</span></p>
     </div>
@@ -756,11 +922,126 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6
           <li><kbd>N</kbd> Agregar un pendiente</li>
           <li><kbd>←</kbd><kbd>→</kbd> Día anterior o siguiente</li>
           <li><kbd>T</kbd> Volver a hoy</li>
+          <li><kbd>G</kbd> Anotar un gasto (Finanzas)</li>
         </ul>
       </section>
     </aside>
   </div>
+
+  <section class="fin" id="finanzas" aria-labelledby="fin-titulo">
+    <div class="fin-barra">
+      <h2 class="oculto" id="fin-titulo">Finanzas</h2>
+      <div class="fin-cuentas" id="fin-cuentas" role="group" aria-label="Cuenta que estás viendo"></div>
+      <div class="modos" id="fin-periodos" role="group" aria-label="Ver por día, semana, mes o año">
+        <button type="button" data-periodo="dia" aria-pressed="false">Día</button>
+        <button type="button" data-periodo="semana" aria-pressed="false">Semana</button>
+        <button type="button" data-periodo="mes" aria-pressed="true">Mes</button>
+        <button type="button" data-periodo="anio" aria-pressed="false">Año</button>
+      </div>
+      <div class="fin-nav">
+        <button class="boton-texto boton-chico" id="fin-hoy" type="button" hidden>Volver a hoy</button>
+        <button class="boton-icono" id="fin-antes" type="button" aria-label="Periodo anterior">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <strong id="fin-periodo" aria-live="polite"></strong>
+        <button class="boton-icono" id="fin-despues" type="button" aria-label="Periodo siguiente">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="fin-cuerpo">
+      <div class="fin-col fin-izq">
+        <form class="panel fin-form" id="fin-form" autocomplete="off" aria-labelledby="fin-form-titulo">
+          <h3 class="fin-etiqueta" id="fin-form-titulo">Añadir movimiento</h3>
+          <div class="fin-tipo" id="fin-tipo" role="group" aria-label="Qué vas a anotar">
+            <button type="button" data-tipo="gasto" aria-pressed="true">Gasto</button>
+            <button type="button" data-tipo="ingreso" aria-pressed="false">Ingreso</button>
+          </div>
+          <div class="fin-monto">
+            <span id="fin-moneda" aria-hidden="true">$</span>
+            <label class="oculto" for="fin-monto">Monto</label>
+            <input id="fin-monto" type="text" inputmode="decimal" placeholder="0.00" maxlength="14" enterkeyhint="done">
+          </div>
+          <div class="fin-cats" id="fin-cats" role="group" aria-label="Categoría"></div>
+          <label class="fin-sub" for="fin-fecha">Fecha</label>
+          <input class="control" id="fin-fecha" type="date">
+          <label class="fin-sub" for="fin-nota">Nota (opcional)</label>
+          <input class="control" id="fin-nota" type="text" maxlength="120" placeholder="ej. almuerzo con Steven">
+          <button class="boton-principal" type="submit" id="fin-guardar">Añadir</button>
+          <button class="boton-texto" type="button" id="fin-cancelar" hidden>Cancelar</button>
+        </form>
+        <section class="panel" aria-labelledby="fin-consejo-titulo">
+          <h3 class="fin-etiqueta" id="fin-consejo-titulo">Para ahorrar este mes</h3>
+          <div id="fin-consejo"></div>
+        </section>
+      </div>
+
+      <div class="fin-col fin-centro">
+        <dl class="fin-kpis" id="fin-kpis"></dl>
+        <div class="fin-par">
+          <section class="panel" aria-labelledby="fin-dona-titulo">
+            <h3 class="fin-etiqueta" id="fin-dona-titulo">Gastos por categoría</h3>
+            <div id="fin-dona"></div>
+          </section>
+          <section class="panel" aria-labelledby="fin-serie-titulo">
+            <h3 class="fin-etiqueta" id="fin-serie-titulo">Últimos 6 meses</h3>
+            <div id="fin-serie"></div>
+          </section>
+        </div>
+        <section class="panel" aria-labelledby="fin-presu-titulo">
+          <div class="fin-cabeza">
+            <h3 class="fin-etiqueta" id="fin-presu-titulo">Presupuestos por categoría</h3>
+            <button class="fin-agregar" type="button" id="fin-presu-nuevo">+ Presupuesto</button>
+          </div>
+          <div id="fin-presu"></div>
+        </section>
+        <div class="fin-par igual">
+          <section class="panel" aria-labelledby="fin-metas-titulo">
+            <div class="fin-cabeza">
+              <h3 class="fin-etiqueta" id="fin-metas-titulo">Metas de ahorro</h3>
+              <button class="fin-agregar" type="button" id="fin-meta-nueva">+ Meta</button>
+            </div>
+            <div id="fin-metas"></div>
+          </section>
+          <section class="panel" aria-labelledby="fin-fijos-titulo">
+            <div class="fin-cabeza">
+              <h3 class="fin-etiqueta" id="fin-fijos-titulo">Pagos de cada mes</h3>
+              <button class="fin-agregar" type="button" id="fin-fijo-nuevo">+ Pago fijo</button>
+            </div>
+            <div id="fin-fijos"></div>
+          </section>
+        </div>
+      </div>
+
+      <div class="fin-col fin-der">
+        <section class="panel fin-movs-panel" aria-labelledby="fin-movs-titulo">
+          <div class="fin-movs-cabeza">
+            <div class="fin-cabeza" style="margin:0">
+              <h3 class="fin-etiqueta" id="fin-movs-titulo">Movimientos</h3>
+              <small id="fin-movs-n"></small>
+            </div>
+            <div class="filtros" id="fin-filtros" role="group" aria-label="Qué movimientos ver"></div>
+          </div>
+          <ul class="fin-movs" id="fin-movs"></ul>
+        </section>
+      </div>
+    </div>
+  </section>
 </div>
+
+<dialog class="conectar fin-dialogo" id="fin-dialogo" aria-labelledby="fin-dialogo-titulo">
+  <form id="fin-dialogo-form" novalidate>
+    <h2 id="fin-dialogo-titulo"></h2>
+    <p id="fin-dialogo-nota" hidden></p>
+    <div class="fin-campos" id="fin-dialogo-campos"></div>
+    <div class="acciones-dialogo">
+      <button class="quitar" type="button" id="fin-dialogo-borrar" hidden></button>
+      <button class="boton-texto" type="button" id="fin-dialogo-no">Cancelar</button>
+      <button class="boton-principal" type="submit" id="fin-dialogo-si">Guardar</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog class="conectar" id="conectar" aria-labelledby="conectar-titulo">
   <h2 id="conectar-titulo">Conecta tu teléfono</h2>
@@ -879,12 +1160,12 @@ async function post(ruta, datos) {
   return api(ruta, { method: "POST", headers: { "Content-Type": "application/json", "X-Eco-Panel": "1" }, body: JSON.stringify(datos) });
 }
 
-function avisar(texto) {
+function avisar(texto, ms = 2800) {
   const a = $("aviso");
   a.textContent = texto;
   a.hidden = false;
   clearTimeout(avisar.t);
-  avisar.t = setTimeout(() => (a.hidden = true), 2800);
+  avisar.t = setTimeout(() => (a.hidden = true), ms);
 }
 
 /** Ventanita de confirmación propia (no la del navegador). Devuelve true si confirmas. */
@@ -1620,7 +1901,7 @@ ponerVista(guardado.leer("eco-vista"));
 document.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.defaultPrevented) return;
   if (ev.target.matches?.("input, textarea, select, [contenteditable='true']") || document.querySelector("dialog[open]")) return;
-  if (!ui.hoy || $("app").hidden) return;
+  if (!ui.hoy || $("app").hidden || $("app").dataset.zona === "finanzas") return;
   const tecla = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
   if (tecla === "/") { ev.preventDefault(); ponerVista("momentos"); ponerModo("buscar"); }
   else if (tecla === "p") { ev.preventDefault(); ponerModo("preguntar"); }
@@ -1733,6 +2014,9 @@ async function refrescar(forzar = false) {
     ui.hoy = e.hoy;
     if (!ui.fecha) ui.fecha = e.hoy;
     pintarEstado(e);
+    ui.finanzas = !!e.finanzas;
+    $("zonas").hidden = !ui.finanzas;
+    if (!ui.zonaLista) { ui.zonaLista = true; ponerZona(guardado.leer("eco-zona")); }
     const firma = [e.momentos_hoy, e.pendientes, e.ultimo_audio, e.procesando, e.en_cola, e.hoy,
       JSON.stringify(e.sesiones || [])].join("|");
     if (forzar || firma !== ui.firma) {
@@ -1964,6 +2248,428 @@ $("acceso").addEventListener("submit", async (ev) => {
   try { await api("/api/estado"); await refrescar(true); }
   catch (err) { if (err.token) { guardado.quitar("eco-token"); $("acceso-error").hidden = false; } }
 });
+
+/* ══════════════ Finanzas: lo que ganas y lo que gastas, por cuenta ══════════════ */
+const fin = { cuenta: Number(guardado.leer("eco-fin-cuenta")) || 0, periodo: guardado.leer("eco-fin-periodo") || "mes",
+  ref: "", d: null, tipo: "gasto", categoria: "", filtro: "todos", editando: null, carga: 0 };
+const FIN_DE = { dia: "del día", semana: "de la semana", mes: "del mes", anio: "del año" };
+const FIN_ANTES = { dia: "el día anterior", semana: "la semana anterior", mes: "el mes anterior", anio: "el año anterior" };
+const FIN_SERIE = { dia: "Gastos · últimos 7 días", semana: "Gastos · últimas 6 semanas", mes: "Gastos · últimos 6 meses", anio: "Gastos · mes por mes" };
+
+/** Centavos → "$1,486.00" (con signo: "+$450.00" o "−$38.40"). */
+function dinero(c, signo = false) {
+  const n = (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (c < 0 ? "−" : signo && c > 0 ? "+" : "") + (fin.d?.moneda || "$") + n;
+}
+function dineroCorto(c) {
+  const n = c / 100;
+  if (n >= 10000) return Math.round(n / 1000) + "k";
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(".0", "") + "k";
+  return n >= 100 || Number.isInteger(n) ? String(Math.round(n)) : n.toFixed(2);
+}
+function fechaCorta(iso) {
+  if (iso === fin.d?.hoy) return "hoy";
+  const f = fechaDe(iso);
+  return `${f.getDate()} ${MESES[f.getMonth()].slice(0, 3)}` + (iso.slice(0, 4) !== (fin.d?.hoy || iso).slice(0, 4) ? ` ${f.getFullYear()}` : "");
+}
+
+function ponerZona(z) {
+  if (z !== "finanzas" || !ui.finanzas) z = "eco";
+  $("app").dataset.zona = z;
+  document.querySelectorAll("#zonas [data-zona]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.zona === z)));
+  guardado.poner("eco-zona", z);
+  if (z === "finanzas") cargarFinanzas();
+}
+$("zonas").addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-zona]");
+  if (b) ponerZona(b.dataset.zona);
+});
+
+async function cargarFinanzas() {
+  const mia = ++fin.carga;
+  const q = new URLSearchParams({ periodo: fin.periodo });
+  if (fin.cuenta) q.set("cuenta", fin.cuenta);
+  if (fin.ref) q.set("ref", fin.ref);
+  try {
+    const d = await api("/api/finanzas?" + q);
+    if (mia !== fin.carga || !d.ok) return;
+    fin.d = d;
+    fin.cuenta = d.cuenta;
+    guardado.poner("eco-fin-cuenta", String(d.cuenta));
+    pintarFinanzas();
+  } catch (err) {
+    if (err.token) mostrar("acceso");
+  }
+}
+
+/** Manda un cambio de finanzas. Devuelve la respuesta, o null si no se pudo (ya avisó por qué). */
+async function finPost(accion, datos) {
+  const cabeceras = { "Content-Type": "application/json", "X-Eco-Panel": "1" };
+  const token = guardado.leer("eco-token");
+  if (token) cabeceras["X-Eco-Token"] = token;
+  try {
+    const r = await fetch("/api/finanzas/" + accion, { method: "POST", headers: cabeceras, body: JSON.stringify(datos), cache: "no-store" });
+    if (r.status === 401) { mostrar("acceso"); return null; }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) { avisar(j.error || "No se pudo guardar. Inténtalo otra vez."); return null; }
+    return j;
+  } catch {
+    avisar("Eco no responde. Inténtalo otra vez.");
+    return null;
+  }
+}
+
+function pintarFinanzas() {
+  const d = fin.d, p = d.periodo;
+  $("fin-moneda").textContent = d.moneda;
+  $("fin-cuentas").innerHTML = d.cuentas.map((c) =>
+    `<button class="filtro" type="button" data-fin-cuenta="${c.id}" aria-pressed="${c.id === d.cuenta}">${esc(c.nombre)}</button>`).join("")
+    + `<button class="fin-lapiz" type="button" id="fin-cuenta-editar" aria-label="Cambiar el nombre de esta cuenta" title="Cambiar el nombre de esta cuenta">${ICONO.editar}</button>`
+    + `<button class="filtro fin-mas" type="button" id="fin-cuenta-nueva">+ Cuenta</button>`;
+  document.querySelectorAll("#fin-periodos [data-periodo]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.periodo === p.tipo)));
+  $("fin-periodo").textContent = p.tipo === "dia" && p.ref === d.hoy ? "Hoy" : p.titulo;
+  $("fin-hoy").hidden = p.es_actual;
+  $("fin-despues").disabled = p.es_actual;
+
+  // Números grandes
+  const t = d.totales, a = d.antes;
+  let cambio = "";
+  if (t.gasto && a.gasto) {
+    const pct = Math.round((t.gasto - a.gasto) * 100 / a.gasto);
+    cambio = pct === 0 ? `igual que ${FIN_ANTES[p.tipo]}` : `${Math.abs(pct)} % ${pct < 0 ? "menos" : "más"} que ${FIN_ANTES[p.tipo]}`;
+  }
+  const nIng = d.movimientos.filter((m) => m.tipo === "ingreso").length, nGas = d.movimientos.filter((m) => m.tipo === "gasto").length;
+  $("fin-kpis").innerHTML = `
+    <div class="fin-kpi"><dt>Ingresos ${FIN_DE[p.tipo]}</dt><dd>${dinero(t.ingreso)}<small>${nIng ? plural(nIng, "ingreso", "ingresos") : "nada anotado"}</small></dd></div>
+    <div class="fin-kpi"><dt>Gastos ${FIN_DE[p.tipo]}</dt><dd>${dinero(t.gasto)}<small>${cambio || (nGas ? plural(nGas, "gasto", "gastos") : "nada anotado")}</small></dd></div>
+    <div class="fin-kpi"><dt>Ahorrado</dt><dd>${dinero(t.ahorro)}<small>${t.ingreso && t.ahorro ? Math.round(t.ahorro * 100 / t.ingreso) + " % de lo que entró" : "para tus metas"}</small></dd></div>
+    <div class="fin-kpi queda${t.queda < 0 ? " negativo" : ""}"><dt>${t.queda < 0 ? "Te pasaste" : "Te queda"}</dt><dd>${dinero(Math.abs(t.queda))}<small>En la cuenta: ${dinero(d.saldo)}</small></dd></div>`;
+
+  $("fin-dona").innerHTML = donaHTML(d.por_categoria, t.gasto);
+  $("fin-serie-titulo").textContent = FIN_SERIE[p.tipo];
+  $("fin-serie").innerHTML = serieHTML(d.serie);
+
+  // Presupuestos (siempre por mes)
+  $("fin-presu").innerHTML = d.presupuestos.length ? `<div class="fin-presu">${d.presupuestos.map((x) => {
+    const pct = Math.round(x.gastado * 100 / x.limite), clase = x.resta < 0 ? "pasado" : pct >= 80 ? "cerca" : "";
+    return `<button class="fin-item" type="button" data-fin-presu="${esc(x.categoria)}" aria-label="${esc(x.nombre)}: ${dinero(x.gastado)} de ${dinero(x.limite)}. Cambiar el tope.">
+      <span class="fin-item-fila"><span>${esc(x.nombre)}</span><b>${dinero(x.gastado)} / ${dinero(x.limite)}</b></span>
+      <span class="fin-progreso ${clase}"><i style="width:${Math.min(100, pct)}%"></i></span>
+      <span class="fin-item-pie ${clase}">${x.resta < 0 ? `te pasaste ${dinero(-x.resta)}` : `quedan ${dinero(x.resta)}`}</span></button>`;
+  }).join("")}</div>` : `<p class="panel-vacio">Ponle un tope por mes a una categoría (por ejemplo, Comer fuera). Eco te avisa al llegar al 80 % y si te pasas.</p>`;
+
+  // Metas de ahorro
+  $("fin-metas").innerHTML = d.metas.length ? `<ul class="fin-lista">${d.metas.map((m) => {
+    const pie = !m.falta ? "¡Meta cumplida!" : m.por_semana ? `aparta ${dinero(m.por_semana)} por semana · ${m.dias === 0 ? "es hoy" : "faltan " + plural(m.dias, "día", "días")}`
+      : m.dias !== null && m.dias < 0 ? `la fecha ya pasó · te faltan ${dinero(m.falta)}` : `te faltan ${dinero(m.falta)}`;
+    return `<li><span class="fin-item-fila"><span>${esc(m.nombre)}</span><b>${dinero(m.ahorrado)} / ${dinero(m.objetivo)}</b></span>
+      <span class="fin-progreso${m.falta ? "" : " logrado"}"><i style="width:${m.pct}%"></i></span>
+      <span class="fin-item-pie">${pie}</span>
+      <span class="fin-meta-acc">${m.falta ? `<button class="boton-texto" type="button" data-fin-aportar="${m.id}">Apartar dinero</button>` : ""}
+        <button class="fin-lapiz" type="button" data-fin-meta="${m.id}" aria-label="Editar la meta ${esc(m.nombre)}">${ICONO.editar}</button></span></li>`;
+  }).join("")}</ul>` : `<p class="panel-vacio">Dime para qué quieres ahorrar y cuánto. Eco calcula cuánto apartar cada semana y te lo recuerda.</p>`;
+
+  // Pagos que se repiten cada mes
+  $("fin-fijos").innerHTML = d.fijos.length ? `<ul class="fin-lista">${d.fijos.map((f) => `<li class="fin-fijo">
+      <button class="fin-item" type="button" data-fin-fijo="${f.id}" aria-label="Editar ${esc(f.nota)}">
+        <span class="fin-item-fila"><span>${esc(f.nota)}</span><b>${dinero(f.monto, f.tipo === "ingreso")}</b></span>
+        <span class="fin-item-pie">día ${f.dia} · ${esc(f.nombre)}${f.listo ? "" : f.en_dias > 0 ? ` · en ${plural(f.en_dias, "día", "días")}` : f.en_dias === 0 ? " · es hoy" : " · ya tocaba"}</span></button>
+      ${f.listo ? `<span class="fin-listo">✓ Anotado</span>` : `<button class="boton-texto" type="button" data-fin-pagar="${f.id}">${f.tipo === "ingreso" ? "Ya me pagaron" : "Ya lo pagué"}</button>`}</li>`).join("")}</ul>`
+    : `<p class="panel-vacio">Internet, colegiatura, suscripciones… Eco te avisa un día antes y los anota con un toque.</p>`;
+
+  pintarConsejo();
+  pintarMovimientos();
+  pintarCategorias();
+  if (!$("fin-fecha").value) $("fin-fecha").value = d.hoy;
+}
+
+/** Dona: hasta 6 categorías y el resto junto en «Otras». Los nombres siempre van escritos al lado. */
+function donaHTML(cats, total) {
+  if (!total) return `<p class="panel-vacio">Sin gastos en este periodo. Anota el primero a la izquierda.</p>`;
+  const lista = cats.slice(0, 6), resto = cats.slice(6);
+  if (resto.length === 1) lista.push(resto[0]);
+  else if (resto.length) {
+    const suma = resto.reduce((s, c) => s + c.total, 0);
+    lista.push({ nombre: `Otras ${resto.length}`, color: "#5A5A72", total: suma, pct: Math.round(suma * 100 / total) });
+  }
+  const R = 46, C = 2 * Math.PI * R, hueco = lista.length > 1 ? 2.2 : 0;
+  let pos = 0;
+  const arcos = lista.map((c) => {
+    const largo = c.total / total * C;
+    const arco = `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${esc(c.color)}" stroke-width="13" stroke-dasharray="${Math.max(0.6, largo - hueco).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-pos).toFixed(2)}" transform="rotate(-90 60 60)"><title>${esc(c.nombre)}: ${dinero(c.total)} (${c.pct} %)</title></circle>`;
+    pos += largo;
+    return arco;
+  }).join("");
+  return `<div class="fin-dona">
+    <div class="fin-dona-grafico"><svg viewBox="0 0 120 120" role="img" aria-label="Gastos por categoría: ${esc(lista.map((c) => `${c.nombre} ${c.pct} %`).join(", "))}">${arcos}</svg>
+      <div class="fin-dona-centro"><strong>${dinero(total)}</strong><small>gastado</small></div></div>
+    <ul class="fin-leyenda">${lista.map((c) => `<li><i style="background:${esc(c.color)}"></i><span>${esc(c.nombre)}</span><b>${dinero(c.total)}</b><em>${c.pct} %</em></li>`).join("")}</ul></div>`;
+}
+
+function serieHTML(serie) {
+  const max = Math.max(...serie.map((s) => s.gasto), 1), muchas = serie.length > 8;
+  const entro = serie.reduce((s, x) => s + x.ingreso, 0), salio = serie.reduce((s, x) => s + x.gasto, 0);
+  return `<div class="fin-barras" role="img" aria-label="${esc(serie.map((s) => `${s.etiqueta}: ${dinero(s.gasto)}`).join(", "))}">${serie.map((s) => `
+    <div class="fin-barra-col${s.actual ? " actual" : ""}" title="${esc(s.etiqueta)}: salió ${dinero(s.gasto)} · entró ${dinero(s.ingreso)}">
+      <div class="fin-barra-area"><span class="fin-barra-v">${s.gasto && (!muchas || s.actual || s.gasto === max) ? dineroCorto(s.gasto) : ""}</span>
+        <span class="fin-barra-b" style="height:${s.gasto ? Math.max(3, Math.round(s.gasto / max * 104)) : 0}px"></span></div>
+      <span class="fin-barra-e">${esc(muchas ? s.etiqueta.charAt(0).toUpperCase() : s.etiqueta)}</span></div>`).join("")}</div>
+    <p class="fin-barras-pie">En total: entró ${dinero(entro)} y salió ${dinero(salio)}.</p>`;
+}
+
+function pintarConsejo() {
+  const c = fin.d.consejo;
+  const diario = c.libre > 0 && c.diario > 0
+    ? `<p class="fin-diario">${dinero(c.diario)} <small>por día</small></p><p class="nota" style="margin:2px 0 0">es lo que puedes gastar para llegar a fin de mes (${plural(c.dias, "día", "días")}).</p>` : "";
+  $("fin-consejo").innerHTML = diario + `<ul class="fin-tips">${c.textos.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+}
+
+function pintarMovimientos() {
+  const d = fin.d, cuenta = { todos: d.movimientos.length };
+  for (const m of d.movimientos) cuenta[m.tipo] = (cuenta[m.tipo] || 0) + 1;
+  if (fin.filtro !== "todos" && !cuenta[fin.filtro]) fin.filtro = "todos";
+  $("fin-filtros").innerHTML = [["todos", "Todos"], ["gasto", "Gastos"], ["ingreso", "Ingresos"], ["ahorro", "Ahorro"]]
+    .filter(([k]) => k === "todos" || cuenta[k])
+    .map(([k, n]) => `<button class="filtro" type="button" data-fin-filtro="${k}" aria-pressed="${fin.filtro === k}">${n} <b>${cuenta[k] || 0}</b></button>`).join("");
+  const lista = d.movimientos.filter((m) => fin.filtro === "todos" || m.tipo === fin.filtro);
+  $("fin-movs-n").textContent = d.periodo.tipo === "dia" && d.periodo.ref === d.hoy ? "de hoy" : FIN_DE[d.periodo.tipo];
+  const origen = { telegram: "por Telegram", voz: "por voz", app: "desde el teléfono", fijo: "pago fijo" };
+  $("fin-movs").innerHTML = lista.length ? lista.map((m) => {
+    const detalle = [fechaCorta(m.fecha), m.nota, origen[m.origen]].filter(Boolean).join(" · ");
+    const monto = m.tipo === "ingreso" ? dinero(m.monto, true) : m.tipo === "gasto" ? dinero(-m.monto) : dinero(m.monto);
+    return `<li class="fin-mov${fin.editando === m.id ? " editando" : ""}" data-mov="${m.id}"><i style="background:${esc(m.color)}"></i>
+      <span class="fin-mov-txt"><strong>${esc(m.nombre)}</strong><small title="${esc(detalle)}">${esc(detalle)}</small></span>
+      <span class="fin-mov-monto ${m.tipo}">${monto}</span>
+      <span class="fin-mov-acc">${m.tipo === "ahorro" ? "" : `<button class="fin-lapiz" type="button" data-fin-editar="${m.id}" aria-label="Editar: ${esc(m.nombre)} ${dinero(m.monto)}">${ICONO.editar}</button>`}
+        <button class="fin-lapiz" type="button" data-fin-borrar="${m.id}" aria-label="Borrar: ${esc(m.nombre)} ${dinero(m.monto)}">${ICONO.quitar}</button></span></li>`;
+  }).join("") : `<li class="panel-vacio" style="padding:var(--s4) var(--s2)">Nada anotado ${FIN_DE[d.periodo.tipo]}. También puedes escribirle a Eco por Telegram: «gasté 3.50 en almuerzo».</li>`;
+}
+
+function pintarCategorias() {
+  const cats = fin.d.categorias[fin.tipo] || [];
+  if (!cats.some((c) => c.clave === fin.categoria)) fin.categoria = cats[0]?.clave || "";
+  // Primero las que más usas (así las ordena la laptop); el resto, detrás de «Más».
+  const cortas = fin.todasCats ? cats : cats.filter((c, i) => i < 8 || c.clave === fin.categoria);
+  $("fin-cats").innerHTML = cortas.map((c) =>
+    `<button class="fin-cat" type="button" data-fin-cat="${esc(c.clave)}" aria-pressed="${c.clave === fin.categoria}">${esc(c.nombre)}</button>`).join("")
+    + (cats.length > 8 ? `<button class="fin-cat fin-cat-mas" type="button" id="fin-cats-mas" aria-expanded="${!!fin.todasCats}">${fin.todasCats ? "Menos" : `Más (${cats.length - cortas.length})`}</button>` : "");
+  document.querySelectorAll("#fin-tipo [data-tipo]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tipo === fin.tipo)));
+}
+
+function finEditar(id) {
+  const m = fin.d.movimientos.find((x) => x.id === id);
+  if (!m) return;
+  fin.editando = id; fin.tipo = m.tipo; fin.categoria = m.categoria;
+  $("fin-monto").value = (m.monto / 100).toFixed(2);
+  $("fin-fecha").value = m.fecha;
+  $("fin-nota").value = m.nota;
+  $("fin-form-titulo").textContent = "Editar movimiento";
+  $("fin-guardar").textContent = "Guardar cambios";
+  $("fin-cancelar").hidden = false;
+  pintarCategorias(); pintarMovimientos();
+  $("fin-form").scrollIntoView({ block: "nearest" });
+  $("fin-monto").focus();
+}
+function finSoltar() {
+  fin.editando = null;
+  $("fin-monto").value = ""; $("fin-nota").value = "";
+  $("fin-fecha").value = fin.d?.hoy || "";
+  $("fin-form-titulo").textContent = "Añadir movimiento";
+  $("fin-guardar").textContent = "Añadir";
+  $("fin-cancelar").hidden = true;
+  if (fin.d) pintarMovimientos();
+}
+$("fin-cancelar").addEventListener("click", finSoltar);
+
+$("fin-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const monto = $("fin-monto").value.trim();
+  if (!monto || !/\d/.test(monto)) { $("fin-monto").focus(); avisar("Escribe cuánto fue."); return; }
+  const datos = { cuenta: fin.cuenta, tipo: fin.tipo, monto, categoria: fin.categoria, fecha: $("fin-fecha").value, nota: $("fin-nota").value.trim() };
+  const editando = fin.editando;
+  if (editando) datos.id = editando;
+  $("fin-guardar").disabled = true;
+  const r = await finPost("movimiento", datos);
+  $("fin-guardar").disabled = false;
+  if (!r) return;
+  finSoltar();
+  avisar(r.avisos?.[0] || (editando ? "Cambios guardados" : `${fin.tipo === "ingreso" ? "Ingreso" : "Gasto"} anotado: ${dinero(r.movimiento.monto)}`), r.avisos?.length ? 7000 : 2800);
+  await cargarFinanzas();
+  $("fin-monto").focus();
+});
+
+/** Ventanita con unos campos. Devuelve sus valores, { borrar: true } o null si cancelas. */
+function finDialogo({ titulo, nota, campos, boton = "Guardar", borrar }) {
+  const d = $("fin-dialogo"), form = $("fin-dialogo-form"), quitar = $("fin-dialogo-borrar");
+  $("fin-dialogo-titulo").textContent = titulo;
+  $("fin-dialogo-nota").textContent = nota || "";
+  $("fin-dialogo-nota").hidden = !nota;
+  $("fin-dialogo-si").textContent = boton;
+  quitar.hidden = !borrar;
+  quitar.textContent = borrar || "";
+  $("fin-dialogo-campos").innerHTML = campos.map((c) => `<label for="fd-${c.id}">${esc(c.etiqueta)}${c.opciones
+    ? `<select class="control" id="fd-${c.id}"${c.fijo ? " disabled" : ""}>${c.opciones.map(([v, n]) => `<option value="${esc(v)}"${v === c.valor ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>`
+    : `<input class="control" id="fd-${c.id}" type="${c.tipo === "dinero" ? "text" : c.tipo || "text"}"${c.tipo === "dinero" ? ' inputmode="decimal"' : ""} value="${esc(c.valor ?? "")}" placeholder="${esc(c.ejemplo || "")}"${c.min ? ` min="${c.min}" max="${c.max}"` : ""}${c.largo ? ` maxlength="${c.largo}"` : ""}${c.opcional ? "" : " required"} autocomplete="off">`}</label>`).join("");
+  return new Promise((listo) => {
+    const cerrar = (valor) => { d.close(); form.onsubmit = quitar.onclick = $("fin-dialogo-no").onclick = d.oncancel = null; listo(valor); };
+    form.onsubmit = (ev) => {
+      ev.preventDefault();
+      if (!form.reportValidity()) return;
+      cerrar(Object.fromEntries(campos.map((c) => [c.id, $("fd-" + c.id).value.trim()])));
+    };
+    quitar.onclick = () => cerrar({ borrar: true });
+    $("fin-dialogo-no").onclick = () => cerrar(null);
+    d.oncancel = (ev) => { ev.preventDefault(); cerrar(null); };
+    d.showModal();
+    (form.querySelector("input:not([disabled]), select:not([disabled])") || $("fin-dialogo-si")).focus();
+  });
+}
+
+async function finPresupuesto(categoria) {
+  const d = fin.d, actual = d.presupuestos.find((p) => p.categoria === categoria);
+  const libres = d.categorias.gasto.filter((c) => actual || !d.presupuestos.some((p) => p.categoria === c.clave));
+  const v = await finDialogo({
+    titulo: actual ? `Tope de ${actual.nombre}` : "Nuevo presupuesto",
+    nota: "Es lo más que quieres gastar por mes en esa categoría. Eco te avisa al llegar al 80 % y si te pasas.",
+    campos: [
+      { id: "categoria", etiqueta: "Categoría", opciones: libres.map((c) => [c.clave, c.nombre]), valor: categoria || fin.categoria, fijo: !!actual },
+      { id: "monto", etiqueta: "Tope por mes", tipo: "dinero", valor: actual ? (actual.limite / 100).toFixed(2) : "", ejemplo: "ej. 60" },
+    ],
+    borrar: actual ? "Quitar tope" : "",
+  });
+  if (!v) return;
+  const r = await finPost("presupuesto", { cuenta: fin.cuenta, categoria: actual ? categoria : v.categoria, monto: v.borrar ? "" : v.monto });
+  if (r) { avisar(v.borrar ? "Tope quitado" : "Presupuesto guardado"); cargarFinanzas(); }
+}
+
+async function finMeta(id) {
+  const m = id ? fin.d.metas.find((x) => x.id === id) : null;
+  const v = await finDialogo({
+    titulo: m ? "Editar meta" : "Nueva meta de ahorro",
+    nota: m ? "" : "Con fecha, Eco calcula cuánto apartar cada semana.",
+    campos: [
+      { id: "nombre", etiqueta: "¿Para qué ahorras?", valor: m?.nombre, ejemplo: "ej. Laptop nueva", largo: 40 },
+      { id: "objetivo", etiqueta: "¿Cuánto quieres juntar?", tipo: "dinero", valor: m ? (m.objetivo / 100).toFixed(2) : "", ejemplo: "ej. 800" },
+      { id: "fecha", etiqueta: "¿Para cuándo? (opcional)", tipo: "date", valor: m?.fecha || "", opcional: true },
+    ],
+    borrar: m ? "Borrar meta" : "",
+  });
+  if (!v) return;
+  if (v.borrar) {
+    const ok = await confirmar({ titulo: `¿Borrar la meta «${m.nombre}»?`, texto: "Lo que ya apartaste se queda en tus movimientos como ahorro.", boton: "Borrar meta" });
+    if (!ok) return;
+  }
+  const r = await finPost("meta", v.borrar ? { id, borrar: true } : { id, cuenta: fin.cuenta, ...v });
+  if (r) { avisar(v.borrar ? "Meta borrada" : "Meta guardada"); cargarFinanzas(); }
+}
+
+async function finAportar(id) {
+  const m = fin.d.metas.find((x) => x.id === id);
+  if (!m) return;
+  const v = await finDialogo({
+    titulo: `Apartar para «${m.nombre}»`,
+    nota: `Se descuenta de «Te queda» y se suma a la meta. Te faltan ${dinero(m.falta)}.`,
+    campos: [{ id: "aportar", etiqueta: "¿Cuánto apartas?", tipo: "dinero", valor: m.por_semana ? (Math.min(m.por_semana, m.falta) / 100).toFixed(2) : "", ejemplo: "ej. 10" }],
+    boton: "Apartar",
+  });
+  if (!v) return;
+  const r = await finPost("meta", { id, aportar: v.aportar });
+  if (r) { avisar(r.avisos?.[0] || `Apartaste ${dinero(r.movimiento.monto)}`, r.avisos?.length ? 7000 : 2800); cargarFinanzas(); }
+}
+
+async function finFijo(id) {
+  const f = id ? fin.d.fijos.find((x) => x.id === id) : null;
+  const v = await finDialogo({
+    titulo: f ? "Editar pago fijo" : "Nuevo pago de cada mes",
+    nota: f ? "" : "Eco te avisa por Telegram un día antes y el mismo día, y lo anota cuando le digas que ya lo pagaste.",
+    campos: [
+      { id: "nota", etiqueta: "¿Qué es?", valor: f?.nota, ejemplo: "ej. Internet", largo: 60 },
+      { id: "monto", etiqueta: "¿Cuánto?", tipo: "dinero", valor: f ? (f.monto / 100).toFixed(2) : "", ejemplo: "ej. 25" },
+      { id: "dia", etiqueta: "Día del mes", tipo: "number", valor: f?.dia || "", min: 1, max: 31, ejemplo: "1 a 31" },
+      { id: "tipo", etiqueta: "¿Sale o entra?", opciones: [["gasto", "Es un pago (sale dinero)"], ["ingreso", "Es un cobro (entra dinero)"]], valor: f?.tipo || "gasto" },
+    ],
+    borrar: f ? "Quitar" : "",
+  });
+  if (!v) return;
+  const r = await finPost("fijo", v.borrar ? { id, borrar: true } : { id, cuenta: fin.cuenta, ...v, categoria: f && f.tipo === v.tipo ? f.categoria : "" });
+  if (r) { avisar(v.borrar ? "Pago fijo quitado" : "Pago fijo guardado"); cargarFinanzas(); }
+}
+
+async function finCuenta(nueva) {
+  const c = nueva ? null : fin.d.cuentas.find((x) => x.id === fin.cuenta);
+  const v = await finDialogo({
+    titulo: c ? "Editar cuenta" : "Nueva cuenta",
+    nota: "Una cuenta solo separa lo que anotas (por ejemplo, lo tuyo y lo de tu negocio). No se conecta a ningún banco.",
+    campos: [
+      { id: "nombre", etiqueta: "Nombre", valor: c?.nombre, ejemplo: "ej. Black Hole Code", largo: 30 },
+      { id: "tipo", etiqueta: "¿De qué es?", opciones: [["personal", "Personal"], ["empresa", "Empresa o negocio"]], valor: c?.tipo || "personal" },
+    ],
+    borrar: c && fin.d.cuentas.length > 1 ? "Quitar cuenta" : "",
+  });
+  if (!v) return;
+  if (v.borrar) {
+    const ok = await confirmar({ titulo: `¿Quitar la cuenta «${c.nombre}»?`, texto: "Deja de aparecer aquí y en el teléfono. Sus movimientos no se borran de la base de datos.", boton: "Quitar cuenta" });
+    if (!ok) return;
+  }
+  const r = await finPost("cuenta", v.borrar ? { id: c.id, borrar: true } : { id: c?.id, ...v });
+  if (!r) return;
+  fin.cuenta = v.borrar ? 0 : r.cuenta;
+  avisar(v.borrar ? "Cuenta quitada" : "Cuenta guardada");
+  cargarFinanzas();
+}
+
+$("finanzas").addEventListener("click", async (ev) => {
+  const en = (sel) => ev.target.closest(sel);
+  let b;
+  if ((b = en("[data-fin-cuenta]"))) { fin.cuenta = Number(b.dataset.finCuenta); finSoltar(); return cargarFinanzas(); }
+  if (en("#fin-cuenta-nueva")) return finCuenta(true);
+  if (en("#fin-cuenta-editar")) return finCuenta(false);
+  if ((b = en("[data-periodo]"))) { fin.periodo = b.dataset.periodo; guardado.poner("eco-fin-periodo", fin.periodo); return cargarFinanzas(); }
+  if (en("#fin-antes")) { fin.ref = fin.d.periodo.anterior; return cargarFinanzas(); }
+  if (en("#fin-despues")) { fin.ref = fin.d.periodo.siguiente; return cargarFinanzas(); }
+  if (en("#fin-hoy")) { fin.ref = ""; return cargarFinanzas(); }
+  if ((b = en("[data-tipo]"))) { fin.tipo = b.dataset.tipo; return pintarCategorias(); }
+  if ((b = en("[data-fin-cat]"))) { fin.categoria = b.dataset.finCat; return pintarCategorias(); }
+  if (en("#fin-cats-mas")) { fin.todasCats = !fin.todasCats; pintarCategorias(); $("fin-cats-mas")?.focus(); return; }
+  if ((b = en("[data-fin-filtro]"))) { fin.filtro = b.dataset.finFiltro; return pintarMovimientos(); }
+  if (en("#fin-presu-nuevo")) return finPresupuesto("");
+  if ((b = en("[data-fin-presu]"))) return finPresupuesto(b.dataset.finPresu);
+  if (en("#fin-meta-nueva")) return finMeta(0);
+  if ((b = en("[data-fin-meta]"))) return finMeta(Number(b.dataset.finMeta));
+  if ((b = en("[data-fin-aportar]"))) return finAportar(Number(b.dataset.finAportar));
+  if (en("#fin-fijo-nuevo")) return finFijo(0);
+  if ((b = en("[data-fin-fijo]"))) return finFijo(Number(b.dataset.finFijo));
+  if ((b = en("[data-fin-pagar]"))) {
+    b.disabled = true;
+    const r = await finPost("fijo", { id: Number(b.dataset.finPagar), registrar: true });
+    if (r) { avisar(r.avisos?.[0] || `Anotado: ${dinero(r.movimiento.monto)}`, r.avisos?.length ? 7000 : 2800); cargarFinanzas(); } else b.disabled = false;
+    return;
+  }
+  if ((b = en("[data-fin-editar]"))) return finEditar(Number(b.dataset.finEditar));
+  if ((b = en("[data-fin-borrar]"))) {
+    const id = Number(b.dataset.finBorrar), m = fin.d.movimientos.find((x) => x.id === id);
+    if (!m) return;
+    const ok = await confirmar({ titulo: "¿Borrar este movimiento?", texto: `${m.nombre} · ${dinero(m.monto)} · ${fechaCorta(m.fecha)}${m.nota ? " · " + m.nota : ""}`, boton: "Borrar" });
+    if (!ok) return;
+    if (await finPost("movimiento/borrar", { id })) { if (fin.editando === id) finSoltar(); avisar("Movimiento borrado"); cargarFinanzas(); }
+  }
+});
+
+/* Atajos en Finanzas: G anota un gasto, ← → cambian de periodo, T vuelve a hoy. */
+document.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.defaultPrevented || !ui.finanzas || !ui.hoy || $("app").hidden) return;
+  if (ev.target.matches?.("input, textarea, select, [contenteditable='true']") || document.querySelector("dialog[open]")) return;
+  const tecla = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key, enFinanzas = $("app").dataset.zona === "finanzas";
+  if (tecla === "g") { ev.preventDefault(); if (!enFinanzas) ponerZona("finanzas"); fin.tipo = "gasto"; if (fin.d) pintarCategorias(); $("fin-monto").focus(); }
+  else if (!enFinanzas || !fin.d) return;
+  else if (tecla === "ArrowLeft") $("fin-antes").click();
+  else if (tecla === "ArrowRight") { if (!$("fin-despues").disabled) $("fin-despues").click(); }
+  else if (tecla === "t") { fin.ref = ""; cargarFinanzas(); }
+  else if (tecla === "Escape" && fin.editando) finSoltar();
+});
+setInterval(() => {
+  if (!document.hidden && !$("app").hidden && $("app").dataset.zona === "finanzas" && !document.querySelector("dialog[open]")) cargarFinanzas();
+}, 20000);
 
 refrescar(true);
 setInterval(() => { if (!document.hidden) refrescar(); }, 15000);

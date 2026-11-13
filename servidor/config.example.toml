@@ -89,6 +89,16 @@ conservar = 14      # cuántas copias diarias guardar
 activo = true
 horas_vigente = 2         # después de esto la pregunta ya no aparece
 
+[finanzas]
+# El apartado Finanzas (panel, app y Telegram): gastos, ingresos, cuentas, presupuestos y metas de ahorro.
+activo = true
+moneda = "$"
+ahorro_pct = 20                # cuánto te sugiere apartar de cada ingreso (0 = no sugerir)
+hora_recordatorio = "20:30"    # si hoy no anotaste nada, te pregunta a esta hora ("" = apagado)
+resumen_semanal = true         # los domingos, tu semana en dinero
+hora_semanal = "18:00"
+resumen_mensual = true         # el día 1, cómo cerró el mes
+
 [salud]
 alertas = true            # avisos por Telegram cuando algo deja de funcionar
 telefono_horas = 3        # avisar si el teléfono no se reporta en este tiempo

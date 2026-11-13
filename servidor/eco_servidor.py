@@ -134,6 +134,15 @@ DEFAULTS: dict = {
         "silencio": "22:00-06:30",  # en este horario las alertas esperan a la mañana
         "tecnicas": True,         # false = por Telegram solo llega lo del teléfono (no lo de modelos y Google)
     },
+    "finanzas": {
+        "activo": True,              # el apartado Finanzas (panel, app y Telegram)
+        "moneda": "$",
+        "ahorro_pct": 20,            # cuánto te sugiere apartar de cada ingreso (0 = no sugerir)
+        "hora_recordatorio": "20:30",  # si hoy no anotaste nada, te pregunta a esta hora ("" = apagado)
+        "resumen_semanal": True,     # los domingos, tu semana en dinero
+        "hora_semanal": "18:00",
+        "resumen_mensual": True,     # el día 1, cómo cerró el mes
+    },
     "funciones": {
         "clases": True,      # grabar clases y reuniones de la laptop (Modo clase)
     },
@@ -465,6 +474,55 @@ CREATE TABLE IF NOT EXISTS vectores (     -- "significado" de cada pedazo, para 
     vector        BLOB NOT NULL,
     modelo        TEXT,
     PRIMARY KEY (captura_id, n)
+);
+CREATE TABLE IF NOT EXISTS fin_cuentas (  -- finanzas: Personal, Empresa… (solo separan lo que anotas)
+    id            INTEGER PRIMARY KEY,
+    nombre        TEXT NOT NULL,
+    tipo          TEXT NOT NULL DEFAULT 'personal',   -- personal | empresa
+    archivada     INTEGER NOT NULL DEFAULT 0,
+    creado        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fin_movimientos (
+    id            INTEGER PRIMARY KEY,
+    cuenta_id     INTEGER NOT NULL,
+    tipo          TEXT NOT NULL,           -- gasto | ingreso | ahorro (lo que apartas para una meta)
+    monto         INTEGER NOT NULL,        -- en centavos
+    categoria     TEXT NOT NULL,
+    nota          TEXT,
+    fecha         TEXT NOT NULL,           -- el día del gasto (AAAA-MM-DD)
+    creado        TEXT NOT NULL,
+    origen        TEXT,                    -- panel | app | telegram | voz | fijo
+    uid           TEXT UNIQUE,             -- para que el teléfono no duplique al reintentar
+    meta_id       INTEGER,
+    captura_id    INTEGER
+);
+CREATE INDEX IF NOT EXISTS fin_mov_fecha ON fin_movimientos(cuenta_id, fecha);
+CREATE TABLE IF NOT EXISTS fin_presupuestos (  -- tope por mes de una categoría
+    cuenta_id     INTEGER NOT NULL,
+    categoria     TEXT NOT NULL,
+    monto         INTEGER NOT NULL,
+    PRIMARY KEY (cuenta_id, categoria)
+);
+CREATE TABLE IF NOT EXISTS fin_metas (     -- metas de ahorro
+    id            INTEGER PRIMARY KEY,
+    cuenta_id     INTEGER NOT NULL,
+    nombre        TEXT NOT NULL,
+    objetivo      INTEGER NOT NULL,
+    fecha         TEXT,                    -- para cuándo la quieres (opcional)
+    creado        TEXT NOT NULL,
+    avisada       INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS fin_fijos (     -- pagos que se repiten cada mes (Eco avisa y los anota)
+    id            INTEGER PRIMARY KEY,
+    cuenta_id     INTEGER NOT NULL,
+    tipo          TEXT NOT NULL DEFAULT 'gasto',
+    monto         INTEGER NOT NULL,
+    categoria     TEXT NOT NULL,
+    nota          TEXT NOT NULL,
+    dia           INTEGER NOT NULL,        -- día del mes
+    registrado    TEXT,                    -- AAAA-MM del último mes anotado
+    avisado_antes TEXT,
+    avisado_dia   TEXT
 );
 """
 
@@ -1694,10 +1752,15 @@ def ayuda() -> str:
         "/semana — lo que viene en los próximos 7 días\n"
         "/pendientes — lo que tienes por hacer\n"
         "/hecho 12 — marcar la tarea #12 como hecha\n"
-        "/buscar palabra — buscar en todo lo guardado\n\n"
+        "/buscar palabra — buscar en todo lo guardado\n"
+        + ("/finanzas — tu dinero este mes (también: /finanzas semana)\n"
+           "/gasto 3.50 almuerzo · /ingreso 150 logo — anotar dinero\n"
+           "/deshacer — borrar lo último que anoté\n" if fin_activo() else "") + "\n"
         "Pregúntame lo que quieras con signo de pregunta, por ejemplo:\n"
         f"<i>{pregunta}</i>\n\n"
         f"Si me escribes cualquier otra cosa (\"{anota}\"), la anoto.\n"
+        + ("💸 Si me escribes <i>gasté 3.50 en almuerzo</i> o <i>me pagaron 150</i>, va a tus finanzas.\n"
+           if fin_activo() else "") +
         "🎙️ Mándame una <b>nota de voz</b> y la anoto igual que un momento.\n"
         f"📷 Mándame una <b>foto</b> {foto} y saco las fechas y tareas."
     )
@@ -1806,10 +1869,16 @@ def manejar_mensaje(chat: str, texto: str) -> None:
             ini = datetime.fromisoformat(f["inicio"])
             lineas.append(f"• <b>{e(f['titulo'])}</b> — {e(fecha_corta(ini.date()))} {ini:%H:%M}\n  {e(f['resumen'])}")
         enviar("\n".join(lineas))
+    elif (de_dinero := fin_telegram(comando, resto)) is not None:
+        enviar(de_dinero)
     elif comando == "/pregunta" or (not comando.startswith("/") and es_pregunta(texto)):
         pregunta = resto if comando == "/pregunta" else texto
         if not pregunta:
             enviar("¿Qué quieres saber? <code>/pregunta qué dejaron de tarea</code>")
+            return
+        numeros = fin_responder(pregunta)  # «¿cuánto gasté esta semana?» sale de tus finanzas, no de las notas
+        if numeros:
+            enviar(numeros)
             return
         try:
             tg("sendChatAction", chat_id=dueño, action="typing")
@@ -1829,6 +1898,10 @@ def manejar_mensaje(chat: str, texto: str) -> None:
     elif comando.startswith("/"):
         enviar("No conozco ese comando.\n\n" + ayuda())
     else:
+        anotado = fin_desde_texto(texto, "telegram")  # «gasté 3.50 en almuerzo» va a Finanzas, no a Pendientes
+        if anotado:
+            enviar(anotado)
+            return
         cid = procesar_texto(texto)
         enviar("📝 Anotado.\n\n" + mensaje_captura(cid))
 
@@ -2078,11 +2151,18 @@ def procesar(ruta: Path) -> int | None:
         with closing(db()) as con, con:
             con.execute("UPDATE alertas_peligro SET captura_id=? WHERE id=?", (cid, alerta_id))
     actualizar_notas(inicio.date())
+    # «Eco, anota que gasté 5 dólares en almuerzo» (o lo mismo en una nota de voz) también va a Finanzas.
+    try:
+        dinero_anotado = fin_desde_texto(orden or texto, "voz", cid) if (orden or origen == "voz") else None
+    except Exception:
+        log.exception("No pude anotar el movimiento de dinero")
+        dinero_anotado = None
+    cola_dinero = f"\n\n{dinero_anotado}" if dinero_anotado else ""
     if orden:
         log.info("Orden de voz: %s", orden[:120])
-        enviar_o_guardar(f"🎙️ <b>Me pediste:</b> «{e(orden)}»\n\n" + mensaje_captura(cid))
+        enviar_o_guardar(f"🎙️ <b>Me pediste:</b> «{e(orden)}»\n\n" + mensaje_captura(cid) + cola_dinero)
     else:
-        enviar_o_guardar(mensaje_captura(cid))
+        enviar_o_guardar(mensaje_captura(cid) + cola_dinero)
 
     if CFG["notas"].get("guardar_audio"):
         AUDIOS.mkdir(parents=True, exist_ok=True)
@@ -2775,6 +2855,7 @@ def reloj() -> None:
             revisar_manana()
             revisar_recordatorios()
             revisar_resumen()
+            revisar_finanzas()
             revisar_sesiones_abandonadas()
             revisar_respaldo()
             revisar_salud()
@@ -4344,7 +4425,7 @@ def api_estado(es_local: bool) -> dict:
         "clase": CLASE.estado() if CLASE is not None else None,
         "respaldo": estado_respaldo() if es_local else None,
         "google": estado_google() if es_local and google_activo() else None,
-        "google_activo": google_activo(),
+        "google_activo": google_activo(), "finanzas": fin_activo(),
         "app": estado_app() if es_local else None,
         "perfil": PERFIL or None, "nombre": str(CFG["usuario"].get("nombre") or ""),
         "telegram_enlace": enlace_telegram() if es_local and CFG["telegram"].get("token")
@@ -4725,6 +4806,990 @@ def panel_html() -> bytes:
     return _PANEL
 
 
+# ════════════════════════════ Finanzas ════════════════════════════
+# Lo que ganas y lo que gastas, por cuenta (Personal, Empresa…). Aquí no hay bancos ni contraseñas: solo lo
+# que tú anotas desde el panel, la app, Telegram o la voz. Los montos se guardan en centavos (enteros) para
+# que las sumas nunca fallen por decimales.
+
+# clave, nombre, color y palabras con las que Eco la reconoce cuando dictas o escribes un gasto
+# (sin acentos; «_» = espacio). Los colores son ocho tonos que se distinguen bien sobre el fondo oscuro
+# (también con daltonismo); por eso se repiten entre categorías que casi nunca van juntas, y el nombre
+# siempre va escrito al lado.
+FIN_CATEGORIAS: dict[str, list[tuple[str, str, str, str]]] = {
+    "gasto": [
+        ("comida", "Comida y súper", "#C98500",
+         "super supermercado despensa mercado comida pan tortilla leche huevo verdura fruta selectos walmart tienda arroz frijol"),
+        ("restaurantes", "Comer fuera", "#D95926",
+         "almuerzo desayuno cena pupusa pizza hamburguesa cafe restaurante comedor pollo campero refresco soda gaseosa "
+         "snack churro cafeteria chalet tacos helado sorbete licuado refrigerio"),
+        ("transporte", "Transporte", "#3987E5",
+         "bus buses pasaje uber taxi gasolina moto parqueo transporte microbus indrive coaster viaje"),
+        ("educacion", "Educación", "#9085E9",
+         "colegio colegiatura cuaderno libro lapiz lapicero copias fotocopia impresion curso matricula utiles uniforme "
+         "examen cartulina tarea_de escuela universidad clase"),
+        ("salud", "Salud", "#199E70",
+         "medicina farmacia doctor medico dentista consulta pastilla clinica lentes hospital vitamina examen_de_sangre"),
+        ("trabajo", "Trabajo y herramientas", "#008300",
+         "dominio hosting servidor licencia herramienta proveedor plantilla freelance oficina"),
+        ("tecnologia", "Tecnología", "#D55181",
+         "celular telefono laptop cargador audifono cable mouse teclado memoria usb computadora pantalla funda protector"),
+        ("suscripciones", "Suscripciones", "#E66767",
+         "netflix spotify youtube premium suscripcion chatgpt claude canva figma icloud disney hbo prime mensualidad"),
+        ("hogar", "Casa y servicios", "#3987E5",
+         "luz agua internet renta alquiler gas recibo casa wifi cable_de_tv limpieza"),
+        ("ropa", "Ropa y cuidado", "#C98500",
+         "ropa zapato camisa pantalon corte barberia peluqueria tenis calcetin perfume desodorante"),
+        ("ocio", "Ocio y salidas", "#D55181",
+         "cine juego videojuego salida fiesta paseo concierto partido entrada boleto"),
+        ("regalos", "Regalos y familia", "#E66767",
+         "regalo cumpleanos mama papa abuelo abuela hermano hermana novia ofrenda diezmo"),
+        ("recargas", "Saldo y recargas", "#199E70", "recarga saldo paquete datos tigo claro movistar digicel"),
+        ("deudas", "Deudas y préstamos", "#9085E9", "deuda prestamo cuota le_debia le_pague_a abono"),
+        ("publicidad", "Publicidad", "#D95926", "anuncio ads publicidad promocion pauta facebook instagram tiktok"),
+        ("impuestos", "Impuestos y trámites", "#008300", "iva impuesto tramite dui nit multa comision banco"),
+        ("otros", "Otros", "#8C8CA6", ""),
+    ],
+    "ingreso": [
+        ("clientes", "Clientes y proyectos", "#199E70",
+         "cliente proyecto pagina web sitio logo diseno landing anticipo factura tienda_en_linea"),
+        ("sueldo", "Sueldo", "#3987E5", "sueldo salario quincena planilla"),
+        ("mesada", "Mesada y familia", "#9085E9", "mesada mama papa abuelo abuela tio tia"),
+        ("ventas", "Ventas", "#C98500", "vendi venta"),
+        ("regalo", "Regalos", "#D55181", "regalo regalaron cumpleanos"),
+        ("reembolso", "Reembolsos y cobros", "#D95926", "reembolso devolvieron devolvio me_debia vuelto"),
+        ("otros_ingresos", "Otros ingresos", "#8C8CA6", ""),
+    ],
+}
+FIN_CAT: dict[str, tuple[str, str, str]] = {"ahorro": ("Ahorro", "#199E70", "ahorro")}  # clave → nombre, color, tipo
+_FIN_PALABRAS: dict[str, list[tuple[str, re.Pattern]]] = {"gasto": [], "ingreso": []}
+for _tipo, _lista in FIN_CATEGORIAS.items():
+    for _clave_cat, _nombre_cat, _color_cat, _palabras_cat in _lista:
+        FIN_CAT[_clave_cat] = (_nombre_cat, _color_cat, _tipo)
+        if _palabras_cat:
+            _alternativas = "|".join(re.escape(p.replace("_", " ")) for p in _palabras_cat.split())
+            _FIN_PALABRAS[_tipo].append((_clave_cat, re.compile(rf"\b(?:{_alternativas})")))
+FIN_OTROS = {"gasto": "otros", "ingreso": "otros_ingresos", "ahorro": "ahorro"}
+FIN_PERIODOS = ("dia", "semana", "mes", "anio")
+
+
+def fin_activo() -> bool:
+    return bool(CFG.get("finanzas", {}).get("activo", True))
+
+
+def dinero(centavos: int) -> str:
+    """1486 → "$14.86"."""
+    signo = "-" if centavos < 0 else ""
+    return f"{signo}{CFG.get('finanzas', {}).get('moneda') or '$'}{abs(centavos) / 100:,.2f}"
+
+
+def _fin_centavos(valor) -> int | None:
+    """"3.50", "3,5", "$1,200" o 12 → centavos. None si no es un monto válido (o es cero)."""
+    if isinstance(valor, bool) or valor is None:
+        return None
+    if isinstance(valor, (int, float)):
+        n = float(valor)
+    else:
+        t = re.sub(r"[^\d.,]", "", str(valor))
+        if "," in t and "." in t:
+            t = t.replace(",", "")                      # 1,234.50
+        elif "," in t:
+            entero, _, dec = t.rpartition(",")
+            t = f"{entero.replace(',', '')}.{dec}" if len(dec) <= 2 else t.replace(",", "")   # 3,50 o 1,200
+        try:
+            n = float(t)
+        except ValueError:
+            return None
+    if not math.isfinite(n):
+        return None
+    c = round(n * 100)
+    return c if 0 < c <= 10_000_000_000 else None
+
+
+def _mes_mas(d: date, n: int) -> date:
+    """El día 1 del mes que está n meses después (o antes) del de d."""
+    m = d.year * 12 + d.month - 1 + n
+    return date(max(1, min(9999, m // 12)), m % 12 + 1, 1)
+
+
+def _fin_de_mes(d: date) -> date:
+    return _mes_mas(d, 1) - timedelta(days=1)
+
+
+def fin_periodo(tipo: str, ref: date) -> tuple[date, date, str]:
+    """Primer y último día del periodo que contiene a ref, y cómo se llama."""
+    if tipo == "dia":
+        return ref, ref, fecha_larga(ref).capitalize()
+    if tipo == "semana":
+        lunes = ref - timedelta(days=ref.weekday())
+        dom = lunes + timedelta(days=6)
+        if lunes.month == dom.month:
+            titulo = f"Semana del {lunes.day} al {dom.day} de {MESES[dom.month - 1]}"
+        else:
+            titulo = f"Semana del {lunes.day} de {MESES[lunes.month - 1][:3]} al {dom.day} de {MESES[dom.month - 1][:3]}"
+        return lunes, dom, titulo
+    if tipo == "anio":
+        return date(ref.year, 1, 1), date(ref.year, 12, 31), str(ref.year)
+    return ref.replace(day=1), _fin_de_mes(ref), f"{MESES[ref.month - 1].capitalize()} de {ref.year}"
+
+
+def _fin_mover(tipo: str, ref: date, n: int) -> date:
+    try:
+        if tipo == "dia":
+            return ref + timedelta(days=n)
+        if tipo == "semana":
+            return ref + timedelta(days=7 * n)
+        if tipo == "anio":
+            return date(max(1, min(9999, ref.year + n)), 1, 1)
+        return _mes_mas(ref, n)
+    except OverflowError:
+        return ref
+
+
+def _fin_cuentas(con: sqlite3.Connection) -> list[sqlite3.Row]:
+    filas = con.execute("SELECT * FROM fin_cuentas WHERE archivada=0 ORDER BY id").fetchall()
+    if not filas:  # la primera vez: una cuenta para ti y otra para tu negocio (se pueden renombrar)
+        creado = ahora().isoformat(timespec="seconds")
+        con.executemany("INSERT INTO fin_cuentas(nombre, tipo, creado) VALUES(?,?,?)",
+                        [("Personal", "personal", creado), ("Empresa", "empresa", creado)])
+        con.commit()
+        filas = con.execute("SELECT * FROM fin_cuentas WHERE archivada=0 ORDER BY id").fetchall()
+    return filas
+
+
+def _fin_cuenta(con: sqlite3.Connection, valor=None) -> sqlite3.Row:
+    """La cuenta con ese id; si no existe, la de siempre (la que elegiste con /cuenta, o la primera)."""
+    cuentas = _fin_cuentas(con)
+    ids = []
+    for v in (valor, (con.execute("SELECT valor FROM estado WHERE clave='fin_cuenta'").fetchone() or [None])[0]):
+        try:
+            ids.append(int(v))
+        except (TypeError, ValueError):
+            pass
+    for cid in ids:
+        for c in cuentas:
+            if c["id"] == cid:
+                return c
+    return cuentas[0]
+
+
+def _fin_totales(con: sqlite3.Connection, cuenta: int, desde: date, hasta: date) -> dict:
+    t = {"ingreso": 0, "gasto": 0, "ahorro": 0}
+    for f in con.execute("SELECT tipo, COALESCE(SUM(monto), 0) AS s FROM fin_movimientos WHERE cuenta_id=? "
+                         "AND fecha>=? AND fecha<=? GROUP BY tipo", (cuenta, desde.isoformat(), hasta.isoformat())):
+        if f["tipo"] in t:
+            t[f["tipo"]] = int(f["s"])
+    t["queda"] = t["ingreso"] - t["gasto"] - t["ahorro"]
+    return t
+
+
+def _fin_por_categoria(con: sqlite3.Connection, cuenta: int, desde: date, hasta: date) -> list[dict]:
+    filas = con.execute("SELECT categoria, SUM(monto) AS s FROM fin_movimientos WHERE cuenta_id=? AND tipo='gasto' "
+                        "AND fecha>=? AND fecha<=? GROUP BY categoria ORDER BY s DESC",
+                        (cuenta, desde.isoformat(), hasta.isoformat())).fetchall()
+    total = sum(f["s"] for f in filas) or 1
+    salida = []
+    for f in filas:
+        nombre, color, _ = FIN_CAT.get(f["categoria"], FIN_CAT["otros"])
+        salida.append({"clave": f["categoria"], "nombre": nombre, "color": color, "total": int(f["s"]),
+                       "pct": round(f["s"] * 100 / total)})
+    return salida
+
+
+def _fin_mov_json(m) -> dict:
+    nombre, color, _ = FIN_CAT.get(m["categoria"], FIN_CAT["otros"])
+    return {"id": m["id"], "cuenta": m["cuenta_id"], "tipo": m["tipo"], "monto": m["monto"],
+            "categoria": m["categoria"], "nombre": nombre, "color": color, "nota": m["nota"] or "",
+            "fecha": m["fecha"], "origen": m["origen"] or "", "meta": m["meta_id"]}
+
+
+def _fin_serie(con: sqlite3.Connection, cuenta: int, tipo: str, ref: date) -> list[dict]:
+    """Las barras: últimos 7 días, últimas 6 semanas, últimos 6 meses o los 12 meses del año."""
+    tramos: list[tuple[date, date, str]] = []
+    if tipo == "dia":
+        for i in range(6, -1, -1):
+            d = ref - timedelta(days=i)
+            tramos.append((d, d, DIAS[d.weekday()][:3]))
+    elif tipo == "semana":
+        lunes = ref - timedelta(days=ref.weekday())
+        for i in range(5, -1, -1):
+            ini = lunes - timedelta(days=7 * i)
+            tramos.append((ini, ini + timedelta(days=6), f"{ini.day}/{ini.month}"))
+    elif tipo == "anio":
+        for mes in range(1, 13):
+            ini = date(ref.year, mes, 1)
+            tramos.append((ini, _fin_de_mes(ini), MESES[mes - 1][:3]))
+    else:
+        for i in range(5, -1, -1):
+            ini = _mes_mas(ref, -i)
+            tramos.append((ini, _fin_de_mes(ini), MESES[ini.month - 1][:3]))
+    salida = []
+    for ini, fin, etiqueta in tramos:
+        t = _fin_totales(con, cuenta, ini, fin)
+        salida.append({"etiqueta": etiqueta, "gasto": t["gasto"], "ingreso": t["ingreso"], "actual": ini <= ref <= fin})
+    return salida
+
+
+def _fin_presupuestos(con: sqlite3.Connection, cuenta: int, ref: date) -> list[dict]:
+    """Los presupuestos son por mes: cuánto llevas gastado en cada categoría en el mes de ref."""
+    ini, fin = ref.replace(day=1), _fin_de_mes(ref)
+    gastado = {c["clave"]: c["total"] for c in _fin_por_categoria(con, cuenta, ini, fin)}
+    salida = []
+    for p in con.execute("SELECT * FROM fin_presupuestos WHERE cuenta_id=? ORDER BY monto DESC", (cuenta,)):
+        nombre, color, _ = FIN_CAT.get(p["categoria"], FIN_CAT["otros"])
+        llevas = gastado.get(p["categoria"], 0)
+        salida.append({"categoria": p["categoria"], "nombre": nombre, "color": color, "limite": p["monto"],
+                       "gastado": llevas, "resta": p["monto"] - llevas})
+    return salida
+
+
+def _fin_metas(con: sqlite3.Connection, cuenta: int, hoy: date) -> list[dict]:
+    salida = []
+    for m in con.execute("SELECT * FROM fin_metas WHERE cuenta_id=? ORDER BY id", (cuenta,)).fetchall():
+        ahorrado = int(con.execute("SELECT COALESCE(SUM(monto), 0) FROM fin_movimientos WHERE meta_id=? AND tipo='ahorro'",
+                                   (m["id"],)).fetchone()[0])
+        falta = max(0, m["objetivo"] - ahorrado)
+        por_semana, dias = None, None
+        if m["fecha"]:
+            dias = (date.fromisoformat(m["fecha"]) - hoy).days
+            if falta and dias >= 0:
+                por_semana = math.ceil(falta / max(1, math.ceil(dias / 7)))
+        salida.append({"id": m["id"], "nombre": m["nombre"], "objetivo": m["objetivo"], "ahorrado": ahorrado,
+                       "falta": falta, "fecha": m["fecha"], "dias": dias, "por_semana": por_semana,
+                       "pct": min(100, round(ahorrado * 100 / m["objetivo"])) if m["objetivo"] else 0})
+    return salida
+
+
+def _fin_vence(dia: int, mes: date) -> date:
+    """El día de pago dentro de ese mes (el 31 en febrero es el 28)."""
+    return mes.replace(day=min(dia, _fin_de_mes(mes).day))
+
+
+def _fin_fijos(con: sqlite3.Connection, cuenta: int, hoy: date) -> list[dict]:
+    salida = []
+    mes = hoy.isoformat()[:7]
+    for f in con.execute("SELECT * FROM fin_fijos WHERE cuenta_id=? ORDER BY dia, id", (cuenta,)):
+        nombre, color, _ = FIN_CAT.get(f["categoria"], FIN_CAT["otros"])
+        vence = _fin_vence(f["dia"], hoy)
+        salida.append({"id": f["id"], "tipo": f["tipo"], "monto": f["monto"], "categoria": f["categoria"],
+                       "nombre": nombre, "color": color, "nota": f["nota"], "dia": f["dia"],
+                       "listo": f["registrado"] == mes, "vence": vence.isoformat(), "en_dias": (vence - hoy).days})
+    return salida
+
+
+def _fin_consejo(con: sqlite3.Connection, cuenta: int, hoy: date, metas: list[dict], fijos: list[dict]) -> dict:
+    """La ayuda para ahorrar: cuánto puedes gastar por día y dos o tres observaciones de este mes."""
+    ini, fin = hoy.replace(day=1), _fin_de_mes(hoy)
+    t = _fin_totales(con, cuenta, ini, fin)
+    por_pagar = sum(f["monto"] for f in fijos if f["tipo"] == "gasto" and not f["listo"])
+    dias = (fin - hoy).days + 1
+    libre = t["queda"] - por_pagar
+    diario = max(0, libre // dias)
+    textos: list[str] = []
+    if not (t["ingreso"] or t["gasto"] or t["ahorro"]):
+        textos.append("Anota lo que entra y lo que sale este mes. Con una semana de datos ya te puedo aconsejar.")
+        return {"diario": 0, "dias": dias, "por_pagar": por_pagar, "libre": libre, "textos": textos}
+    if t["ingreso"] and libre < 0:
+        textos.append(f"Vas {dinero(-libre)} por encima de lo que entró este mes"
+                      + (" contando tus pagos fijos" if por_pagar else "") + ". Frena lo que no sea necesario.")
+    elif t["ingreso"]:
+        textos.append(f"Puedes gastar hasta {dinero(diario)} por día y llegar bien a fin de mes"
+                      + (f" (ya aparté {dinero(por_pagar)} de pagos fijos)." if por_pagar else "."))
+    a_ini = _mes_mas(hoy, -1)
+    antes = {c["clave"]: c["total"] for c in _fin_por_categoria(con, cuenta, a_ini, _fin_de_mes(a_ini))}
+    ahora_cat = _fin_por_categoria(con, cuenta, ini, fin)
+    sube = [(c["total"] - antes[c["clave"]], c) for c in ahora_cat
+            if antes.get(c["clave"]) and c["total"] > antes[c["clave"]] * 1.2 and c["total"] - antes[c["clave"]] >= 500]
+    if sube:
+        extra, c = max(sube, key=lambda x: x[0])
+        textos.append(f"En {c['nombre']} llevas {dinero(c['total'])}: {dinero(extra)} más que todo el mes pasado.")
+    elif ahora_cat and t["gasto"]:
+        c = ahora_cat[0]
+        textos.append(f"Tu gasto más grande es {c['nombre']}: {dinero(c['total'])} ({c['pct']} % de lo que salió).")
+    pct = int(CFG.get("finanzas", {}).get("ahorro_pct") or 0)
+    if pct and t["ingreso"] and t["ahorro"] * 100 < t["ingreso"] * pct:
+        meta = next((m for m in metas if m["falta"]), None)
+        sugerido = t["ingreso"] * pct // 100 - t["ahorro"]
+        if meta:
+            textos.append(f"Para cumplir tu {pct} % de ahorro te falta apartar {dinero(sugerido)} este mes "
+                          f"para «{meta['nombre']}».")
+        else:
+            textos.append(f"Aparta {dinero(sugerido)} ({pct} % de lo que entró) antes de gastarlo. "
+                          "Crea una meta de ahorro y yo te llevo la cuenta.")
+    elif pct and t["ingreso"] and t["ahorro"]:
+        textos.append(f"Ya apartaste {dinero(t['ahorro'])} este mes ({t['ahorro'] * 100 // t['ingreso']} % de lo que entró). Bien.")
+    return {"diario": diario, "dias": dias, "por_pagar": por_pagar, "libre": libre, "textos": textos[:3]}
+
+
+def _fin_categorias_json(con: sqlite3.Connection, cuenta: int) -> dict:
+    """Las categorías de gasto e ingreso; primero las que más usas en esa cuenta (últimos 4 meses), «Otros» al final."""
+    desde = (ahora().date() - timedelta(days=120)).isoformat()
+    usos = {f["categoria"]: f["n"] for f in con.execute(
+        "SELECT categoria, count(*) AS n FROM fin_movimientos WHERE cuenta_id=? AND fecha>=? GROUP BY categoria",
+        (cuenta, desde))}
+    salida = {}
+    for tipo, lista in FIN_CATEGORIAS.items():
+        orden = sorted(lista, key=lambda c: (c[0] == FIN_OTROS[tipo], -usos.get(c[0], 0)))  # estable: empates como arriba
+        salida[tipo] = [{"clave": k, "nombre": n, "color": col} for k, n, col, _ in orden]
+    return salida
+
+
+def api_finanzas(params: dict) -> dict:
+    """Todo lo que pinta la pantalla de Finanzas (panel y teléfono) para una cuenta y un periodo."""
+    if not fin_activo():
+        return {"ok": False, "error": "apagado"}
+    hoy = ahora().date()
+    tipo = params.get("periodo") if params.get("periodo") in FIN_PERIODOS else "mes"
+    ref = date.fromisoformat(_fecha_valida(params.get("ref")) or hoy.isoformat())
+    desde, hasta, titulo = fin_periodo(tipo, ref)
+    a_desde, a_hasta, _ = fin_periodo(tipo, _fin_mover(tipo, ref, -1))
+    with closing(db()) as con:
+        cuentas = _fin_cuentas(con)
+        cuenta = _fin_cuenta(con, params.get("cuenta"))
+        cid = cuenta["id"]
+        movs = con.execute("SELECT * FROM fin_movimientos WHERE cuenta_id=? AND fecha>=? AND fecha<=? "
+                           "ORDER BY fecha DESC, id DESC LIMIT 500", (cid, desde.isoformat(), hasta.isoformat())).fetchall()
+        metas = _fin_metas(con, cid, hoy)
+        fijos = _fin_fijos(con, cid, hoy)
+        saldo = _fin_totales(con, cid, date(1, 1, 1), date(9999, 12, 31))["queda"]
+        return {
+            "ok": True, "hoy": hoy.isoformat(), "moneda": CFG.get("finanzas", {}).get("moneda") or "$",
+            "cuentas": [{"id": c["id"], "nombre": c["nombre"], "tipo": c["tipo"]} for c in cuentas],
+            "cuenta": cid,
+            "categorias": _fin_categorias_json(con, cid),
+            "periodo": {"tipo": tipo, "ref": ref.isoformat(), "desde": desde.isoformat(), "hasta": hasta.isoformat(),
+                        "titulo": titulo, "anterior": _fin_mover(tipo, ref, -1).isoformat(),
+                        "siguiente": _fin_mover(tipo, ref, 1).isoformat(), "es_actual": desde <= hoy <= hasta},
+            "totales": _fin_totales(con, cid, desde, hasta),
+            "antes": _fin_totales(con, cid, a_desde, a_hasta),
+            "saldo": saldo,
+            "por_categoria": _fin_por_categoria(con, cid, desde, hasta),
+            "serie": _fin_serie(con, cid, tipo, ref),
+            "presupuestos": _fin_presupuestos(con, cid, ref),
+            "metas": metas, "fijos": fijos,
+            "consejo": _fin_consejo(con, cid, hoy, metas, fijos),
+            "movimientos": [_fin_mov_json(m) for m in movs],
+            "ahorro_pct": int(CFG.get("finanzas", {}).get("ahorro_pct") or 0),
+        }
+
+
+def _fin_aviso_presupuesto(cuenta_id: int, categoria: str, fecha: str) -> str | None:
+    """Avisa una sola vez al llegar al 80 % y al 100 % del presupuesto del mes."""
+    mes = fecha[:7]
+    if mes != ahora().date().isoformat()[:7]:
+        return None
+    ini = date.fromisoformat(mes + "-01")
+    with closing(db()) as con:
+        p = con.execute("SELECT monto FROM fin_presupuestos WHERE cuenta_id=? AND categoria=?",
+                        (cuenta_id, categoria)).fetchone()
+        if not p or not p["monto"]:
+            return None
+        gastado = int(con.execute("SELECT COALESCE(SUM(monto), 0) FROM fin_movimientos WHERE cuenta_id=? AND tipo='gasto' "
+                                  "AND categoria=? AND fecha>=? AND fecha<=?",
+                                  (cuenta_id, categoria, ini.isoformat(), _fin_de_mes(ini).isoformat())).fetchone()[0])
+        cuenta = con.execute("SELECT nombre FROM fin_cuentas WHERE id=?", (cuenta_id,)).fetchone()
+    limite = p["monto"]
+    nivel = 100 if gastado >= limite else 80 if gastado * 100 >= limite * 80 else 0
+    clave = f"fin_presu:{cuenta_id}:{categoria}:{mes}"
+    try:
+        previo = int(estado_get(clave) or 0)
+    except ValueError:
+        previo = 0
+    if nivel <= previo:
+        if nivel < previo:
+            estado_set(clave, nivel)  # borraste un gasto: el aviso puede volver a salir
+        return None
+    estado_set(clave, nivel)
+    nombre = FIN_CAT.get(categoria, FIN_CAT["otros"])[0]
+    de = f" ({cuenta['nombre']})" if cuenta else ""
+    if gastado > limite:
+        return f"⚠️ Te pasaste del presupuesto de {nombre}{de}: llevas {dinero(gastado)} de {dinero(limite)}."
+    if nivel == 100:
+        return f"⚠️ Llegaste al tope del presupuesto de {nombre}{de}: {dinero(limite)}."
+    return (f"🟡 Ya usaste el {gastado * 100 // limite} % del presupuesto de {nombre}{de}: "
+            f"te quedan {dinero(limite - gastado)} este mes.")
+
+
+def _fin_sugerir_ahorro(cuenta_id: int, monto: int) -> str | None:
+    pct = int(CFG.get("finanzas", {}).get("ahorro_pct") or 0)
+    if pct <= 0 or monto * pct // 100 < 1:
+        return None
+    aparte = monto * pct // 100
+    with closing(db()) as con:
+        meta = next((m for m in _fin_metas(con, cuenta_id, ahora().date()) if m["falta"]), None)
+    if meta:
+        return (f"💡 Aparta {dinero(aparte)} ({pct} %) para «{meta['nombre']}» antes de gastarlo: "
+                f"te faltarían {dinero(max(0, meta['falta'] - aparte))}.")
+    return f"💡 Aparta {dinero(aparte)} ({pct} %) antes de gastarlo. Crea una meta de ahorro en Finanzas y te llevo la cuenta."
+
+
+def _fin_meta_lograda(meta_id: int) -> str | None:
+    with closing(db()) as con, con:
+        m = con.execute("SELECT * FROM fin_metas WHERE id=?", (meta_id,)).fetchone()
+        if not m or m["avisada"]:
+            return None
+        ahorrado = con.execute("SELECT COALESCE(SUM(monto), 0) FROM fin_movimientos WHERE meta_id=? AND tipo='ahorro'",
+                               (meta_id,)).fetchone()[0]
+        if ahorrado < m["objetivo"]:
+            return None
+        con.execute("UPDATE fin_metas SET avisada=1 WHERE id=?", (meta_id,))
+    return f"🎉 ¡Meta cumplida! Juntaste {dinero(ahorrado)} para «{m['nombre']}»."
+
+
+def fin_registrar(cuenta_id: int, tipo: str, monto: int, categoria: str, nota: str, fecha: str, origen: str,
+                  uid: str | None = None, meta_id: int | None = None, captura_id: int | None = None,
+                  por_telegram: bool = True) -> tuple[dict, list[str]]:
+    """Guarda un movimiento. Devuelve el movimiento y los avisos que provocó (presupuesto, ahorro, meta).
+    Con por_telegram, los avisos importantes también te llegan al chat."""
+    with closing(db()) as con, con:
+        if uid:  # el teléfono reintenta lo que anotaste sin conexión: no se duplica
+            ya = con.execute("SELECT * FROM fin_movimientos WHERE uid=?", (uid,)).fetchone()
+            if ya:
+                return _fin_mov_json(ya), []
+        cur = con.execute(
+            "INSERT INTO fin_movimientos(cuenta_id, tipo, monto, categoria, nota, fecha, creado, origen, uid, meta_id, "
+            "captura_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (cuenta_id, tipo, monto, categoria, nota[:120], fecha, ahora().isoformat(timespec="seconds"), origen,
+             uid, meta_id, captura_id))
+        fila = con.execute("SELECT * FROM fin_movimientos WHERE id=?", (cur.lastrowid,)).fetchone()
+    importantes: list[str] = []
+    consejos: list[str] = []
+    if tipo == "gasto":
+        importantes.append(_fin_aviso_presupuesto(cuenta_id, categoria, fecha))
+    elif tipo == "ingreso":
+        consejos.append(_fin_sugerir_ahorro(cuenta_id, monto))
+    elif meta_id:
+        importantes.append(_fin_meta_lograda(meta_id))
+    importantes = [a for a in importantes if a]
+    if por_telegram:
+        for a in importantes:
+            enviar_o_guardar(e(a))
+    return _fin_mov_json(fila), importantes + [a for a in consejos if a]
+
+
+def _fin_texto(valor, largo: int) -> str:
+    return re.sub(r"\s+", " ", str(valor or "")).strip()[:largo]
+
+
+def api_finanzas_cambio(accion: str, datos: dict) -> tuple[int, dict]:
+    """Los cambios que mandan el panel y el teléfono. Devuelve el código HTTP y la respuesta."""
+    if not fin_activo():
+        return 404, {"ok": False, "error": "apagado"}
+    mal = (400, {"ok": False})
+    hoy = ahora().date()
+
+    def entero(clave: str) -> int | None:
+        try:
+            return int(datos[clave])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    if accion == "movimiento":
+        tipo = datos.get("tipo")
+        monto = _fin_centavos(datos.get("monto"))
+        if tipo not in ("gasto", "ingreso") or monto is None:
+            return 400, {"ok": False, "error": "Escribe un monto mayor que cero."}
+        categoria = datos.get("categoria")
+        if FIN_CAT.get(categoria, ("", "", ""))[2] != tipo:
+            categoria = FIN_OTROS[tipo]
+        fecha = _fecha_valida(datos.get("fecha")) or hoy.isoformat()
+        nota = _fin_texto(datos.get("nota"), 120)
+        mid = entero("id")
+        with closing(db()) as con:
+            cuenta = _fin_cuenta(con, datos.get("cuenta"))["id"]
+        if mid:
+            with closing(db()) as con, con:
+                cur = con.execute("UPDATE fin_movimientos SET tipo=?, monto=?, categoria=?, nota=?, fecha=?, cuenta_id=? "
+                                  "WHERE id=? AND tipo IN ('gasto', 'ingreso')",
+                                  (tipo, monto, categoria, nota, fecha, cuenta, mid))
+                fila = con.execute("SELECT * FROM fin_movimientos WHERE id=?", (mid,)).fetchone()
+            if not cur.rowcount or not fila:
+                return 404, {"ok": False}
+            aviso = _fin_aviso_presupuesto(cuenta, categoria, fecha) if tipo == "gasto" else None
+            return 200, {"ok": True, "movimiento": _fin_mov_json(fila), "avisos": [aviso] if aviso else []}
+        origen = "app" if datos.get("origen") == "app" else "panel"
+        mov, avisos = fin_registrar(cuenta, tipo, monto, categoria, nota, fecha, origen,
+                                    uid=_fin_texto(datos.get("uid"), 64) or None)
+        return 200, {"ok": True, "movimiento": mov, "avisos": avisos}
+
+    if accion == "movimiento/borrar":
+        mid = entero("id")
+        with closing(db()) as con, con:
+            fila = con.execute("SELECT * FROM fin_movimientos WHERE id=?", (mid,)).fetchone()
+            if not fila:
+                return 404, {"ok": False}
+            con.execute("DELETE FROM fin_movimientos WHERE id=?", (mid,))
+            if fila["meta_id"]:
+                con.execute("UPDATE fin_metas SET avisada=0 WHERE id=?", (fila["meta_id"],))
+            if fila["origen"] == "fijo":  # se puede volver a registrar este mes
+                con.execute("UPDATE fin_fijos SET registrado=NULL WHERE cuenta_id=? AND nota=? AND registrado=?",
+                            (fila["cuenta_id"], fila["nota"] or "", fila["fecha"][:7]))
+        if fila["tipo"] == "gasto":
+            _fin_aviso_presupuesto(fila["cuenta_id"], fila["categoria"], fila["fecha"])
+        return 200, {"ok": True}
+
+    if accion == "cuenta":
+        cid = entero("id")
+        with closing(db()) as con, con:
+            cuentas = _fin_cuentas(con)
+            if datos.get("borrar"):
+                if len(cuentas) < 2 or not any(c["id"] == cid for c in cuentas):
+                    return 400, {"ok": False, "error": "Tiene que quedar al menos una cuenta."}
+                con.execute("UPDATE fin_cuentas SET archivada=1 WHERE id=?", (cid,))  # sus movimientos no se borran
+                return 200, {"ok": True}
+            nombre = _fin_texto(datos.get("nombre"), 30)
+            tipo = "empresa" if datos.get("tipo") == "empresa" else "personal"
+            if not nombre:
+                return 400, {"ok": False, "error": "Ponle un nombre a la cuenta."}
+            if cid:
+                if not any(c["id"] == cid for c in cuentas):
+                    return 404, {"ok": False}
+                con.execute("UPDATE fin_cuentas SET nombre=?, tipo=? WHERE id=?", (nombre, tipo, cid))
+            else:
+                if len(cuentas) >= 8:
+                    return 400, {"ok": False, "error": "Ya tienes 8 cuentas. Quita una para crear otra."}
+                cid = con.execute("INSERT INTO fin_cuentas(nombre, tipo, creado) VALUES(?,?,?)",
+                                  (nombre, tipo, ahora().isoformat(timespec="seconds"))).lastrowid
+        return 200, {"ok": True, "cuenta": cid}
+
+    if accion == "presupuesto":
+        categoria = datos.get("categoria")
+        if FIN_CAT.get(categoria, ("", "", ""))[2] != "gasto":
+            return mal
+        monto = _fin_centavos(datos.get("monto"))
+        with closing(db()) as con, con:
+            cuenta = _fin_cuenta(con, datos.get("cuenta"))["id"]
+            if monto is None:
+                con.execute("DELETE FROM fin_presupuestos WHERE cuenta_id=? AND categoria=?", (cuenta, categoria))
+            else:
+                con.execute("INSERT INTO fin_presupuestos(cuenta_id, categoria, monto) VALUES(?,?,?) "
+                            "ON CONFLICT(cuenta_id, categoria) DO UPDATE SET monto=excluded.monto", (cuenta, categoria, monto))
+        return 200, {"ok": True}
+
+    if accion == "meta":
+        mid = entero("id")
+        if mid and datos.get("borrar"):
+            with closing(db()) as con, con:
+                con.execute("DELETE FROM fin_metas WHERE id=?", (mid,))
+                con.execute("UPDATE fin_movimientos SET meta_id=NULL WHERE meta_id=?", (mid,))  # lo ahorrado se queda
+            return 200, {"ok": True}
+        if mid and "aportar" in datos:
+            monto = _fin_centavos(datos.get("aportar"))
+            with closing(db()) as con:
+                meta = con.execute("SELECT * FROM fin_metas WHERE id=?", (mid,)).fetchone()
+            if not meta or monto is None:
+                return 400, {"ok": False, "error": "Escribe cuánto vas a apartar."}
+            origen = "app" if datos.get("origen") == "app" else "panel"
+            mov, avisos = fin_registrar(meta["cuenta_id"], "ahorro", monto, "ahorro", meta["nombre"],
+                                        _fecha_valida(datos.get("fecha")) or hoy.isoformat(), origen,
+                                        uid=_fin_texto(datos.get("uid"), 64) or None, meta_id=mid)
+            return 200, {"ok": True, "movimiento": mov, "avisos": avisos}
+        nombre = _fin_texto(datos.get("nombre"), 40)
+        objetivo = _fin_centavos(datos.get("objetivo"))
+        if not nombre or objetivo is None:
+            return 400, {"ok": False, "error": "Ponle nombre y cuánto quieres juntar."}
+        fecha = _fecha_valida(datos.get("fecha"))
+        with closing(db()) as con, con:
+            if mid:
+                con.execute("UPDATE fin_metas SET nombre=?, objetivo=?, fecha=?, avisada=0 WHERE id=?",
+                            (nombre, objetivo, fecha, mid))
+                con.execute("UPDATE fin_movimientos SET nota=? WHERE meta_id=?", (nombre, mid))
+            else:
+                cuenta = _fin_cuenta(con, datos.get("cuenta"))["id"]
+                mid = con.execute("INSERT INTO fin_metas(cuenta_id, nombre, objetivo, fecha, creado) VALUES(?,?,?,?,?)",
+                                  (cuenta, nombre, objetivo, fecha, ahora().isoformat(timespec="seconds"))).lastrowid
+        return 200, {"ok": True, "meta": mid}
+
+    if accion == "fijo":
+        fid = entero("id")
+        if fid and datos.get("borrar"):
+            with closing(db()) as con, con:
+                con.execute("DELETE FROM fin_fijos WHERE id=?", (fid,))
+            return 200, {"ok": True}
+        if fid and datos.get("registrar"):
+            r = fin_registrar_fijo(fid, "app" if datos.get("origen") == "app" else "panel")
+            return (200, {"ok": True, "movimiento": r[0], "avisos": r[1]}) if r else (404, {"ok": False})
+        tipo = "ingreso" if datos.get("tipo") == "ingreso" else "gasto"
+        monto = _fin_centavos(datos.get("monto"))
+        nota = _fin_texto(datos.get("nota"), 60)
+        dia = entero("dia")
+        if monto is None or not nota or not dia or not 1 <= dia <= 31:
+            return 400, {"ok": False, "error": "Ponle nombre, monto y el día del mes (1 a 31)."}
+        categoria = datos.get("categoria")
+        if FIN_CAT.get(categoria, ("", "", ""))[2] != tipo:
+            categoria = fin_categoria(tipo, nota)
+        with closing(db()) as con, con:
+            if fid:
+                con.execute("UPDATE fin_fijos SET tipo=?, monto=?, categoria=?, nota=?, dia=? WHERE id=?",
+                            (tipo, monto, categoria, nota, dia, fid))
+            else:
+                cuenta = _fin_cuenta(con, datos.get("cuenta"))["id"]
+                # Si el día ya pasó este mes, el primer aviso es el del mes que viene.
+                ya = hoy.isoformat()[:7] if _fin_vence(dia, hoy) < hoy else None
+                fid = con.execute("INSERT INTO fin_fijos(cuenta_id, tipo, monto, categoria, nota, dia, avisado_dia) "
+                                  "VALUES(?,?,?,?,?,?,?)", (cuenta, tipo, monto, categoria, nota, dia, ya)).lastrowid
+        return 200, {"ok": True, "fijo": fid}
+
+    return 404, {"ok": False}
+
+
+def fin_registrar_fijo(fid: int, origen: str, por_telegram: bool = True) -> tuple[dict, list[str]] | None:
+    """Anota el pago fijo de este mes como un movimiento de hoy."""
+    hoy = ahora().date()
+    with closing(db()) as con, con:
+        f = con.execute("SELECT * FROM fin_fijos WHERE id=?", (fid,)).fetchone()
+        if not f:
+            return None
+        con.execute("UPDATE fin_fijos SET registrado=? WHERE id=?", (hoy.isoformat()[:7], fid))
+    return fin_registrar(f["cuenta_id"], f["tipo"], f["monto"], f["categoria"], f["nota"], hoy.isoformat(), "fijo",
+                         por_telegram=por_telegram)
+
+
+# ── Anotar con palabras: «gasté 3.50 en almuerzo», «me pagaron 150 por el logo», «ahorré 10» ──
+
+_FIN_NUM = {
+    "cero": 0, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9,
+    "diez": 10, "once": 11, "doce": 12, "trece": 13, "catorce": 14, "quince": 15, "dieciseis": 16, "diecisiete": 17,
+    "dieciocho": 18, "diecinueve": 19, "veinte": 20, "veintiuno": 21, "veintidos": 22, "veintitres": 23,
+    "veinticuatro": 24, "veinticinco": 25, "veintiseis": 26, "veintisiete": 27, "veintiocho": 28, "veintinueve": 29,
+    "treinta": 30, "cuarenta": 40, "cincuenta": 50, "sesenta": 60, "setenta": 70, "ochenta": 80, "noventa": 90,
+    "cien": 100, "ciento": 100, "doscientos": 200, "trescientos": 300, "cuatrocientos": 400, "quinientos": 500,
+    "seiscientos": 600, "setecientos": 700, "ochocientos": 800, "novecientos": 900, "mil": 1000,
+}
+_FIN_MONEDA = r"\$|d[oó]lares|d[oó]lar|usd|pesos|peso|varas|bolas|lucas"
+_FIN_PREFIJO = (r"^\W*(?:eco\W+)?(?:(?:por favor\W+)?(?:an[oó]ta(?:me|r)?|ap[uú]nta(?:me|r)?|reg[ií]stra(?:me|r)?|"
+                r"gu[aá]rda(?:me|r)?|agr[eé]ga(?:me|r)?|pon(?:me)?|recuerda)\s+(?:que\s+)?)?"
+                r"(?:(?:hoy|ayer|anteayer|antier|ahorita|hace\s+rato)\s+)?")
+_FIN_VERBOS = [
+    ("ingreso", r"me\s+(?:pagaron|pag[oó]|dieron|di[oó]|depositaron|deposit[oó]|cayeron|cay[oó]|entraron|entr[oó]|"
+                r"regalaron|regal[oó]|devolvieron|devolvi[oó]|transfirieron|transfiri[oó])|gan[eé]|cobr[eé]|recib[ií]|"
+                r"vend[ií]|(?:un\s+)?ingreso\s+de|ingreso(?=\s+\$?\s*\d)"),
+    ("ahorro", r"ahorr[eé]|apart[eé]|(?:un\s+)?ahorro\s+de"),
+    ("gasto", r"(?:me\s+)?gast[eé]|pagu[eé]|(?:me\s+)?compr[eé]|invert[ií]|don[eé]|me\s+(?:cost[oó]|costaron|cobraron|"
+              r"sali[oó]|salieron)|se\s+me\s+fueron|(?:un\s+)?gasto\s+de|gasto(?=\s+\$?\s*\d)|pago(?=\s+\$?\s*\d)"),
+]
+_FIN_INICIO = [(t, re.compile(_FIN_PREFIJO + rf"(?P<verbo>{v})\b", re.I)) for t, v in _FIN_VERBOS]
+_FIN_MONTO = re.compile(rf"(?P<pre>\$\s*)?(?P<n>\d{{1,3}}(?:,\d{{3}})+(?:\.\d{{1,2}})?|\d+(?:[.,]\d{{1,2}})?)"
+                        rf"(?P<post>\s*(?:{_FIN_MONEDA}|centavos|ctvs)\b|\s*\$)?", re.I)
+_FIN_DIA = re.compile(r"\b(antes\s+de\s+ayer|anteayer|antier|ayer|hoy)\b", re.I)
+
+
+def _fin_numeros(t: str) -> str:
+    """«cinco dólares con cincuenta» → «5 dólares con 50» (solo si no escribiste ningún número)."""
+    if re.search(r"\d", t):
+        return t
+    t = re.sub(r"\bun\s+(d[oó]lar|peso)\b", r"1 \1", t, flags=re.I)
+    salida: list[str] = []
+    acum, hay, cola = 0, False, []
+    for pieza in re.findall(r"\w+|\W+", t):
+        clave = _sin_acentos(pieza)
+        if clave in _FIN_NUM:
+            v = _FIN_NUM[clave]
+            acum = max(acum, 1) * 1000 if v == 1000 else acum + v
+            hay, cola = True, []
+        elif hay and (clave == "y" or not clave.strip()):
+            cola.append(pieza)
+        else:
+            if hay:
+                salida.append(str(acum))
+                salida.extend(cola)
+                acum, hay, cola = 0, False, []
+            salida.append(pieza)
+    if hay:
+        salida.append(str(acum))
+        salida.extend(cola)
+    return "".join(salida)
+
+
+def fin_categoria(tipo: str, texto: str) -> str:
+    plano = _sin_acentos(texto)
+    mejor, puntos = FIN_OTROS.get(tipo, "otros"), 0
+    for clave, patron in _FIN_PALABRAS.get(tipo, []):
+        n = len(patron.findall(plano))
+        if n > puntos:
+            mejor, puntos = clave, n
+    return mejor
+
+
+def fin_interpretar(texto: str) -> dict | None:
+    """Si el texto EMPIEZA contando un gasto, un ingreso o un ahorro con su monto, lo devuelve listo para guardar.
+    «Pagar la luz el viernes» no entra aquí: eso sigue siendo un pendiente."""
+    t = unicodedata.normalize("NFC", re.sub(r"\s+", " ", texto or "")).strip()
+    if not t or len(t) > 300:
+        return None
+    t = _fin_numeros(t)
+    t = re.sub(rf"(\d+)(\s*(?:{_FIN_MONEDA}))?\s+con\s+(\d{{1,2}})(?:\s+centavos)?\b",
+               lambda m: f"{m.group(1)}.{int(m.group(3)):02d} dólares", t, flags=re.I)
+    for tipo, patron in _FIN_INICIO:
+        m = patron.match(t)
+        if m:
+            break
+    else:
+        return None
+    verbo = _sin_acentos(m.group("verbo"))
+    resto = t[m.end():]
+    exigente = verbo.endswith(("compre", "vendi"))  # «compré 3 cuadernos» no dice cuánto costaron
+    elegido = None
+    for c in _FIN_MONTO.finditer(resto):
+        con_moneda = bool(c.group("pre") or c.group("post"))
+        tras_por = bool(re.search(r"\b(?:por|a|en|de)\s*$", resto[:c.start()], re.I))
+        if con_moneda or (exigente and tras_por):
+            elegido = c
+            break
+        if elegido is None and not exigente:
+            elegido = c
+    if elegido is None:
+        return None
+    monto = _fin_centavos(elegido.group("n"))
+    if monto is None:
+        return None
+    if re.search(r"centavos|ctvs", elegido.group("post") or "", re.I):
+        monto = max(1, monto // 100)
+    hoy = ahora().date()
+    donde = _sin_acentos(t)
+    fecha = hoy - timedelta(days=2 if re.search(r"\b(antes de ayer|anteayer|antier)\b", donde) else
+                            1 if re.search(r"\bayer\b", donde) else 0)
+    concepto = _FIN_DIA.sub(" ", resto[:elegido.start()] + " " + resto[elegido.end():])
+    concepto = re.sub(r"\s+", " ", concepto).strip(" .,;:!¡¿?-")
+    concepto = re.sub(r"^(?:(?:como|unos|casi|solo|en|de|del|por|para|a|al|con|que)\s+)+", "", concepto, flags=re.I)
+    concepto = re.sub(r"^(?:el|la|los|las|un|una|unos|unas)\s+", "", concepto, flags=re.I)
+    concepto = re.sub(r"(?:\s+(?:por|a|de|en|con|y))+$", "", concepto, flags=re.I).strip(" .,;:!¡¿?-")
+    concepto = (concepto[:1].upper() + concepto[1:])[:120]
+    return {"tipo": tipo, "monto": monto, "nota": concepto, "fecha": fecha.isoformat(),
+            "categoria": fin_categoria(tipo, f"{verbo} {concepto}") if tipo != "ahorro" else "ahorro",
+            "texto": donde}
+
+
+def _fin_cuenta_de_texto(con: sqlite3.Connection, d: dict) -> sqlite3.Row:
+    """Si nombras la cuenta («…de la empresa»), va a esa; lo de clientes y publicidad va a la de empresa."""
+    cuentas = _fin_cuentas(con)
+    plano = d["texto"]
+    for c in cuentas:
+        nombres = {_sin_acentos(c["nombre"])} | ({"empresa", "negocio"} if c["tipo"] == "empresa" else set())
+        if any(re.search(rf"\b{re.escape(n)}\b", plano) for n in nombres if n):
+            return c
+    if d["categoria"] in ("clientes", "publicidad"):
+        for c in cuentas:
+            if c["tipo"] == "empresa":
+                return c
+    return _fin_cuenta(con)
+
+
+def _fin_confirmacion(mov: dict, cuenta: sqlite3.Row, avisos: list[str]) -> str:
+    hoy = ahora().date()
+    with closing(db()) as con:
+        t = _fin_totales(con, cuenta["id"], hoy.replace(day=1), _fin_de_mes(hoy))
+    titulo = {"gasto": "💸 <b>Gasto anotado</b>", "ingreso": "💰 <b>Ingreso anotado</b>",
+              "ahorro": "🐖 <b>Ahorro anotado</b>"}[mov["tipo"]]
+    cuando = fecha_corta(date.fromisoformat(mov["fecha"]))
+    lineas = [f"{titulo}: <b>{e(dinero(mov['monto']))}</b> · {e(mov['nombre'])}",
+              "<i>" + e(" · ".join(x for x in (mov["nota"], cuenta["nombre"], cuando) if x)) + "</i>",
+              f"Este mes en {e(cuenta['nombre'])}: salieron {e(dinero(t['gasto']))} y "
+              + (f"te quedan {e(dinero(t['queda']))}." if t["queda"] >= 0
+                 else f"vas {e(dinero(-t['queda']))} por encima de lo que entró.")]
+    lineas += ["", *[e(a) for a in avisos]] if avisos else []
+    lineas += ["", "<code>/deshacer</code> si me equivoqué"]
+    return "\n".join(lineas)
+
+
+def fin_desde_texto(texto: str, origen: str, captura_id: int | None = None) -> str | None:
+    """Anota el gasto, ingreso o ahorro que dice el texto y devuelve la confirmación para Telegram.
+    None si el texto no era eso."""
+    if not fin_activo():
+        return None
+    d = fin_interpretar(texto)
+    if not d:
+        return None
+    with closing(db()) as con:
+        cuenta = _fin_cuenta_de_texto(con, d)
+        metas = _fin_metas(con, cuenta["id"], ahora().date()) if d["tipo"] == "ahorro" else []
+    meta_id = None
+    if d["tipo"] == "ahorro":
+        if not metas:
+            return ("🐖 Para llevarte la cuenta del ahorro, primero crea una <b>meta</b> en Finanzas "
+                    "(panel o app): por ejemplo «Laptop nueva, $800».")
+        plano = d["texto"]
+        meta = next((m for m in metas if _sin_acentos(m["nombre"]) in plano), None) \
+            or next((m for m in metas if m["falta"]), metas[0])
+        meta_id, d["nota"] = meta["id"], meta["nombre"]
+    mov, avisos = fin_registrar(cuenta["id"], d["tipo"], d["monto"], d["categoria"], d["nota"], d["fecha"], origen,
+                                meta_id=meta_id, captura_id=captura_id, por_telegram=False)
+    return _fin_confirmacion(mov, cuenta, avisos)
+
+
+def fin_resumen(tipo: str, ref: date, encabezado: str = "💰 <b>Finanzas</b>") -> str | None:
+    """El resumen de un periodo para Telegram, cuenta por cuenta. None si no hubo movimientos."""
+    desde, hasta, titulo = fin_periodo(tipo, ref)
+    a_desde, a_hasta, _ = fin_periodo(tipo, _fin_mover(tipo, ref, -1))
+    antes_de = {"dia": "ayer", "semana": "la semana pasada", "mes": "el mes pasado", "anio": "el año pasado"}[tipo]
+    partes = [f"{encabezado} · {e(titulo)}"]
+    hoy = ahora().date()
+    with closing(db()) as con:
+        for c in _fin_cuentas(con):
+            t = _fin_totales(con, c["id"], desde, hasta)
+            if not (t["ingreso"] or t["gasto"] or t["ahorro"]):
+                continue
+            partes += ["", f"<b>{e(c['nombre'])}</b>",
+                       f"Entró {e(dinero(t['ingreso']))} · Salió {e(dinero(t['gasto']))}"
+                       + (f" · Ahorraste {e(dinero(t['ahorro']))}" if t["ahorro"] else "")
+                       + f" · Te queda {e(dinero(t['queda']))}"]
+            cats = _fin_por_categoria(con, c["id"], desde, hasta)[:3]
+            if cats:
+                partes.append("En qué se fue: " + ", ".join(f"{e(x['nombre'])} {e(dinero(x['total']))}" for x in cats))
+            a = _fin_totales(con, c["id"], a_desde, a_hasta)
+            if a["gasto"] and t["gasto"]:
+                cambio = round((t["gasto"] - a["gasto"]) * 100 / a["gasto"])
+                if cambio <= -5:
+                    partes.append(f"Gastaste {-cambio} % menos que {antes_de}. 👏")
+                elif cambio >= 5:
+                    partes.append(f"Gastaste {cambio} % más que {antes_de}.")
+            if desde <= hoy <= hasta:
+                metas = _fin_metas(con, c["id"], hoy)
+                consejo = _fin_consejo(con, c["id"], hoy, metas, _fin_fijos(con, c["id"], hoy))
+                if consejo["textos"]:
+                    partes.append("💡 " + e(consejo["textos"][0]))
+                for m in metas:
+                    if m["falta"]:
+                        partes.append(f"🐖 {e(m['nombre'])}: {e(dinero(m['ahorrado']))} de {e(dinero(m['objetivo']))}"
+                                      + (f" · aparta {e(dinero(m['por_semana']))} por semana" if m["por_semana"] else ""))
+    return "\n".join(partes) if len(partes) > 1 else None
+
+
+_FIN_PREGUNTA = re.compile(r"\b(cuanto|cuanta|cuantos|como)\b.*\b(gaste|gastado|gastando|gane|ganado|ingres\w+|ahorr\w+|"
+                           r"me queda|me quedan|dinero|plata|pisto|finanzas|presupuesto)\b")
+
+
+def fin_responder(pregunta: str) -> str | None:
+    """«¿Cuánto gasté esta semana?» se responde con tus números, no buscando en las notas."""
+    plano = _sin_acentos(pregunta)
+    if not fin_activo() or not _FIN_PREGUNTA.search(plano):
+        return None
+    hoy = ahora().date()
+    if re.search(r"\bayer\b", plano):
+        tipo, ref = "dia", hoy - timedelta(days=1)
+    elif re.search(r"\bhoy\b", plano):
+        tipo, ref = "dia", hoy
+    elif "semana pasada" in plano:
+        tipo, ref = "semana", hoy - timedelta(days=7)
+    elif "semana" in plano:
+        tipo, ref = "semana", hoy
+    elif "mes pasado" in plano:
+        tipo, ref = "mes", _mes_mas(hoy, -1)
+    elif re.search(r"\bano\b", plano):
+        tipo, ref = "anio", hoy
+    else:
+        tipo, ref = "mes", hoy
+    return fin_resumen(tipo, ref) or f"💰 No tienes nada anotado en {e(fin_periodo(tipo, ref)[2].lower())}."
+
+
+def fin_telegram(comando: str, resto: str) -> str | None:
+    """Los comandos de dinero del bot. None si el comando no es de finanzas."""
+    if comando not in ("/gasto", "/ingreso", "/ahorrar", "/finanzas", "/dinero", "/deshacer", "/pagado", "/cuenta"):
+        return None
+    if not fin_activo():
+        return "Las finanzas están apagadas en este Eco."
+    hoy = ahora().date()
+    if comando in ("/gasto", "/ingreso", "/ahorrar"):
+        palabra = {"/gasto": "gasto de", "/ingreso": "ingreso de", "/ahorrar": "ahorro de"}[comando]
+        return fin_desde_texto(f"{palabra} {resto}", "telegram") or {
+            "/gasto": "Dime cuánto y en qué: <code>/gasto 3.50 almuerzo</code>",
+            "/ingreso": "Dime cuánto y de qué: <code>/ingreso 150 logo para un cliente</code>",
+            "/ahorrar": "Dime cuánto apartas: <code>/ahorrar 10</code>"}[comando]
+    if comando in ("/finanzas", "/dinero"):
+        plano = _sin_acentos(resto)
+        tipo = "dia" if "hoy" in plano or "dia" in plano else "semana" if "semana" in plano else \
+            "anio" if re.search(r"\bano\b", plano) else "mes"
+        return fin_resumen(tipo, hoy) or (
+            "💰 Todavía no hay nada anotado en este periodo.\nEscríbeme <i>gasté 3.50 en almuerzo</i> o "
+            "<i>me pagaron 150 por el logo</i> y lo anoto.")
+    if comando == "/deshacer":
+        with closing(db()) as con:
+            m = con.execute("SELECT * FROM fin_movimientos ORDER BY id DESC LIMIT 1").fetchone()
+        if not m or m["creado"][:10] < (hoy - timedelta(days=1)).isoformat():
+            return "No hay nada reciente que deshacer."
+        api_finanzas_cambio("movimiento/borrar", {"id": m["id"]})
+        return f"↩️ Borré: {e(m['tipo'])} de {e(dinero(m['monto']))}" + (f" ({e(m['nota'])})" if m["nota"] else "") + "."
+    if comando == "/pagado":
+        ids = re.findall(r"\d+", resto)
+        r = fin_registrar_fijo(int(ids[0]), "telegram", por_telegram=False) if ids else None
+        if not r:
+            return "Dime cuál: <code>/pagado 3</code> (el número sale en el aviso del pago)."
+        with closing(db()) as con:
+            cuenta = _fin_cuenta(con, r[0]["cuenta"])
+        return _fin_confirmacion(r[0], cuenta, r[1])
+    # /cuenta: ver las cuentas o elegir a cuál van los gastos que no dicen cuenta
+    with closing(db()) as con:
+        cuentas = _fin_cuentas(con)
+        plano = _sin_acentos(resto)
+        elegida = next((c for c in cuentas if plano and (_sin_acentos(c["nombre"]) == plano or c["tipo"] == plano)), None)
+        actual = _fin_cuenta(con)
+    if elegida:
+        estado_set("fin_cuenta", elegida["id"])
+        return f"Listo: lo que anotes sin decir cuenta va a <b>{e(elegida['nombre'])}</b>."
+    return ("Tus cuentas: " + ", ".join(f"<b>{e(c['nombre'])}</b>" if c["id"] == actual["id"] else e(c["nombre"])
+                                        for c in cuentas)
+            + f".\nAhora anoto en <b>{e(actual['nombre'])}</b>. Para cambiar: <code>/cuenta empresa</code>")
+
+
+def revisar_finanzas() -> None:
+    """Desde el reloj: pagos fijos, el recordatorio de anotar, y los resúmenes de la semana y del mes."""
+    if not fin_activo():
+        return
+    cfg = CFG.get("finanzas", {})
+    chat = bool(CFG["telegram"].get("chat_id"))
+    actual = ahora()
+    hoy = actual.date()
+    mes = hoy.isoformat()[:7]
+    ahora_hm = (actual.hour, actual.minute)
+
+    # Pagos fijos: un día antes y el mismo día (después de la hora de los recordatorios).
+    if ahora_hm >= _hhmm(CFG["notas"].get("hora_recordatorio"), (7, 0)):
+        manana = hoy + timedelta(days=1)
+        mes_manana = manana.isoformat()[:7]
+        with closing(db()) as con:
+            fijos = con.execute("SELECT f.*, c.nombre AS cuenta FROM fin_fijos f JOIN fin_cuentas c ON c.id=f.cuenta_id "
+                                "WHERE c.archivada=0").fetchall()
+        for f in fijos:
+            que = "cobrar" if f["tipo"] == "ingreso" else "pagar"
+            detalle = f"<b>{e(f['nota'])}</b> · {e(dinero(f['monto']))} <i>({e(f['cuenta'])})</i>"
+            if (_fin_vence(f["dia"], manana) == manana and f["avisado_antes"] != mes_manana
+                    and f["registrado"] != mes_manana):
+                if enviar(f"🧾 <b>Mañana toca {que}</b>\n{detalle}") or not chat:
+                    with closing(db()) as con, con:
+                        con.execute("UPDATE fin_fijos SET avisado_antes=? WHERE id=?", (mes_manana, f["id"]))
+            if _fin_vence(f["dia"], hoy) <= hoy and f["avisado_dia"] != mes and f["registrado"] != mes:
+                cuando = "Hoy toca" if _fin_vence(f["dia"], hoy) == hoy else f"El día {f['dia']} tocaba"
+                if enviar(f"🧾 <b>{cuando} {que}</b>\n{detalle}\n\nCuando lo hagas: <code>/pagado {f['id']}</code> "
+                          "y lo anoto en tus finanzas.") or not chat:
+                    with closing(db()) as con, con:
+                        con.execute("UPDATE fin_fijos SET avisado_dia=? WHERE id=?", (mes, f["id"]))
+
+    # ¿Anotaste algo hoy? Solo insiste si de verdad estás usando las finanzas (algo en los últimos 30 días).
+    hora = str(cfg.get("hora_recordatorio") or "").strip()
+    if hora and hora.lower() not in ("no", "off", "apagado") and ahora_hm >= _hhmm(hora, (20, 30)) \
+            and estado_get("fin_recordatorio") != hoy.isoformat():
+        with closing(db()) as con:
+            de_hoy = con.execute("SELECT count(*) FROM fin_movimientos WHERE substr(creado,1,10)=? OR fecha=?",
+                                 (hoy.isoformat(), hoy.isoformat())).fetchone()[0]
+            recientes = con.execute("SELECT count(*) FROM fin_movimientos WHERE fecha>=?",
+                                    ((hoy - timedelta(days=30)).isoformat(),)).fetchone()[0]
+        if de_hoy or not recientes or not chat or enviar(
+                "💸 <b>Hoy no anotaste ningún gasto ni ingreso.</b>\n¿Salió o entró algo? Escríbemelo así y listo:\n"
+                "<i>gasté 3.50 en almuerzo</i> · <i>me pagaron 150 por el logo</i>\nSi hoy no hubo nada, ignora este mensaje."):
+            estado_set("fin_recordatorio", hoy.isoformat())
+
+    # Resumen de la semana (domingo) y del mes que terminó (día 1).
+    h_semana = _hhmm(cfg.get("hora_semanal"), (18, 0))
+    if cfg.get("resumen_semanal", True) and hoy.weekday() == 6 and ahora_hm >= h_semana \
+            and estado_get("fin_semanal") != hoy.isoformat():
+        texto = fin_resumen("semana", hoy, "📊 <b>Tu semana en dinero</b>")
+        if texto is None or not chat or enviar(texto):
+            estado_set("fin_semanal", hoy.isoformat())
+    if cfg.get("resumen_mensual", True) and hoy.day == 1 and actual.hour >= 8 and estado_get("fin_mensual") != mes:
+        texto = fin_resumen("mes", _mes_mas(hoy, -1), "📅 <b>Así cerró tu mes</b>")
+        if texto is None or not chat or enviar(texto):
+            estado_set("fin_mensual", mes)
+
+
 class Manejador(BaseHTTPRequestHandler):
     server_version = "Eco/1.3"
 
@@ -4877,6 +5942,8 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 return self._json(200, api_pendientes())
             if ruta == "/api/recordar":
                 return self._json(200, api_recordar())
+            if ruta == "/api/finanzas":
+                return self._json(200, api_finanzas(params))
             if ruta == "/api/foto":
                 try:
                     foto = ruta_foto(int(params.get("id") or 0))
@@ -4939,6 +6006,11 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 except (KeyError, TypeError, ValueError):
                     return self._json(400, {"ok": False})
                 return self._json(200 if ok else 404, {"ok": ok})
+            if ruta.startswith("/api/finanzas/"):
+                try:
+                    return self._json(*api_finanzas_cambio(ruta[len("/api/finanzas/"):], datos))
+                except (KeyError, TypeError, ValueError):
+                    return self._json(400, {"ok": False})
             if ruta.startswith(("/api/google", "/api/github", "/api/telegram")) and not self._es_local():
                 return self._json(403, {"ok": False, "error": "Solo desde la laptop"})
             if ruta == "/api/google/cliente":

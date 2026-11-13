@@ -1073,6 +1073,12 @@ class MainActivity : Activity() {
         wrap.addView(button("Ver mis pendientes", primary = false) {
             startActivity(Intent(this, PendientesActivity::class.java))
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+            bottomMargin = dp(8)
+        })
+        // Tus finanzas: anotar gastos e ingresos, ver los gráficos y tus metas de ahorro.
+        wrap.addView(button("Ver mis finanzas", primary = false) {
+            startActivity(Intent(this, FinanzasActivity::class.java))
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(16)
         })
         return wrap

@@ -251,6 +251,18 @@ object Net {
         return enviar(server, token, "/api/pendiente", datos)
     }
 
+    /** Finanzas: los números de una cuenta en un periodo ("dia", "semana", "mes" o "anio"); ref = un día de ese periodo. */
+    fun finanzas(server: String, token: String, cuenta: Long, periodo: String, ref: String?): Respuesta? {
+        var ruta = "/api/finanzas?periodo=$periodo"
+        if (cuenta > 0) ruta += "&cuenta=$cuenta"
+        if (!ref.isNullOrEmpty()) ruta += "&ref=$ref"
+        return leer(server, token, ruta)
+    }
+
+    /** Un cambio en Finanzas: "movimiento", "movimiento/borrar", "presupuesto", "meta", "fijo" o "cuenta". */
+    fun finanzasCambio(server: String, token: String, accion: String, datos: JSONObject): Respuesta? =
+        enviar(server, token, "/api/finanzas/$accion", datos)
+
     fun upload(server: String, token: String, wav: File, metaJson: String?): Result {
         val tipo = if (wav.name.endsWith(".m4a")) "audio/mp4" else "audio/wav"
         val base = baseUrl(server) ?: return Result(false, "Falta la dirección de tu laptop")
