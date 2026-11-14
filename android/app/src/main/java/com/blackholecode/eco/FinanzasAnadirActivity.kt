@@ -10,8 +10,6 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
@@ -31,15 +29,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 import java.util.Locale
-import java.util.UUID
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 /**
  * Anotar un gasto o un ingreso: el monto en grande, la cuenta, la categoría (círculos con ícono),
- * la fecha (hoy, ayer u otro día) y un comentario. Las cuentas y categorías salen de lo último que
- * mandó la laptop, así que también se puede anotar sin conexión: el movimiento espera en el teléfono
- * y se sube solo cuando la laptop vuelva a estar al alcance.
+ * la fecha (hoy, ayer u otro día) y un comentario. No espera a la laptop: el movimiento se guarda en el
+ * teléfono al instante ([FinLocal]) y se sube solo, en segundo plano, cuando la laptop esté al alcance.
  */
 class FinanzasAnadirActivity : Activity() {
 
@@ -61,10 +55,7 @@ class FinanzasAnadirActivity : Activity() {
         private const val CORTAS = 5
     }
 
-    private lateinit var prefs: Prefs
     private lateinit var local: SharedPreferences
-    private val ui = Handler(Looper.getMainLooper())
-    private val io: ExecutorService = Executors.newSingleThreadExecutor()
 
     private lateinit var pestanas: LinearLayout
     private lateinit var campoMonto: EditText
@@ -85,12 +76,12 @@ class FinanzasAnadirActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = Prefs(this)
         local = getSharedPreferences(Fin.LOCAL, Context.MODE_PRIVATE)
-        cuenta = local.getLong("cuenta", 0L)
-        moneda = local.getString("moneda", "$") ?: "$"
-        categorias = try { JSONObject(local.getString("categorias", "") ?: "") } catch (_: Exception) { null }
-        cuentas = try { JSONArray(local.getString("cuentas", "[]") ?: "[]") } catch (_: Exception) { JSONArray() }
+        // Todo sale de lo guardado en el teléfono: funciona igual con la laptop apagada.
+        cuenta = FinLocal.cuentaReal(this, local.getLong("cuenta", 0L))
+        moneda = FinLocal.moneda(this, local)
+        categorias = FinLocal.categorias(this, local, cuenta)
+        cuentas = FinLocal.cuentas(this)
         if (intent.getStringExtra(EXTRA_TIPO) == "ingreso") tipo = "ingreso"
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
 
@@ -112,11 +103,6 @@ class FinanzasAnadirActivity : Activity() {
         setContentView(scroll)
         construir(col)
         campoMonto.requestFocus()
-    }
-
-    override fun onDestroy() {
-        io.shutdownNow()
-        super.onDestroy()
     }
 
     // ───────────────────────── Estructura ─────────────────────────
@@ -302,7 +288,9 @@ class FinanzasAnadirActivity : Activity() {
             .setTitle("¿En qué cuenta lo anoto?")
             .setItems(nombres.toTypedArray()) { _, i ->
                 cuenta = ids[i]
+                categorias = FinLocal.categorias(this, local, cuenta)   // primero las que más usas en esa cuenta
                 pintarCuenta()
+                pintarCategorias()
             }
             .show()
     }
@@ -312,7 +300,7 @@ class FinanzasAnadirActivity : Activity() {
         rejilla.removeAllViews()
         val lista = categorias?.optJSONArray(tipo)
         if (lista == null || lista.length() == 0) {
-            rejilla.addView(label("Las categorías aparecen cuando la app se conecte una vez con tu laptop.", 14f, C_FAINT).apply {
+            rejilla.addView(label("No hay categorías para elegir.", 14f, C_FAINT).apply {
                 setLineSpacing(0f, 1.25f)
             })
             return
@@ -439,51 +427,25 @@ class FinanzasAnadirActivity : Activity() {
 
     // ───────────────────────── Guardar ─────────────────────────
 
+    /** Guarda el movimiento en el teléfono y cierra. No espera a la laptop: se sube solo después. */
     private fun anadir() {
-        val texto = campoMonto.text.toString().trim().replace(',', '.')
-        val valor = texto.toDoubleOrNull()
+        val valor = campoMonto.text.toString().trim().replace(',', '.').toDoubleOrNull()
         if (valor == null || valor <= 0.0) {
             campoMonto.requestFocus()
             avisar("Escribe cuánto fue.")
             return
         }
-        if (prefs.server.isBlank()) {
-            avisar("Primero conecta tu laptop.")
+        val centavos = Math.round(valor * 100.0)
+        if (!FinLocal.montoValido(centavos)) {
+            campoMonto.requestFocus()
+            avisar("Ese monto no se puede anotar.")
             return
         }
-        val esIngreso = tipo == "ingreso"
-        val item = JSONObject()
-            .put("tipo", tipo)
-            .put("monto", texto)
-            .put("categoria", categoria)
-            .put("nota", campoNota.text.toString().trim())
-            .put("fecha", fecha)
-            .put("origen", "app")
-            .put("uid", UUID.randomUUID().toString())
-        if (cuenta > 0) item.put("cuenta", cuenta)
+        val nota = campoNota.text.toString().trim().replace(Regex("\\s+"), " ").take(120)
         botonAnadir.isEnabled = false
-        io.execute {
-            val r = Net.finanzasCambio(prefs.server, prefs.token, "movimiento", item)
-            ui.post {
-                if (isFinishing) return@post
-                botonAnadir.isEnabled = true
-                when {
-                    r == null -> {
-                        Fin.encolar(local, item)
-                        largo("Sin conexión con tu laptop: lo guardé aquí y se sube solo cuando vuelva.")
-                        finish()
-                    }
-                    r.codigo == 200 -> {
-                        val aviso = r.json?.optJSONArray("avisos")?.optString(0) ?: ""
-                        largo(if (aviso.isNotBlank()) aviso else if (esIngreso) "Ingreso anotado" else "Gasto anotado")
-                        finish()
-                    }
-                    r.codigo == 401 -> avisar("El token no coincide con el de tu laptop.")
-                    r.codigo == 404 -> avisar("Tu laptop todavía no tiene Finanzas: actualiza Eco allá.")
-                    else -> avisar("No se pudo anotar (error ${r.codigo}).")
-                }
-            }
-        }
+        FinLocal.anotar(local, tipo, centavos, categoria, nota, fecha, cuenta)
+        avisar(if (tipo == "ingreso") "Ingreso anotado" else "Gasto anotado")
+        finish()
     }
 
     // ───────────────────────── Piezas ─────────────────────────
@@ -494,8 +456,6 @@ class FinanzasAnadirActivity : Activity() {
     }
 
     private fun avisar(texto: String) = Toast.makeText(this, texto, Toast.LENGTH_SHORT).show()
-
-    private fun largo(texto: String) = Toast.makeText(this, texto, Toast.LENGTH_LONG).show()
 
     private fun marcarTitulo(v: TextView) {
         if (Build.VERSION.SDK_INT >= 28) v.isAccessibilityHeading = true

@@ -344,6 +344,17 @@ Eco reconoce la categoría por las palabras (almuerzo → Comer fuera, bus → T
 
 Frases como *«pagar la luz el viernes»* o *«le debo 10 a Steven»* **no** son gastos: siguen yendo a Pendientes.
 
+**El teléfono funciona sin la laptop**
+
+La app guarda en el teléfono una copia de tus finanzas, así que no necesitas tener la laptop encendida ni estar en tu Wi-Fi:
+
+- **Anotar nunca espera.** Tocas **+**, escribes el monto y listo: se guarda en el teléfono al instante y ya cuenta en la dona, el saldo y los presupuestos. También puedes **apartar dinero** para una meta y **borrar** un movimiento sin conexión.
+- **Se sube solo.** Cuando la laptop vuelve a estar al alcance, la app sube lo que anotaste (al abrir Finanzas, cada medio minuto mientras la tienes abierta y, si Eco está escuchando, cada 2 minutos aunque no la abras). No se duplica aunque se reintente. Lo que aún no sube dice *«sin subir»*, y arriba una línea te dice cuántos cambios esperan.
+- **Y al revés.** Lo que anotas en el panel, por Telegram o por voz baja al teléfono en la siguiente conexión, y después lo puedes ver sin la laptop (cualquier día, semana, mes o año).
+- **Lo único que sí necesita la laptop** es crear o cambiar cuentas, presupuestos, metas nuevas y pagos fijos (y marcar un pago fijo como pagado). Si no está al alcance, la app te lo dice y no pierdes nada.
+
+La primera vez que el teléfono se conecta baja todo; después solo baja cuando algo cambió. Para esto la laptop debe tener esta versión de Eco (`git pull` y reiniciar).
+
 **Sin conexión:** si anotas en el teléfono y la laptop no está al alcance, el movimiento se guarda en el teléfono y se sube solo cuando vuelva la conexión.
 
 **La ayuda para ahorrar**

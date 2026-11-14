@@ -39,7 +39,9 @@ import kotlin.math.roundToInt
  * centro, la dona del periodo (día, semana, mes o año) y debajo cada categoría. El botón «+» abre la
  * pantalla para anotar ([FinanzasAnadirActivity]) y el menú lateral lleva a Movimientos, Gráficos,
  * Presupuestos, Metas de ahorro, Pagos de cada mes y Cuentas.
- * Los números se piden a la laptop (lo mismo que el apartado Finanzas del panel). Se construye en código.
+ * No depende de la laptop: todo se pinta con la copia guardada en el teléfono ([FinLocal]) y lo que anotas
+ * aquí se ve al instante. En segundo plano, cuando la laptop está al alcance, se sube lo de aquí y se baja
+ * lo que anotaste allá (panel, Telegram o voz). Se construye en código.
  */
 class FinanzasActivity : Activity() {
 
@@ -58,6 +60,9 @@ class FinanzasActivity : Activity() {
         private const val C_LIVE = Fin.C_LIVE
 
         private const val MOVS_CORTOS = 30
+
+        /** Cada cuánto se habla con la laptop mientras la pantalla está abierta. */
+        private const val CADA_MS = 30_000L
 
         private const val INICIO = "inicio"
         private const val MOVIMIENTOS = "movimientos"
@@ -90,6 +95,7 @@ class FinanzasActivity : Activity() {
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
 
     private lateinit var cabecera: LinearLayout     // cuenta, saldo y pestañas Gastos / Ingresos
+    private lateinit var linea: TextView            // si lo de aquí ya está en la laptop, o qué espera para subir
     private lateinit var cuerpo: LinearLayout       // la sección que estás viendo
     private lateinit var mas: TextView              // el botón «+»
     private lateinit var velo: View                 // oscurece la pantalla detrás del menú
@@ -106,9 +112,18 @@ class FinanzasActivity : Activity() {
     private var seccion = INICIO
     private var verTodos = false
     private var menuAbierto = false
-    private var actualizado = ""                 // hora de la última vez que respondió la laptop
-    private var carga = 0
-    private var cargado = false
+    private var estado = -1                      // cómo terminó la última sincronización (FinLocal.AL_DIA…); -1 = aún no se intenta
+    private var sincronizando = false
+    private var otraVez = false                  // pidieron sincronizar mientras ya había una en curso
+    private var cuentaQuerida = 0L               // la cuenta recién creada: se abre en cuanto baja de la laptop
+
+    /** Mientras la pantalla está abierta, cada medio minuto se sube lo de aquí y se baja lo nuevo de la laptop. */
+    private val pulso = object : Runnable {
+        override fun run() {
+            sincronizar()
+            ui.postDelayed(this, CADA_MS)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -117,20 +132,23 @@ class FinanzasActivity : Activity() {
         cuenta = local.getLong("cuenta", 0L)
         periodo = local.getString("periodo", "mes") ?: "mes"
         if (PERIODOS.none { it.first == periodo }) periodo = "mes"
-        moneda = local.getString("moneda", "$") ?: "$"
-        categorias = try { JSONObject(local.getString("categorias", "") ?: "") } catch (_: Exception) { null }
-        cuentas = try { JSONArray(local.getString("cuentas", "[]") ?: "[]") } catch (_: Exception) { JSONArray() }
         setContentView(construir())
-        pintar()
     }
 
     override fun onResume() {
         super.onResume()
-        cargar(silencioso = cargado)
+        refrescar()                  // lo guardado en el teléfono se ve al instante (también lo recién anotado)
+        ui.removeCallbacks(pulso)
+        pulso.run()                  // y, sin estorbar, se habla con la laptop ahora y cada medio minuto
+    }
+
+    override fun onPause() {
+        ui.removeCallbacks(pulso)
+        super.onPause()
     }
 
     override fun onDestroy() {
-        carga++
+        ui.removeCallbacksAndMessages(null)
         io.shutdownNow()
         super.onDestroy()
     }
@@ -183,6 +201,14 @@ class FinanzasActivity : Activity() {
         }
         col.addView(cabecera, lp(top = 16))
 
+        linea = label("", 12f, C_FAINT).apply {
+            gravity = Gravity.CENTER
+            setLineSpacing(0f, 1.2f)
+            setPadding(dp(8), 0, dp(8), 0)
+            visibility = View.GONE
+        }
+        col.addView(linea, lp(top = 8))
+
         cuerpo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(cuerpo, lp(top = 12))
 
@@ -233,10 +259,6 @@ class FinanzasActivity : Activity() {
     }
 
     private fun abrirAnadir() {
-        if (prefs.server.isBlank()) {
-            avisar("Primero conecta tu laptop: en Eco, abre la sección «Tu laptop».")
-            return
-        }
         startActivity(Intent(this, FinanzasAnadirActivity::class.java).putExtra(FinanzasAnadirActivity.EXTRA_TIPO, pestana))
     }
 
@@ -315,84 +337,108 @@ class FinanzasActivity : Activity() {
         }, lp(top = 4))
 
         menu.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-        val enCola = Fin.leerCola(local).length()
-        val pie = when {
-            enCola == 1 -> "1 movimiento espera conexión con tu laptop"
-            enCola > 1 -> "$enCola movimientos esperan conexión con tu laptop"
-            actualizado.isNotEmpty() -> "Actualizado a las $actualizado"
-            else -> "Sin conexión con tu laptop"
-        }
-        menu.addView(label(pie, 13f, if (enCola > 0) C_WARN else C_FAINT).apply {
+        val (pie, tono) = estadoTexto()
+        menu.addView(label(pie, 13f, tono).apply {
             setPadding(dp(24), 0, dp(24), 0)
             setLineSpacing(0f, 1.2f)
         })
     }
 
-    // ───────────────────────── Cargar ─────────────────────────
+    // ───────────────────────── Lo guardado aquí y la laptop ─────────────────────────
 
-    private fun cargar(silencioso: Boolean = false) {
-        val mia = ++carga
-        if (prefs.server.isBlank()) {
-            pintarError("Primero conecta tu laptop: en Eco, abre la sección «Tu laptop».")
+    /** Pinta con lo que hay guardado en el teléfono. No espera a la laptop, así que nunca se queda «cargando». */
+    private fun refrescar() {
+        val d = FinLocal.vista(this, local, cuenta, periodo, ref)
+        datos = d
+        cuenta = d.optLong("cuenta", cuenta)
+        moneda = d.optString("moneda", "$")
+        categorias = d.optJSONObject("categorias") ?: categorias
+        cuentas = d.optJSONArray("cuentas") ?: cuentas
+        local.edit().putLong("cuenta", cuenta).putString("periodo", periodo).putString("moneda", moneda).apply()
+        pintar()
+    }
+
+    /**
+     * Habla con la laptop en segundo plano: sube lo anotado aquí y baja lo nuevo de allá. Si no responde no
+     * pasa nada: la pantalla sigue con lo guardado y se vuelve a intentar sola.
+     */
+    private fun sincronizar() {
+        if (sincronizando) {
+            otraVez = true
             return
         }
-        if (!silencioso) {
-            cuerpo.removeAllViews()
-            cuerpo.addView(label("Buscando en tu laptop…", 15f, C_MUTED), lp(top = 20))
-        }
-        val c = cuenta
-        val p = periodo
-        val r = ref
+        if (io.isShutdown) return
+        sincronizando = true
+        val servidor = prefs.server
+        val token = prefs.token
+        val contexto = applicationContext
         io.execute {
-            Fin.subirCola(local, prefs.server, prefs.token)
-            val resp = Net.finanzas(prefs.server, prefs.token, c, p, r)
+            val r = try {
+                FinLocal.sincronizar(contexto, local, servidor, token)
+            } catch (_: Exception) {
+                FinLocal.Sync(FinLocal.SIN_CONEXION, false, emptyList())
+            }
             ui.post {
-                if (mia != carga || isFinishing) return@post
-                val j = resp?.json
-                if (j == null || !j.optBoolean("ok", false)) {
-                    val texto = when {
-                        resp == null -> "No encuentro tu laptop. Puedes anotar con el botón «+»: se guarda aquí y se sube cuando vuelva la conexión."
-                        resp.codigo == 401 -> "La laptop respondió, pero el token no coincide."
-                        j != null -> "Las finanzas están apagadas en tu laptop (config.toml → [finanzas] activo)."
-                        resp.codigo == 404 -> "Tu laptop tiene una versión de Eco sin Finanzas. Actualízala (git pull) y reinicia Eco."
-                        else -> "La laptop respondió con error ${resp.codigo}."
-                    }
-                    if (silencioso && cargado) avisar("No pude actualizar: tu laptop no responde.") else pintarError(texto)
-                    return@post
+                sincronizando = false
+                if (isFinishing || isDestroyed) return@post
+                var repintar = r.cambio || r.estado != estado
+                estado = r.estado
+                if (cuentaQuerida > 0L && r.estado == FinLocal.AL_DIA) {
+                    cuenta = cuentaQuerida
+                    cuentaQuerida = 0L
+                    repintar = true
                 }
-                datos = j
-                cargado = true
-                cuenta = j.optLong("cuenta", cuenta)
-                moneda = j.optString("moneda", "$")
-                categorias = j.optJSONObject("categorias") ?: categorias
-                cuentas = j.optJSONArray("cuentas") ?: cuentas
-                val ahora = Calendar.getInstance()
-                actualizado = String.format(Locale.US, "%d:%02d", ahora.get(Calendar.HOUR_OF_DAY), ahora.get(Calendar.MINUTE))
-                local.edit()
-                    .putLong("cuenta", cuenta)
-                    .putString("periodo", periodo)
-                    .putString("moneda", moneda)
-                    .putString("categorias", categorias?.toString() ?: "")
-                    .putString("cuentas", cuentas.toString())
-                    .apply()
-                pintar()
+                // Lo que la laptop tenga que decir de lo que subió (ej. «ya usaste el 80 % del presupuesto»).
+                if (r.avisos.isNotEmpty()) Toast.makeText(this, r.avisos[0], Toast.LENGTH_LONG).show()
+                if (repintar) refrescar() else pintarLinea()
+                if (otraVez) {
+                    otraVez = false
+                    sincronizar()
+                }
             }
         }
     }
 
-    private fun pintarError(texto: String) {
-        pintarCabecera()
-        cuerpo.removeAllViews()
-        val enCola = Fin.leerCola(local).length()
-        if (enCola > 0) {
-            cuerpo.addView(
-                avisoCard(if (enCola == 1) "1 movimiento guardado aquí: se sube solo cuando tu laptop esté al alcance."
-                else "$enCola movimientos guardados aquí: se suben solos cuando tu laptop esté al alcance."),
-                lp(top = 8)
-            )
+    /** Cuándo fue la última vez que el teléfono quedó igual que la laptop: "hoy a las 8:42" o "el 12 de nov". */
+    private fun ultimaVez(): String {
+        val ms = local.getLong("sincronizado", 0L)
+        if (ms <= 0L) return ""
+        val c = Calendar.getInstance()
+        val hoy = c.get(Calendar.YEAR) * 1000 + c.get(Calendar.DAY_OF_YEAR)
+        c.timeInMillis = ms
+        val hora = String.format(Locale.US, "%d:%02d", c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE))
+        return if (c.get(Calendar.YEAR) * 1000 + c.get(Calendar.DAY_OF_YEAR) == hoy) "hoy a las $hora"
+        else "el ${c.get(Calendar.DAY_OF_MONTH)} de ${Fin.MESES[c.get(Calendar.MONTH).coerceIn(0, 11)]}"
+    }
+
+    /** Una línea que dice si lo de aquí ya está en la laptop o qué falta por subir, y de qué color va. */
+    private fun estadoTexto(): Pair<String, Int> {
+        val n = FinLocal.pendientes(local)
+        val espera = if (n == 1) "1 cambio guardado en este teléfono" else "$n cambios guardados en este teléfono"
+        val problema = when (estado) {
+            FinLocal.TOKEN -> "La laptop respondió, pero el token no coincide: vuelve a conectarla en Eco («Tu laptop»)."
+            FinLocal.VIEJA -> "Tu laptop tiene un Eco anterior: actualízalo allá (git pull) y reinícialo."
+            FinLocal.APAGADO -> "Las finanzas están apagadas en tu laptop (config.toml → [finanzas] activo)."
+            else -> ""
         }
-        cuerpo.addView(avisoCard(texto), lp(top = 8))
-        cuerpo.addView(boton("Reintentar") { cargar() }, lp(top = 12))
+        val u = ultimaVez()
+        return when {
+            problema.isNotEmpty() -> (if (n > 0) "$problema Mientras tanto: $espera." else problema) to C_WARN
+            n > 0 && estado == FinLocal.SIN_LAPTOP -> "$espera. Suben cuando conectes tu laptop en Eco («Tu laptop»)." to C_WARN
+            n > 0 -> "$espera: suben solos cuando tu laptop esté al alcance." to C_WARN
+            estado == FinLocal.SIN_LAPTOP -> "Todo se guarda en este teléfono. Conecta tu laptop en Eco para verlo también allá." to C_FAINT
+            estado == FinLocal.AL_DIA -> "Al día con tu laptop" to C_FAINT
+            estado == FinLocal.SIN_CONEXION ->
+                ("Sin conexión con tu laptop. Ves lo guardado aquí" + (if (u.isEmpty()) "." else ", al día hasta $u.")) to C_FAINT
+            else -> (if (u.isEmpty()) "" else "Al día con tu laptop hasta $u") to C_FAINT
+        }
+    }
+
+    private fun pintarLinea() {
+        val (texto, tono) = estadoTexto()
+        linea.text = texto
+        linea.setTextColor(tono)
+        linea.visibility = if (texto.isEmpty()) View.GONE else View.VISIBLE
     }
 
     // ───────────────────────── Pintar ─────────────────────────
@@ -401,13 +447,9 @@ class FinanzasActivity : Activity() {
         pintarCabecera()
         mas.visibility = if (seccion == INICIO || seccion == MOVIMIENTOS) View.VISIBLE else View.GONE
         mas.contentDescription = if (pestana == "ingreso") "Añadir un ingreso" else "Añadir un gasto"
+        pintarLinea()
         cuerpo.removeAllViews()
-        val d = datos
-        if (d == null) {
-            if (cargado || prefs.server.isBlank()) return
-            cuerpo.addView(label("Buscando en tu laptop…", 15f, C_MUTED), lp(top = 20))
-            return
-        }
+        val d = datos ?: return
         if (seccion != INICIO) cuerpo.addView(tituloSeccion())
         when (seccion) {
             MOVIMIENTOS -> {
@@ -556,11 +598,7 @@ class FinanzasActivity : Activity() {
         if (id == cuenta) return
         cuenta = id
         verTodos = false
-        datos = null
-        cargado = false
-        local.edit().putLong("cuenta", id).apply()
-        pintarCabecera()
-        cargar()
+        refrescar()
     }
 
     /** En las secciones del menú: «‹ Inicio» y el nombre de la sección. */
@@ -602,7 +640,7 @@ class FinanzasActivity : Activity() {
                         periodo = clave
                         ref = null
                         verTodos = false
-                        cargar(silencioso = true)
+                        refrescar()
                     }
                 }
             }
@@ -628,7 +666,7 @@ class FinanzasActivity : Activity() {
         nav.addView(flecha("‹", "Periodo anterior", true) {
             ref = p.optString("anterior")
             verTodos = false
-            cargar(silencioso = true)
+            refrescar()
         })
         val titulo = if (p.optString("tipo") == "dia" && p.optString("ref") == hoy) "Hoy" else p.optString("titulo")
         nav.addView(label(titulo, 16f, C_TEXT, medium = true).apply {
@@ -641,14 +679,14 @@ class FinanzasActivity : Activity() {
                 setOnClickListener {
                     ref = null
                     verTodos = false
-                    cargar(silencioso = true)
+                    refrescar()
                 }
             }
         }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         nav.addView(flecha("›", "Periodo siguiente", !esActual) {
             ref = p.optString("siguiente")
             verTodos = false
-            cargar(silencioso = true)
+            refrescar()
         })
         tarjeta.addView(nav, lp(top = 8))
         if (!esActual) {
@@ -803,14 +841,6 @@ class FinanzasActivity : Activity() {
         }
 
         if (esGasto) pintarConsejo(d)
-        val enCola = Fin.leerCola(local).length()
-        if (enCola > 0) {
-            cuerpo.addView(
-                label(if (enCola == 1) "1 movimiento guardado aquí espera conexión con tu laptop."
-                else "$enCola movimientos guardados aquí esperan conexión con tu laptop.", 13f, C_WARN).apply { setLineSpacing(0f, 1.2f) },
-                lp(top = 12)
-            )
-        }
     }
 
     private fun pintarConsejo(d: JSONObject) {
@@ -1065,6 +1095,8 @@ class FinanzasActivity : Activity() {
     /** Un movimiento: tocarlo ofrece borrarlo (para corregirlo, bórralo y anótalo de nuevo). */
     private fun filaMovimiento(m: JSONObject, hoy: String): View {
         val id = m.optLong("id")
+        val uid = m.optString("uid")
+        val pendiente = m.optBoolean("pendiente", false)   // anotado aquí y todavía sin subir a la laptop
         val tipoMov = m.optString("tipo")
         val nombre = m.optString("nombre")
         val nota = m.optString("nota")
@@ -1075,7 +1107,8 @@ class FinanzasActivity : Activity() {
             "fijo" -> "pago fijo"
             else -> ""
         }
-        val detalle = listOf(Fin.fechaCorta(m.optString("fecha"), hoy), nota, de).filter { it.isNotEmpty() }.joinToString(" · ")
+        val detalle = listOf(Fin.fechaCorta(m.optString("fecha"), hoy), nota, de, if (pendiente) "sin subir" else "")
+            .filter { it.isNotEmpty() }.joinToString(" · ")
         val texto = when (tipoMov) {
             "ingreso" -> dinero(monto, signo = true)
             "gasto" -> dinero(-monto)
@@ -1111,7 +1144,10 @@ class FinanzasActivity : Activity() {
                 .setTitle("¿Borrar este movimiento?")
                 .setMessage("$nombre · ${dinero(monto)}" + if (detalle.isNotEmpty()) "\n$detalle" else "")
                 .setPositiveButton("Borrar") { _, _ ->
-                    cambiar("movimiento/borrar", JSONObject().put("id", id), "Movimiento borrado")
+                    FinLocal.borrar(this, local, id, uid, pendiente)
+                    avisar("Movimiento borrado")
+                    refrescar()
+                    sincronizar()
                 }
                 .setNegativeButton("Cancelar", null)
                 .show()
@@ -1183,7 +1219,7 @@ class FinanzasActivity : Activity() {
                 return
             }
             if (prefs.server.isBlank()) {
-                avisar("Primero conecta tu laptop.")
+                avisar("Las cuentas se crean con tu laptop conectada (en Eco, «Tu laptop»).")
                 return
             }
             val d = JSONObject().put("nombre", n).put("tipo", tipoCuenta)
@@ -1196,12 +1232,12 @@ class FinanzasActivity : Activity() {
                     if (r?.codigo == 200 && nueva > 0L) {
                         avisar(if (id > 0L) "Cuenta guardada" else "Cuenta creada")
                         if (id == 0L) {
-                            cuenta = nueva
+                            cuentaQuerida = nueva
                             seccion = INICIO
                         }
-                        cargar()
+                        sincronizar()
                     } else {
-                        avisar(if (r == null) "No encuentro tu laptop." else "No se pudo guardar la cuenta.")
+                        avisar(if (r == null) "Las cuentas se cambian con tu laptop al alcance, y ahora no la encuentro." else "No se pudo guardar la cuenta.")
                     }
                 }
             }
@@ -1218,10 +1254,13 @@ class FinanzasActivity : Activity() {
 
     // ───────────────────────── Cambios: presupuestos, metas y pagos fijos ─────────────────────────
 
-    /** Manda un cambio a la laptop y, si se guardó, vuelve a pedir los números. */
+    /**
+     * Presupuestos, metas nuevas y pagos fijos se guardan directo en la laptop (necesitan que esté al alcance);
+     * si se guardó, se baja la copia nueva. Anotar gastos, ingresos y ahorros NO pasa por aquí: eso va por [FinLocal].
+     */
     private fun cambiar(accion: String, d: JSONObject, exito: String) {
         if (prefs.server.isBlank()) {
-            avisar("Primero conecta tu laptop.")
+            avisar("Esto se guarda en tu laptop: conéctala primero (en Eco, «Tu laptop»).")
             return
         }
         io.execute {
@@ -1229,11 +1268,14 @@ class FinanzasActivity : Activity() {
             ui.post {
                 if (isFinishing) return@post
                 when {
-                    r == null -> avisar("No encuentro tu laptop. Inténtalo cuando estés en tu red.")
+                    r == null -> Toast.makeText(
+                        this, "Esto se guarda en tu laptop y ahora no la encuentro. Tus gastos e ingresos sí puedes anotarlos sin ella.",
+                        Toast.LENGTH_LONG
+                    ).show()
                     r.codigo == 200 -> {
                         val aviso = r.json?.optJSONArray("avisos")?.optString(0) ?: ""
                         Toast.makeText(this, if (aviso.isBlank()) exito else aviso, Toast.LENGTH_LONG).show()
-                        cargar(silencioso = true)
+                        sincronizar()
                     }
                     else -> avisar("No se pudo guardar. Revisa los datos e inténtalo otra vez.")
                 }
@@ -1332,10 +1374,16 @@ class FinanzasActivity : Activity() {
             .setMessage("Se descuenta de «Te queda» y se suma a la meta. Te faltan ${dinero(falta)}.")
             .setView(cajaDialogo(monto))
             .setPositiveButton("Apartar") { _, _ ->
-                val texto = monto.text.toString().trim().replace(',', '.')
-                val v = texto.toDoubleOrNull()
-                if (v == null || v <= 0.0) avisar("Escribe cuánto vas a apartar.")
-                else cambiar("meta", JSONObject().put("id", id).put("aportar", texto).put("origen", "app"), "Ahorro anotado")
+                val v = monto.text.toString().trim().replace(',', '.').toDoubleOrNull()
+                val centavos = if (v == null) 0L else Math.round(v * 100.0)
+                if (!FinLocal.montoValido(centavos)) {
+                    avisar("Escribe cuánto vas a apartar.")
+                } else {
+                    FinLocal.apartar(local, id, nombre, cuenta, centavos)   // queda guardado aquí; sube solo
+                    avisar("Ahorro anotado")
+                    refrescar()
+                    sincronizar()
+                }
             }
             .setNegativeButton("Cancelar", null)
             .show()

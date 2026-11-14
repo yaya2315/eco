@@ -5174,6 +5174,43 @@ def api_finanzas(params: dict) -> dict:
         }
 
 
+def api_finanzas_todo(params: dict) -> dict:
+    """Todas tus finanzas de una sola vez, para que el teléfono guarde su copia y funcione sin la laptop.
+    Lleva una «version» (la huella de los datos): si el teléfono ya tiene esa, solo se le dice que está al día."""
+    if not fin_activo():
+        return {"ok": False, "error": "apagado"}
+    with closing(db()) as con:
+        cuentas = _fin_cuentas(con)
+        ids = {c["id"] for c in cuentas}   # lo de las cuentas quitadas no viaja
+        datos = {
+            "moneda": CFG.get("finanzas", {}).get("moneda") or "$",
+            "ahorro_pct": int(CFG.get("finanzas", {}).get("ahorro_pct") or 0),
+            "cuentas": [{"id": c["id"], "nombre": c["nombre"], "tipo": c["tipo"]} for c in cuentas],
+            "cuenta_defecto": _fin_cuenta(con)["id"],
+            "categorias": {tipo: [{"clave": k, "nombre": n, "color": col} for k, n, col, _ in lista]
+                           for tipo, lista in FIN_CATEGORIAS.items()},
+            "movimientos": [
+                {"id": m["id"], "cuenta": m["cuenta_id"], "tipo": m["tipo"], "monto": m["monto"],
+                 "categoria": m["categoria"], "nota": m["nota"] or "", "fecha": m["fecha"],
+                 "origen": m["origen"] or "", "meta": m["meta_id"] or 0, "uid": m["uid"] or ""}
+                for m in con.execute("SELECT * FROM fin_movimientos ORDER BY id") if m["cuenta_id"] in ids],
+            "presupuestos": [{"cuenta": p["cuenta_id"], "categoria": p["categoria"], "monto": p["monto"]}
+                             for p in con.execute("SELECT * FROM fin_presupuestos ORDER BY cuenta_id, categoria")
+                             if p["cuenta_id"] in ids],
+            "metas": [{"id": m["id"], "cuenta": m["cuenta_id"], "nombre": m["nombre"], "objetivo": m["objetivo"],
+                       "fecha": m["fecha"] or ""}
+                      for m in con.execute("SELECT * FROM fin_metas ORDER BY id") if m["cuenta_id"] in ids],
+            "fijos": [{"id": f["id"], "cuenta": f["cuenta_id"], "tipo": f["tipo"], "monto": f["monto"],
+                       "categoria": f["categoria"], "nota": f["nota"], "dia": f["dia"],
+                       "registrado": f["registrado"] or ""}
+                      for f in con.execute("SELECT * FROM fin_fijos ORDER BY dia, id") if f["cuenta_id"] in ids],
+        }
+    version = hashlib.sha1(json.dumps(datos, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+    if params.get("v") == version:
+        return {"ok": True, "igual": True, "version": version}
+    return {"ok": True, "version": version, "hoy": ahora().date().isoformat(), **datos}
+
+
 def _fin_aviso_presupuesto(cuenta_id: int, categoria: str, fecha: str) -> str | None:
     """Avisa una sola vez al llegar al 80 % y al 100 % del presupuesto del mes."""
     mes = fecha[:7]
@@ -5946,6 +5983,8 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 return self._json(200, api_recordar())
             if ruta == "/api/finanzas":
                 return self._json(200, api_finanzas(params))
+            if ruta == "/api/finanzas/todo":  # la copia que el teléfono guarda para funcionar sin la laptop
+                return self._json(200, api_finanzas_todo(params))
             if ruta == "/api/foto":
                 try:
                     foto = ruta_foto(int(params.get("id") or 0))

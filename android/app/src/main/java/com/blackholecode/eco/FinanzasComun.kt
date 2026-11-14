@@ -1,7 +1,6 @@
 package com.blackholecode.eco
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
@@ -17,8 +16,6 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.LinearLayout
 import android.widget.TextView
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
@@ -26,8 +23,8 @@ import kotlin.math.roundToInt
 
 /**
  * Lo que comparten las pantallas de Finanzas (y el selector «Eco | Finanzas» de la pantalla principal):
- * colores, el ícono de cada categoría, cómo se escribe el dinero, la cola de lo anotado sin conexión
- * y los dos gráficos, que se dibujan a mano (sin librerías).
+ * colores, el ícono de cada categoría, cómo se escribe el dinero y los dos gráficos, que se dibujan a mano
+ * (sin librerías). Los datos (la copia guardada en el teléfono y lo que espera para subir) están en [FinLocal].
  */
 internal object Fin {
     const val C_BG = 0xFF0A0A12.toInt()
@@ -47,7 +44,7 @@ internal object Fin {
     const val C_OTRAS = 0xFF5A5A72.toInt()
     const val BLANCO = 0xFFFFFFFF.toInt()
 
-    /** Aquí se guarda lo que la pantalla necesita sin conexión: cuentas, categorías y la cola. */
+    /** Preferencias de Finanzas: la cuenta y el periodo que estabas viendo, y la cola de lo que falta subir. */
     const val LOCAL = "eco_finanzas"
 
     val MESES = arrayOf("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
@@ -101,41 +98,6 @@ internal object Fin {
         val dia = iso.substring(8, 10).toIntOrNull() ?: return iso
         val base = "$dia ${MESES[(mes - 1).coerceIn(0, 11)]}"
         return if (hoy.length >= 4 && iso.substring(0, 4) != hoy.substring(0, 4)) "$base ${iso.substring(0, 4)}" else base
-    }
-
-    // ── Lo anotado sin conexión: espera en el teléfono y se sube cuando la laptop responde ──
-
-    fun leerCola(sp: SharedPreferences): JSONArray =
-        try { JSONArray(sp.getString("cola", "[]") ?: "[]") } catch (_: Exception) { JSONArray() }
-
-    fun encolar(sp: SharedPreferences, item: JSONObject) {
-        synchronized(this) {
-            val cola = leerCola(sp)
-            cola.put(item)
-            sp.edit().putString("cola", cola.toString()).apply()
-        }
-    }
-
-    /** Sube la cola (llamar fuera del hilo principal). Se detiene si la laptop sigue sin responder. */
-    fun subirCola(sp: SharedPreferences, server: String, token: String) {
-        while (true) {
-            val item: JSONObject = synchronized(this) {
-                val cola = leerCola(sp)
-                if (cola.length() == 0) null else cola.optJSONObject(0)
-            } ?: return
-            val r = Net.finanzasCambio(server, token, "movimiento", item) ?: return
-            if (r.codigo == 401) return
-            // 200 = guardado (la laptop no lo duplica: lleva un uid); otro código = dato que nunca va a pasar.
-            synchronized(this) {
-                val cola = leerCola(sp)
-                val resto = JSONArray()
-                for (i in 0 until cola.length()) {
-                    val x = cola.optJSONObject(i) ?: continue
-                    if (x.optString("uid") != item.optString("uid")) resto.put(x)
-                }
-                sp.edit().putString("cola", resto.toString()).apply()
-            }
-        }
     }
 
     // ── Piezas de interfaz que usan varias pantallas ──

@@ -259,6 +259,15 @@ object Net {
         return leer(server, token, ruta)
     }
 
+    /**
+     * Finanzas completas (cuentas, movimientos, presupuestos, metas y pagos fijos), para guardar una copia en el
+     * teléfono. Con [version] (la de la copia que ya tienes) la laptop solo contesta «igual» si nada cambió.
+     */
+    fun finanzasTodo(server: String, token: String, version: String): Respuesta? {
+        val v = if (version.isEmpty()) "" else "?v=" + java.net.URLEncoder.encode(version, "UTF-8")
+        return leer(server, token, "/api/finanzas/todo$v")
+    }
+
     /** Un cambio en Finanzas: "movimiento", "movimiento/borrar", "presupuesto", "meta", "fijo" o "cuenta". */
     fun finanzasCambio(server: String, token: String, accion: String, datos: JSONObject): Respuesta? =
         enviar(server, token, "/api/finanzas/$accion", datos)

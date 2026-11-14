@@ -820,6 +820,7 @@ class EcoService : Service() {
                 revisarReuniones()
                 if (ronda % LATIDO_EVERY_ROUNDS == 0) latido(estadoTexto())
                 if (ronda % UPDATE_EVERY_ROUNDS == 0) checkForUpdate()
+                sincronizarFinanzas(ronda)
             }
             main.postDelayed(this, UPLOAD_EVERY_MS)
         }
@@ -930,6 +931,17 @@ class EcoService : Service() {
         EcoState.pausaBateria -> "pausa_bateria"
         EcoState.paused -> "pausa"
         else -> "escuchando"
+    }
+
+    /**
+     * Finanzas sin abrir la pantalla: si anotaste algo sin conexión, se sube en la primera vuelta en que la
+     * laptop responda (cada 2 min); y cada 10 min se baja lo que hayas anotado allá, para verlo luego sin conexión.
+     */
+    private fun sincronizarFinanzas(ronda: Int) {
+        if (prefs.server.isBlank()) return
+        val finanzas = getSharedPreferences(Fin.LOCAL, Context.MODE_PRIVATE)
+        if (FinLocal.pendientes(finanzas) == 0 && ronda % LATIDO_EVERY_ROUNDS != 0) return
+        FinLocal.sincronizar(this, finanzas, prefs.server, prefs.token)
     }
 
     /** "Sigo vivo": si deja de llegar, la laptop te avisa por Telegram. */
