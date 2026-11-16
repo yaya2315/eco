@@ -330,7 +330,7 @@ Eco también lleva tu dinero. No se conecta a ningún banco ni pide contraseñas
 - **Números grandes:** lo que entró, lo que salió, lo que apartaste y **lo que te queda**.
 - **Gráficos:** una dona con tus gastos por categoría y barras con los últimos 7 días, 6 semanas, 6 meses o los 12 meses del año.
 - **Categorías:** comida y súper, comer fuera, transporte, educación, salud, trabajo y herramientas, tecnología, suscripciones, casa y servicios, ropa y cuidado, ocio, regalos y familia, saldo y recargas, deudas, publicidad, impuestos y otros. Para ingresos: clientes y proyectos, sueldo, mesada y familia, ventas, regalos, reembolsos y otros. Las que más usas salen primero.
-- **Movimientos:** la lista de todo lo anotado; en el panel puedes editarlos y borrarlos, en el teléfono borrarlos.
+- **Movimientos:** la lista de todo lo anotado. Si te equivocaste, puedes **editarlos** o borrarlos, tanto en el panel como en el teléfono: en la app toca el movimiento y elige *Editar* (se abre la misma pantalla de añadir con sus datos puestos: cambia el monto, gasto/ingreso, la categoría, la fecha, la cuenta o el comentario y toca *Guardar cambios*). Lo apartado para una meta no se edita: se borra y se aparta de nuevo.
 
 **Cómo anotar un gasto o un ingreso**
 
@@ -348,8 +348,8 @@ Frases como *«pagar la luz el viernes»* o *«le debo 10 a Steven»* **no** son
 
 La app guarda en el teléfono una copia de tus finanzas, así que no necesitas tener la laptop encendida ni estar en tu Wi-Fi:
 
-- **Anotar nunca espera.** Tocas **+**, escribes el monto y listo: se guarda en el teléfono al instante y ya cuenta en la dona, el saldo y los presupuestos. También puedes **apartar dinero** para una meta y **borrar** un movimiento sin conexión.
-- **Se sube solo.** Cuando la laptop vuelve a estar al alcance, la app sube lo que anotaste (al abrir Finanzas, cada medio minuto mientras la tienes abierta y, si Eco está escuchando, cada 2 minutos aunque no la abras). No se duplica aunque se reintente. Lo que aún no sube dice *«sin subir»*, y arriba una línea te dice cuántos cambios esperan.
+- **Anotar nunca espera.** Tocas **+**, escribes el monto y listo: se guarda en el teléfono al instante y ya cuenta en la dona, el saldo y los presupuestos. También puedes **editar** o **borrar** un movimiento y **apartar dinero** para una meta sin conexión.
+- **Se sube solo.** Cuando la laptop vuelve a estar al alcance, la app sube lo que anotaste, corregiste o borraste (al abrir Finanzas, cada medio minuto mientras la tienes abierta y, si Eco está escuchando, cada 2 minutos aunque no la abras). No se duplica aunque se reintente. Lo que aún no sube dice *«sin subir»*, y arriba una línea te dice cuántos cambios esperan.
 - **Y al revés.** Lo que anotas en el panel, por Telegram o por voz baja al teléfono en la siguiente conexión, y después lo puedes ver sin la laptop (cualquier día, semana, mes o año).
 - **Lo único que sí necesita la laptop** es crear o cambiar cuentas, presupuestos, metas nuevas y pagos fijos (y marcar un pago fijo como pagado). Si no está al alcance, la app te lo dice y no pierdes nada.
 

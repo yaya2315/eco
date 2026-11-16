@@ -10,10 +10,14 @@ import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.math.roundToInt
 
-/** Un movimiento: de la copia que mandó la laptop, o anotado aquí y todavía sin subir ([pendiente]). */
+/**
+ * Un movimiento: de la copia que mandó la laptop, o anotado aquí y todavía sin subir ([pendiente]).
+ * [editado] = ya está en la laptop, pero lo corregiste aquí y la corrección aún no sube.
+ */
 internal class Mov(
     val id: Long, val uid: String, val cuenta: Long, val tipo: String, val monto: Long, val categoria: String,
-    val nota: String, val fecha: String, val origen: String, val meta: Long, val pendiente: Boolean, val orden: Long,
+    val nota: String, val fecha: String, val origen: String, val meta: Long, val pendiente: Boolean,
+    val editado: Boolean, val orden: Long,
 )
 
 /** Una categoría: su clave, cómo se llama y su color. */
@@ -22,7 +26,7 @@ internal class Cat(val clave: String, val nombre: String, val color: String)
 /**
  * Las finanzas guardadas en el teléfono, para que la app no dependa de la laptop:
  *  - una copia de todo lo que tiene la laptop (archivo finanzas.json), que se baja cuando hay conexión;
- *  - lo que anotas o borras aquí, que espera en una cola y se sube solo cuando la laptop responde.
+ *  - lo que anotas, corriges o borras aquí, que espera en una cola y se sube solo cuando la laptop responde.
  * La pantalla siempre se pinta con [vista] (la copia + la cola), así que anotar y mirar nunca esperan a la red.
  * [sincronizar] corre en segundo plano y hace las dos cosas: sube lo de aquí y baja lo de allá.
  */
@@ -128,7 +132,7 @@ internal object FinLocal {
                 Mov(
                     id, texto(m, "uid"), m.optLong("cuenta"), m.optString("tipo"), m.optLong("monto"),
                     m.optString("categoria"), texto(m, "nota"), m.optString("fecha"), texto(m, "origen"),
-                    m.optLong("meta"), false, id
+                    m.optLong("meta"), false, false, id
                 )
             )
         }
@@ -268,6 +272,7 @@ internal object FinLocal {
         }
         if (real <= 0L) return
         synchronized(this) {
+            quitarEdiciones(sp, real)   // si lo habías corregido aquí, esa corrección ya no hace falta
             val borrados = lista(sp, "borrados")
             borrados.put(real)
             sp.edit().putString("borrados", borrados.toString()).apply()
@@ -286,6 +291,82 @@ internal object FinLocal {
         guardar(c)
     }
 
+    /** Saca de la cola las correcciones que esperaban para ese movimiento de la laptop. */
+    @Synchronized
+    private fun quitarEdiciones(sp: SharedPreferences, id: Long) {
+        val cola = lista(sp, "cola")
+        val resto = JSONArray()
+        for (i in 0 until cola.length()) {
+            val x = cola.optJSONObject(i) ?: continue
+            if (x.optString("accion") == "editar" && x.optLong("id") == id) continue
+            resto.put(x)
+        }
+        if (resto.length() != cola.length()) sp.edit().putString("cola", resto.toString()).apply()
+    }
+
+    /**
+     * Corrige un gasto o un ingreso (monto, tipo, categoría, nota, fecha o cuenta). Se ve al instante.
+     * Si todavía no había subido, se corrige en la cola y sube ya corregido; si ya está en la laptop, la
+     * corrección espera en la cola y se aplica allá después. Devuelve false si ese movimiento ya no existe.
+     */
+    @Synchronized
+    fun editar(
+        c: Context, sp: SharedPreferences, id: Long, uid: String, tipo: String, centavos: Long, categoria: String,
+        nota: String, fecha: String, cuenta: Long,
+    ): Boolean {
+        leerCopia(c)
+        val cola = lista(sp, "cola")
+        if (uid.isNotEmpty()) {
+            for (i in 0 until cola.length()) {
+                val x = cola.optJSONObject(i) ?: continue
+                val accion = x.optString("accion")
+                if (x.optString("uid") != uid || accion == "meta" || accion == "editar") continue
+                x.put("tipo", tipo).put("centavos", centavos).put("categoria", categoria).put("nota", nota)
+                    .put("fecha", fecha).put("cuenta", cuenta)
+                sp.edit().putString("cola", cola.toString()).apply()
+                return true
+            }
+        }
+        // Ya está en la laptop (o subió justo mientras lo corregías): se anota la corrección para ese número.
+        var real = id
+        if (real <= 0L && uid.isNotEmpty()) real = movsCopia.firstOrNull { it.uid == uid }?.id ?: 0L
+        if (real <= 0L) return false
+        val resto = JSONArray()
+        for (i in 0 until cola.length()) {
+            val x = cola.optJSONObject(i) ?: continue
+            if (x.optString("accion") == "editar" && x.optLong("id") == real) continue   // solo vale la última corrección
+            resto.put(x)
+        }
+        resto.put(
+            JSONObject().put("uid", UUID.randomUUID().toString()).put("accion", "editar").put("id", real)
+                .put("tipo", tipo).put("centavos", centavos).put("categoria", categoria).put("nota", nota)
+                .put("fecha", fecha).put("cuenta", cuenta)
+        )
+        sp.edit().putString("cola", resto.toString()).apply()
+        return true
+    }
+
+    /**
+     * Después de subir uno nuevo: sale de la cola. Si lo corregiste justo mientras subía, la corrección no se
+     * pierde: se queda en la cola como edición del movimiento que la laptop acaba de crear.
+     */
+    @Synchronized
+    private fun trasSubir(sp: SharedPreferences, uid: String, enviado: String, idReal: Long) {
+        val cola = lista(sp, "cola")
+        val resto = JSONArray()
+        for (i in 0 until cola.length()) {
+            val x = cola.optJSONObject(i) ?: continue
+            if (x.optString("uid") != uid) {
+                resto.put(x)
+                continue
+            }
+            if (idReal > 0L && x.optString("accion") != "meta" && x.toString() != enviado) {
+                resto.put(x.put("accion", "editar").put("id", idReal).put("uid", UUID.randomUUID().toString()))
+            }
+        }
+        sp.edit().putString("cola", resto.toString()).apply()
+    }
+
     private fun centavosDe(x: JSONObject): Long {
         if (x.has("centavos")) return x.optLong("centavos")
         // Lo que anotó una versión anterior de la app traía el monto escrito ("3.50").
@@ -293,7 +374,7 @@ internal object FinLocal {
         return Math.round(v * 100.0)
     }
 
-    /** Todos los movimientos: los de la copia (menos los que borraste aquí) y los que esperan en la cola. */
+    /** Todos los movimientos: los de la copia (sin los que borraste aquí y con tus correcciones) y los que esperan en la cola. */
     private fun todos(c: Context, sp: SharedPreferences): List<Mov> {
         leerCopia(c)
         val base = movsCopia
@@ -302,15 +383,32 @@ internal object FinLocal {
         if (cola.length() == 0 && quitados.length() == 0) return base
         val borrados = HashSet<Long>()
         for (i in 0 until quitados.length()) borrados.add(quitados.optLong(i))
+        val ediciones = HashMap<Long, JSONObject>()
+        for (i in 0 until cola.length()) {
+            val x = cola.optJSONObject(i) ?: continue
+            if (x.optString("accion") == "editar") ediciones[x.optLong("id")] = x
+        }
         val uids = HashSet<String>()
         val salida = ArrayList<Mov>(base.size + cola.length())
         for (m in base) {
             if (m.id in borrados) continue
             if (m.uid.isNotEmpty()) uids.add(m.uid)
-            salida.add(m)
+            val e = ediciones[m.id]
+            if (e == null) {
+                salida.add(m)
+            } else {
+                salida.add(
+                    Mov(
+                        m.id, m.uid, cuentaReal(c, e.optLong("cuenta")), e.optString("tipo"), centavosDe(e),
+                        e.optString("categoria"), texto(e, "nota"), e.optString("fecha"), m.origen, m.meta,
+                        false, true, m.orden
+                    )
+                )
+            }
         }
         for (i in 0 until cola.length()) {
             val x = cola.optJSONObject(i) ?: continue
+            if (x.optString("accion") == "editar") continue   // ya quedó aplicada arriba
             val uid = x.optString("uid")
             if (uid in uids) continue   // ya subió: está en la copia
             val esMeta = x.optString("accion") == "meta"
@@ -318,7 +416,7 @@ internal object FinLocal {
                 Mov(
                     0L, uid, cuentaReal(c, x.optLong("cuenta")), if (esMeta) "ahorro" else x.optString("tipo"), centavosDe(x),
                     if (esMeta) "ahorro" else x.optString("categoria"), texto(x, "nota"), x.optString("fecha"), "app",
-                    x.optLong("meta"), true, Long.MAX_VALUE / 2 + i
+                    x.optLong("meta"), true, false, Long.MAX_VALUE / 2 + i
                 )
             )
         }
@@ -642,7 +740,7 @@ internal object FinLocal {
         return JSONObject().put("id", m.id).put("uid", m.uid).put("cuenta", m.cuenta).put("tipo", m.tipo)
             .put("monto", m.monto).put("categoria", m.categoria).put("nombre", k.nombre).put("color", k.color)
             .put("nota", m.nota).put("fecha", m.fecha).put("origen", m.origen).put("meta", m.meta)
-            .put("pendiente", m.pendiente)
+            .put("pendiente", m.pendiente).put("sin_subir", m.pendiente || m.editado)
     }
 
     /**
@@ -704,30 +802,59 @@ internal object FinLocal {
                 .put("fecha", x.optString("fecha")).put("origen", "app").put("uid", x.optString("uid"))
         }
         val d = JSONObject().put("tipo", x.optString("tipo")).put("monto", monto).put("categoria", x.optString("categoria"))
-            .put("nota", texto(x, "nota")).put("fecha", x.optString("fecha")).put("origen", "app").put("uid", x.optString("uid"))
+            .put("nota", texto(x, "nota")).put("fecha", x.optString("fecha")).put("origen", "app")
         if (x.optLong("cuenta") > 0L) d.put("cuenta", x.optLong("cuenta"))
+        if (x.optString("accion") == "editar") d.put("id", x.optLong("id")) else d.put("uid", x.optString("uid"))
         return "movimiento" to d
     }
 
-    /** Lo que acaba de subir entra a la copia enseguida, para que no desaparezca si la bajada falla después. */
+    /**
+     * Lo que acaba de subir (nuevo o corregido) entra a la copia enseguida, para que no desaparezca ni vuelva
+     * a verse como antes si la bajada falla después. Con [uid] vacío se conserva el que ya tenía.
+     */
     private fun agregarACopia(c: Context, mov: JSONObject, uid: String) {
         synchronized(this) {
             val j = leerCopia(c) ?: JSONObject()
             val movs = j.optJSONArray("movimientos") ?: JSONArray()
             val id = mov.optLong("id")
+            var suUid = uid
+            val resto = JSONArray()
             for (i in 0 until movs.length()) {
-                if (movs.optJSONObject(i)?.optLong("id") == id) return   // ya estaba
+                val m = movs.optJSONObject(i) ?: continue
+                if (m.optLong("id") != id) {
+                    resto.put(m)
+                } else if (suUid.isEmpty()) {
+                    suUid = texto(m, "uid")
+                }
             }
-            movs.put(
+            resto.put(
                 JSONObject().put("id", id).put("cuenta", mov.optLong("cuenta")).put("tipo", mov.optString("tipo"))
                     .put("monto", mov.optLong("monto")).put("categoria", mov.optString("categoria"))
                     .put("nota", texto(mov, "nota")).put("fecha", mov.optString("fecha"))
-                    .put("origen", texto(mov, "origen")).put("meta", mov.optLong("meta")).put("uid", uid)
+                    .put("origen", texto(mov, "origen")).put("meta", mov.optLong("meta")).put("uid", suUid)
             )
-            j.put("movimientos", movs)
+            j.put("movimientos", resto)
             enMemoria(j)
         }
         guardar(c)
+    }
+
+    /** Baja la copia de la laptop si cambió. Devuelve cómo salió (AL_DIA, SIN_CONEXION…) y si trajo algo nuevo. */
+    private fun bajar(c: Context, sp: SharedPreferences, server: String, token: String): Pair<Int, Boolean> {
+        val version = leerCopia(c)?.optString("version") ?: ""
+        val r = Net.finanzasTodo(server, token, version) ?: return SIN_CONEXION to false
+        if (r.codigo == 401) return TOKEN to false
+        if (r.codigo == 404) return VIEJA to false
+        val j = r.json ?: return SIN_CONEXION to false
+        if (!j.optBoolean("ok", false)) return APAGADO to false
+        var nuevo = false
+        if (!j.optBoolean("igual", false)) {
+            enMemoria(j)
+            guardar(c)
+            nuevo = true
+        }
+        sp.edit().putLong("sincronizado", System.currentTimeMillis()).apply()
+        return AL_DIA to nuevo
     }
 
     /**
@@ -743,10 +870,13 @@ internal object FinLocal {
         var cambio = false
         val avisos = ArrayList<String>()
 
-        // 1) Lo que anotaste aquí. La laptop no lo duplica aunque se reintente: cada uno lleva su uid.
+        // 1) Lo que anotaste o corregiste aquí, en orden. La laptop no duplica lo nuevo aunque se reintente
+        //    (cada uno lleva su uid), y corregir dos veces lo mismo da igual.
         while (true) {
             val item = lista(sp, "cola").optJSONObject(0) ?: break
+            val enviado = item.toString()
             val uid = item.optString("uid")
+            val esEdicion = item.optString("accion") == "editar"
             val (accion, datos) = envio(item)
             val r = Net.finanzasCambio(server, token, accion, datos) ?: return Sync(SIN_CONEXION, cambio, avisos)
             when (r.codigo) {
@@ -759,8 +889,8 @@ internal object FinLocal {
                         }
                     }
                     val mov = r.json?.optJSONObject("movimiento")
-                    if (mov != null) agregarACopia(c, mov, uid)
-                    quitarDeCola(sp, uid)
+                    if (mov != null) agregarACopia(c, mov, if (esEdicion) "" else uid)
+                    if (esEdicion) quitarDeCola(sp, uid) else trasSubir(sp, uid, enviado, mov?.optLong("id") ?: 0L)
                     cambio = true
                 }
                 400 -> {   // un dato que la laptop nunca va a aceptar: no puede quedarse tapando la cola
@@ -768,7 +898,16 @@ internal object FinLocal {
                     cambio = true
                 }
                 401 -> return Sync(TOKEN, cambio, avisos)
-                404 -> return Sync(VIEJA, cambio, avisos)
+                404 -> {
+                    if (!esEdicion) return Sync(VIEJA, cambio, avisos)
+                    // Corregías algo que ya no existe allá (lo borraste en el panel)… o la laptop no tiene Finanzas.
+                    // Se pregunta por la copia: si responde bien, era lo primero y la corrección sobra.
+                    val (comoSalio, trajo) = bajar(c, sp, server, token)
+                    if (trajo) cambio = true
+                    if (comoSalio != AL_DIA) return Sync(comoSalio, cambio, avisos)
+                    quitarDeCola(sp, uid)
+                    cambio = true
+                }
                 else -> return Sync(SIN_CONEXION, cambio, avisos)
             }
         }
@@ -790,18 +929,8 @@ internal object FinLocal {
         }
 
         // 3) Lo nuevo de la laptop (lo anotado en el panel, por Telegram o por voz).
-        val version = leerCopia(c)?.optString("version") ?: ""
-        val r = Net.finanzasTodo(server, token, version) ?: return Sync(SIN_CONEXION, cambio, avisos)
-        if (r.codigo == 401) return Sync(TOKEN, cambio, avisos)
-        if (r.codigo == 404) return Sync(VIEJA, cambio, avisos)
-        val j = r.json ?: return Sync(SIN_CONEXION, cambio, avisos)
-        if (!j.optBoolean("ok", false)) return Sync(APAGADO, cambio, avisos)
-        if (!j.optBoolean("igual", false)) {
-            enMemoria(j)
-            guardar(c)
-            cambio = true
-        }
-        sp.edit().putLong("sincronizado", System.currentTimeMillis()).apply()
-        return Sync(AL_DIA, cambio, avisos)
+        val (estado, trajo) = bajar(c, sp, server, token)
+        return Sync(estado, cambio || trajo, avisos)
     }
+
 }

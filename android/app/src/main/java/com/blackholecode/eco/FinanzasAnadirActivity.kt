@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -34,12 +35,35 @@ import java.util.Locale
  * Anotar un gasto o un ingreso: el monto en grande, la cuenta, la categoría (círculos con ícono),
  * la fecha (hoy, ayer u otro día) y un comentario. No espera a la laptop: el movimiento se guarda en el
  * teléfono al instante ([FinLocal]) y se sube solo, en segundo plano, cuando la laptop esté al alcance.
+ * La misma pantalla sirve para corregir uno ya anotado: se abre con [intentEditar] y trae sus datos puestos.
  */
 class FinanzasAnadirActivity : Activity() {
 
     companion object {
         /** "gasto" o "ingreso": la pestaña con la que se abre. */
         const val EXTRA_TIPO = "tipo"
+
+        // Para corregir un movimiento ya anotado: quién es y qué tiene ahora.
+        private const val EXTRA_EDITAR = "editar"
+        private const val EXTRA_ID = "id"
+        private const val EXTRA_UID = "uid"
+        private const val EXTRA_MONTO = "monto"
+        private const val EXTRA_CATEGORIA = "categoria"
+        private const val EXTRA_NOTA = "nota"
+        private const val EXTRA_FECHA = "fecha"
+        private const val EXTRA_CUENTA = "cuenta"
+
+        /** Abre esta pantalla para corregir ese movimiento ([m] como viene en la lista de Finanzas). */
+        fun intentEditar(c: Context, m: JSONObject): Intent = Intent(c, FinanzasAnadirActivity::class.java)
+            .putExtra(EXTRA_EDITAR, true)
+            .putExtra(EXTRA_ID, m.optLong("id"))
+            .putExtra(EXTRA_UID, m.optString("uid"))
+            .putExtra(EXTRA_TIPO, m.optString("tipo"))
+            .putExtra(EXTRA_MONTO, m.optLong("monto"))
+            .putExtra(EXTRA_CATEGORIA, m.optString("categoria"))
+            .putExtra(EXTRA_NOTA, m.optString("nota"))
+            .putExtra(EXTRA_FECHA, m.optString("fecha"))
+            .putExtra(EXTRA_CUENTA, m.optLong("cuenta"))
 
         private const val C_BG = Fin.C_BG
         private const val C_SURFACE = Fin.C_SURFACE
@@ -73,16 +97,27 @@ class FinanzasAnadirActivity : Activity() {
     private var categoria = ""
     private var todas = false                    // ver todas las categorías
     private var fecha = Fin.isoHace(0)
+    private var editando = false                 // corrigiendo uno ya anotado (en vez de anotar uno nuevo)
+    private var idEditado = 0L                   // su número en la laptop (0 si todavía no sube)
+    private var uidEditado = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         local = getSharedPreferences(Fin.LOCAL, Context.MODE_PRIVATE)
         // Todo sale de lo guardado en el teléfono: funciona igual con la laptop apagada.
-        cuenta = FinLocal.cuentaReal(this, local.getLong("cuenta", 0L))
+        editando = intent.getBooleanExtra(EXTRA_EDITAR, false)
+        cuenta = FinLocal.cuentaReal(this, if (editando) intent.getLongExtra(EXTRA_CUENTA, 0L) else local.getLong("cuenta", 0L))
         moneda = FinLocal.moneda(this, local)
         categorias = FinLocal.categorias(this, local, cuenta)
         cuentas = FinLocal.cuentas(this)
         if (intent.getStringExtra(EXTRA_TIPO) == "ingreso") tipo = "ingreso"
+        if (editando) {
+            idEditado = intent.getLongExtra(EXTRA_ID, 0L)
+            uidEditado = intent.getStringExtra(EXTRA_UID) ?: ""
+            categoria = intent.getStringExtra(EXTRA_CATEGORIA) ?: ""
+            val suFecha = intent.getStringExtra(EXTRA_FECHA) ?: ""
+            if (suFecha.length == 10) fecha = suFecha
+        }
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
 
         val scroll = ScrollView(this).apply {
@@ -102,6 +137,13 @@ class FinanzasAnadirActivity : Activity() {
         scroll.addView(frame, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         setContentView(scroll)
         construir(col)
+        if (editando) {
+            // Trae lo que tenía: "3.50" (o "25" si no lleva centavos) y su comentario.
+            val monto = intent.getLongExtra(EXTRA_MONTO, 0L)
+            if (monto > 0L) campoMonto.setText(if (monto % 100L == 0L) (monto / 100L).toString() else Fin.plano(monto))
+            campoMonto.setSelection(campoMonto.text.length)
+            campoNota.setText(intent.getStringExtra(EXTRA_NOTA) ?: "")
+        }
         campoMonto.requestFocus()
     }
 
@@ -123,7 +165,7 @@ class FinanzasAnadirActivity : Activity() {
             contentDescription = "Volver a Finanzas"
             setOnClickListener { finish() }
         })
-        barra.addView(label("Añadir movimiento", 20f, C_TEXT, medium = true).apply { marcarTitulo(this) },
+        barra.addView(label(if (editando) "Editar movimiento" else "Añadir movimiento", 20f, C_TEXT, medium = true).apply { marcarTitulo(this) },
             LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(8) })
         col.addView(barra)
 
@@ -255,7 +297,7 @@ class FinanzasAnadirActivity : Activity() {
             )
             pestanas.addView(caja, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         }
-        botonAnadir.text = if (tipo == "ingreso") "Añadir ingreso" else "Añadir gasto"
+        botonAnadir.text = if (editando) "Guardar cambios" else if (tipo == "ingreso") "Añadir ingreso" else "Añadir gasto"
     }
 
     private fun pintarCuenta() {
@@ -427,7 +469,7 @@ class FinanzasAnadirActivity : Activity() {
 
     // ───────────────────────── Guardar ─────────────────────────
 
-    /** Guarda el movimiento en el teléfono y cierra. No espera a la laptop: se sube solo después. */
+    /** Guarda el movimiento (o su corrección) en el teléfono y cierra. No espera a la laptop: se sube solo después. */
     private fun anadir() {
         val valor = campoMonto.text.toString().trim().replace(',', '.').toDoubleOrNull()
         if (valor == null || valor <= 0.0) {
@@ -443,8 +485,13 @@ class FinanzasAnadirActivity : Activity() {
         }
         val nota = campoNota.text.toString().trim().replace(Regex("\\s+"), " ").take(120)
         botonAnadir.isEnabled = false
-        FinLocal.anotar(local, tipo, centavos, categoria, nota, fecha, cuenta)
-        avisar(if (tipo == "ingreso") "Ingreso anotado" else "Gasto anotado")
+        if (editando) {
+            val guardado = FinLocal.editar(this, local, idEditado, uidEditado, tipo, centavos, categoria, nota, fecha, cuenta)
+            avisar(if (guardado) "Cambios guardados" else "Ese movimiento ya no existe.")
+        } else {
+            FinLocal.anotar(local, tipo, centavos, categoria, nota, fecha, cuenta)
+            avisar(if (tipo == "ingreso") "Ingreso anotado" else "Gasto anotado")
+        }
         finish()
     }
 

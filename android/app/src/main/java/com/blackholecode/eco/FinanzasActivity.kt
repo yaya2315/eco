@@ -1092,12 +1092,14 @@ class FinanzasActivity : Activity() {
         }
     }
 
-    /** Un movimiento: tocarlo ofrece borrarlo (para corregirlo, bórralo y anótalo de nuevo). */
+    /** Un movimiento: tocarlo ofrece editarlo (si te equivocaste al anotarlo) o borrarlo. */
     private fun filaMovimiento(m: JSONObject, hoy: String): View {
         val id = m.optLong("id")
         val uid = m.optString("uid")
-        val pendiente = m.optBoolean("pendiente", false)   // anotado aquí y todavía sin subir a la laptop
         val tipoMov = m.optString("tipo")
+        val pendiente = m.optBoolean("pendiente", false)   // anotado aquí y todavía sin subir a la laptop
+        val sinSubir = m.optBoolean("sin_subir", pendiente) // …o corregido aquí y la corrección aún no sube
+        val editable = tipoMov == "gasto" || tipoMov == "ingreso"   // lo apartado para una meta solo se borra
         val nombre = m.optString("nombre")
         val nota = m.optString("nota")
         val monto = m.optLong("monto")
@@ -1107,7 +1109,7 @@ class FinanzasActivity : Activity() {
             "fijo" -> "pago fijo"
             else -> ""
         }
-        val detalle = listOf(Fin.fechaCorta(m.optString("fecha"), hoy), nota, de, if (pendiente) "sin subir" else "")
+        val detalle = listOf(Fin.fechaCorta(m.optString("fecha"), hoy), nota, de, if (sinSubir) "sin subir" else "")
             .filter { it.isNotEmpty() }.joinToString(" · ")
         val texto = when (tipoMov) {
             "ingreso" -> dinero(monto, signo = true)
@@ -1122,7 +1124,7 @@ class FinanzasActivity : Activity() {
             minimumHeight = dp(60)
             isClickable = true
             isFocusable = true
-            contentDescription = "$nombre, $texto, $detalle. Toca para borrar."
+            contentDescription = "$nombre, $texto, $detalle. " + if (editable) "Toca para editar o borrar." else "Toca para borrar."
         }
         fila.addView(Fin.circulo(this, m.optString("categoria"), Fin.color(m.optString("color")), 40), LinearLayout.LayoutParams(dp(40), dp(40)))
         val textos = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -1140,17 +1142,29 @@ class FinanzasActivity : Activity() {
             LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(8) }
         )
         fila.setOnClickListener {
-            AlertDialog.Builder(this)
-                .setTitle("¿Borrar este movimiento?")
-                .setMessage("$nombre · ${dinero(monto)}" + if (detalle.isNotEmpty()) "\n$detalle" else "")
-                .setPositiveButton("Borrar") { _, _ ->
-                    FinLocal.borrar(this, local, id, uid, pendiente)
-                    avisar("Movimiento borrado")
-                    refrescar()
-                    sincronizar()
-                }
+            val borrar = {
+                FinLocal.borrar(this, local, id, uid, pendiente)
+                avisar("Movimiento borrado")
+                refrescar()
+                sincronizar()
+            }
+            val dialogo = AlertDialog.Builder(this)
+                .setTitle("$nombre · $texto")
+                .setMessage(
+                    (if (detalle.isNotEmpty()) "$detalle\n\n" else "") +
+                        if (editable) "¿Te equivocaste? Edítalo: cambia el monto, la categoría, la fecha o la cuenta."
+                        else "Lo apartado para una meta no se edita: bórralo y apártalo otra vez."
+                )
                 .setNegativeButton("Cancelar", null)
-                .show()
+            if (editable) {
+                dialogo.setPositiveButton("Editar") { _, _ ->
+                    startActivity(FinanzasAnadirActivity.intentEditar(this, m))
+                }
+                dialogo.setNeutralButton("Borrar") { _, _ -> borrar() }
+            } else {
+                dialogo.setPositiveButton("Borrar") { _, _ -> borrar() }
+            }
+            dialogo.show()
         }
         return fila
     }
