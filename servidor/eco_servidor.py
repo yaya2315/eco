@@ -119,6 +119,14 @@ DEFAULTS: dict = {
         "silencio_marca_s": 20,          # una pausa de este tiempo o más se anota como "[silencio de …]"
         "marca_hora_s": 120,             # cada cuántos segundos se anota la hora en la transcripción
     },
+    "notion": {
+        # Apuntes de cuaderno en tu Notion al terminar una reunión (README, «Apuntes en Notion»).
+        "token": "",                    # el secreto de tu integración: solo en config.toml, nunca en GitHub
+        "destino": "",                  # la dirección (o ID) de la base de datos donde se crean las páginas
+        "tipos": ["reunion"],           # qué se manda solo al terminar: "reunion", "clase"
+        "incluir_cronica": False,       # añadir «lo que pasó» completo en un desplegable
+        "incluir_transcripcion": False,  # añadir la transcripción literal en un desplegable
+    },
     "respaldo": {
         "activo": True,
         "carpeta": "",      # vacío = OneDrive\Eco respaldos
@@ -1755,6 +1763,7 @@ def ayuda() -> str:
         "/pendientes — lo que tienes por hacer\n"
         "/hecho 12 — marcar la tarea #12 como hecha\n"
         "/buscar palabra — buscar en todo lo guardado\n"
+        + ("/notion — mandar a Notion los apuntes de la última clase o reunión\n" if notion_activo() else "")
         + ("/finanzas — tu dinero este mes (también: /finanzas semana)\n"
            "/gasto 3.50 almuerzo · /ingreso 150 logo — anotar dinero\n"
            "/deshacer — borrar lo último que anoté\n" if fin_activo() else "") + "\n"
@@ -1871,6 +1880,8 @@ def manejar_mensaje(chat: str, texto: str) -> None:
             ini = datetime.fromisoformat(f["inicio"])
             lineas.append(f"• <b>{e(f['titulo'])}</b> — {e(fecha_corta(ini.date()))} {ini:%H:%M}\n  {e(f['resumen'])}")
         enviar("\n".join(lineas))
+    elif comando == "/notion":
+        enviar(notion_telegram(resto))
     elif (de_dinero := fin_telegram(comando, resto)) is not None:
         enviar(de_dinero)
     elif comando == "/pregunta" or (not comando.startswith("/") and es_pregunta(texto)):
@@ -2770,6 +2781,8 @@ def cerrar_sesion(sid: int) -> int:
             time.sleep(1.1)  # Telegram limita a ~1 mensaje por segundo en el mismo chat
     log.info("%s lista: %s%s%s", etiqueta, info["titulo"], " (con crónica)" if cronica else "",
              f" y {len(puntos)} puntos clave" if puntos else "")
+    if notion_activo() and tipo in notion_tipos():  # los apuntes tardan: se arman aparte para no frenar la cola
+        threading.Thread(target=_notion_en_segundo_plano, args=(cid,), daemon=True).start()
     return cid
 
 
@@ -2798,6 +2811,292 @@ def escribir_transcripcion(cid: int) -> None:
     else:
         cuerpo = cabeza + f"{c['transcripcion']}\n"
     ruta.write_text(cuerpo, encoding="utf-8")
+
+
+# ════════════════════════════ Notion (apuntes de cuaderno) ════════════════════════════
+# Al terminar una reunión, Eco arma una página de apuntes —resumen, puntos clave, apuntes por tema y lo que
+# hay que hacer— y la crea en tu Notion. El token vive solo en config.toml (nunca en el repo).
+
+NOTION_API = "https://api.notion.com/v1"
+NOTION_VERSION = "2022-06-28"
+NOTION_BLOQUES_POR_LLAMADA = 100   # el máximo que acepta Notion al crear o añadir bloques
+NOTION_TEXTO_MAX = 1900            # Notion corta cada texto en 2000 caracteres
+
+
+class NotionError(Exception):
+    def __init__(self, mensaje: str, codigo: int = 0):
+        super().__init__(mensaje)
+        self.codigo = codigo
+
+
+def notion_activo() -> bool:
+    n = CFG.get("notion") or {}
+    return bool(str(n.get("token") or "").strip() and str(n.get("destino") or "").strip())
+
+
+def notion_tipos() -> list[str]:
+    tipos = (CFG.get("notion") or {}).get("tipos")
+    return [t for t in (tipos if isinstance(tipos, list) else ["reunion"]) if t in TIPOS_SESION]
+
+
+def _notion_id(valor) -> str | None:
+    """El ID de una base de datos o página de Notion, desde su dirección web o el ID suelto."""
+    t = str(valor or "").strip().split("?")[0].split("#")[0].rstrip("/")
+    m = re.search(r"([0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12})$", t)
+    return m.group(1).replace("-", "").lower() if m else None
+
+
+def _notion(metodo: str, ruta: str, cuerpo: dict | None = None) -> dict:
+    token = str((CFG.get("notion") or {}).get("token") or "").strip()
+    datos = json.dumps(cuerpo).encode("utf-8") if cuerpo is not None else None
+    for intento in range(4):
+        pedido = urllib.request.Request(
+            NOTION_API + ruta, data=datos, method=metodo,
+            headers={"Authorization": f"Bearer {token}", "Notion-Version": NOTION_VERSION,
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(pedido, timeout=30) as r:
+                return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as ex:
+            try:
+                detalle = str(json.loads(ex.read() or b"{}").get("message") or "")[:200]
+            except Exception:
+                detalle = ""
+            if ex.code == 429 and intento < 3:  # Notion pide ir más despacio
+                time.sleep(min(10.0, float(ex.headers.get("Retry-After") or 1)))
+                continue
+            if ex.code >= 500 and intento < 2:
+                time.sleep(2)
+                continue
+            razon = {
+                401: "El token de Notion no es válido: revisa [notion] token en config.toml.",
+                403: "La integración no tiene permiso para crear páginas ahí.",
+                404: "Notion no encuentra ese destino: abre la base de datos, toca ··· → Conexiones y añade tu integración.",
+            }.get(ex.code) or f"Notion respondió con error {ex.code}" + (f": {detalle}" if detalle else ".")
+            raise NotionError(razon, ex.code) from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if intento < 2:
+                time.sleep(2)
+                continue
+            raise NotionError("No pude conectarme con Notion (¿hay internet?).") from None
+    raise NotionError("Notion no respondió.")
+
+
+def _notion_destino() -> tuple[dict, str]:
+    """Dónde se crean las páginas: (parent, nombre de la propiedad título). Acepta una base de datos o una página."""
+    ident = _notion_id(CFG["notion"].get("destino"))
+    if not ident:
+        raise NotionError("No entiendo el destino de Notion: pega la dirección de la base de datos en [notion] destino.")
+    try:
+        bd = _notion("GET", f"/databases/{ident}")
+        titulo = next((k for k, v in (bd.get("properties") or {}).items() if v.get("type") == "title"), "Name")
+        return {"database_id": ident}, titulo
+    except NotionError as ex:
+        if ex.codigo not in (400, 404):
+            raise
+        try:
+            _notion("GET", f"/pages/{ident}")   # no era una base de datos: ¿será una página?
+            return {"page_id": ident}, "title"
+        except NotionError:
+            raise ex from None
+
+
+def _rt(texto: str) -> list[dict]:
+    return [{"type": "text", "text": {"content": str(texto or "")[:NOTION_TEXTO_MAX]}}]
+
+
+def _bloque(tipo: str, texto: str = "", **extra) -> dict:
+    return {"object": "block", "type": tipo, tipo: {"rich_text": _rt(texto), **extra}}
+
+
+def _parrafos_largos(texto: str, tope: int = 95) -> list[dict]:
+    """Un texto largo como párrafos de Notion (cada uno con su límite), cortando donde se pueda entre frases."""
+    salida: list[dict] = []
+    for bloque in re.split(r"\n\s*\n", texto or ""):
+        bloque = bloque.strip()
+        while bloque and len(salida) < tope:
+            if len(bloque) <= NOTION_TEXTO_MAX:
+                trozo, bloque = bloque, ""
+            else:
+                corte = max(bloque.rfind(". ", 0, NOTION_TEXTO_MAX), bloque.rfind(" ", 0, NOTION_TEXTO_MAX))
+                corte = NOTION_TEXTO_MAX if corte < NOTION_TEXTO_MAX // 2 else corte + 1
+                trozo, bloque = bloque[:corte], bloque[corte:].strip()
+            salida.append(_bloque("paragraph", trozo))
+    return salida
+
+
+def _puntos_de_cronica(cronica: str | None) -> list[str]:
+    """Los puntos clave que Eco puso al principio de la crónica (si los hay)."""
+    if not cronica or not cronica.startswith("### Puntos clave"):
+        return []
+    primero = re.split(r"\n\s*\n###", cronica, maxsplit=1)[0]
+    partes = re.split(r"\n\s*\n", primero)[1:]
+    return [p.strip().removeprefix("•").strip() for p in partes if p.strip().startswith("•")]
+
+
+def apuntes_cuaderno(texto: str, tipo: str, nombre: str | None, maximo_temas: int = 14) -> list[dict]:
+    """Apuntes como de cuaderno: temas con frases cortas. [{"titulo": ..., "notas": [...]}]. [] si la IA falla."""
+    usuario = CFG["usuario"]["nombre"]
+    cosa = "clase" if tipo == "clase" else "reunión o conversación"
+    sistema = (
+        f"Eres Eco y tomas apuntes de cuaderno para {usuario} mientras escucha una {cosa}. Escribe como lo haría una "
+        "persona ordenada a mano: por tema, con frases cortas y casi telegráficas (máximo 18 palabras), que se entiendan "
+        "sin haber oído la grabación. Anota lo concreto: definiciones, pasos, cifras, fechas, nombres, acuerdos y quién "
+        "queda a cargo si se dice. Sin relleno ni repeticiones. No inventes nada, ni quién dijo qué (la transcripción no "
+        "separa voces). Nunca escribas contraseñas ni números de tarjeta. Responde solo JSON: "
+        "{\"temas\": [{\"titulo\": \"2 a 6 palabras\", \"notas\": [\"...\", \"...\"]}]}. "
+        "Entre 1 y 3 temas por bloque, con 2 a 5 notas cada uno.")
+    contexto = f"Nombre de la {TIPOS_SESION[tipo].lower()}: {nombre}.\n" if nombre else ""
+    bloques = _bloques(texto)
+    temas: list[dict] = []
+    for i, b in enumerate(bloques, 1):
+        try:
+            r = _json_de(llamar_ia(sistema, f"{contexto}Bloque {i} de {len(bloques)} de la transcripción.\n\n{b}"))
+        except Exception as ex:
+            log.warning("No pude tomar apuntes del bloque %d de %d (%s)", i, len(bloques), ex)
+            continue
+        for t in r.get("temas") or []:
+            if not isinstance(t, dict):
+                continue
+            titulo = re.sub(r"\s+", " ", str(t.get("titulo") or "")).strip()[:80]
+            notas = [re.sub(r"^[\s•\-–*\d.)]+", "", str(n or "")).strip()[:220] for n in (t.get("notas") or [])]
+            notas = [n for n in notas if len(n) >= 6][:5]
+            if not titulo or not notas:
+                continue
+            if temas and temas[-1]["titulo"].lower() == titulo.lower():   # el mismo tema que sigue en el bloque siguiente
+                temas[-1]["notas"] += [n for n in notas if n not in temas[-1]["notas"]]
+            else:
+                temas.append({"titulo": titulo, "notas": notas})
+        log.info("%s · apuntes: bloque %d de %d", TIPOS_SESION[tipo], i, len(bloques))
+    return temas[:maximo_temas]
+
+
+def notion_contenido(cid: int) -> tuple[str, list[dict]]:
+    """El título y los bloques de la página de apuntes de una grabación."""
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        its = items_de(con, cid)
+    if not c:
+        raise NotionError("No encuentro esa grabación.")
+    cfg = CFG.get("notion") or {}
+    tipo = c["origen"] if c["origen"] in TIPOS_SESION else "reunion"
+    ini = datetime.fromisoformat(c["inicio"])
+    titulo = f"{ini.day} {MESES[ini.month - 1][:3]} · {c['titulo'] or TIPOS_SESION[tipo]}"
+    texto = sin_marcas_largas(c["transcripcion"] or "")
+    hay_voz = len(texto.split()) >= 60
+
+    cabeza = [f"{fecha_larga(ini.date()).capitalize()}, {ini:%H:%M}"]
+    if c["duracion"]:
+        minutos = max(1, round(c["duracion"] / 60))
+        cabeza.append(f"{minutos // 60} h {minutos % 60} min" if minutos >= 60 else f"{minutos} min")
+    cabeza.append(TIPOS_SESION[tipo])
+    if c["lugar"]:
+        cabeza.append(f"📍 {c['lugar']}")
+    bloques = [_bloque("callout", " · ".join(cabeza), icon={"type": "emoji", "emoji": "📅"})]
+    if c["resumen"]:
+        bloques += [_bloque("heading_2", "Resumen"), _bloque("paragraph", c["resumen"])]
+
+    puntos = _puntos_de_cronica(c["cronica"])
+    if not puntos and hay_voz:
+        try:
+            puntos = puntos_clave_largo(texto, tipo, None)
+        except Exception as ex:
+            log.warning("No pude sacar los puntos clave para Notion (%s)", ex)
+    if puntos:
+        bloques += [_bloque("heading_2", "Puntos clave")] + [_bloque("bulleted_list_item", p) for p in puntos]
+
+    if hay_voz:
+        apuntes = apuntes_cuaderno(texto, tipo, None)
+        if apuntes:
+            bloques.append(_bloque("heading_2", "Apuntes"))
+            for t in apuntes:
+                bloques.append(_bloque("heading_3", t["titulo"]))
+                bloques += [_bloque("bulleted_list_item", n) for n in t["notas"]]
+
+    tareas = [i for i in its if i["tipo"] == "tarea"]
+    if tareas:
+        bloques.append(_bloque("heading_2", "Para hacer"))
+        for t in tareas:
+            cuando = _cuando_tarea(t)
+            bloques.append(_bloque("to_do", t["texto"] + (f" — {cuando}" if cuando else ""), checked=bool(t["hecho"])))
+    for tipo_item, encabezado in (("dato", "Datos para recordar"), ("idea", "Ideas")):
+        lista = [i for i in its if i["tipo"] == tipo_item]
+        if lista:
+            bloques += [_bloque("heading_2", encabezado)] + [_bloque("bulleted_list_item", i["texto"]) for i in lista]
+
+    if cfg.get("incluir_cronica") and c["cronica"]:
+        hijos: list[dict] = []
+        for b in re.split(r"\n\s*\n", c["cronica"]):
+            b = b.strip()
+            if b.startswith("###"):
+                encabezado, _, resto = b.removeprefix("###").strip().partition("\n")
+                hijos.append(_bloque("heading_3", encabezado))
+                b = resto.strip()
+            hijos += _parrafos_largos(b, 95 - len(hijos)) if b else []
+        bloques.append(_bloque("toggle", "Lo que pasó, contado paso a paso", children=hijos[:95]))
+    if cfg.get("incluir_transcripcion") and c["transcripcion"]:
+        bloques.append(_bloque("toggle", "Transcripción literal", children=_parrafos_largos(c["transcripcion"])))
+    return titulo, bloques
+
+
+def notion_enviar(cid: int, forzar: bool = False) -> str:
+    """Crea la página de apuntes en Notion y devuelve su dirección. Si ya se envió, devuelve la de siempre."""
+    if not notion_activo():
+        raise NotionError("Notion no está conectado: falta [notion] token y destino en config.toml.")
+    previo = estado_get(f"notion:{cid}")
+    if previo and not forzar:
+        return previo
+    titulo, bloques = notion_contenido(cid)
+    parent, propiedad = _notion_destino()
+    pagina = _notion("POST", "/pages", {
+        "parent": parent, "icon": {"type": "emoji", "emoji": "📓"},
+        "properties": {propiedad: {"title": _rt(titulo[:200])}},
+        "children": bloques[:NOTION_BLOQUES_POR_LLAMADA]})
+    url = str(pagina.get("url") or "")
+    estado_set(f"notion:{cid}", url or "enviado")   # desde aquí la página ya existe: no se vuelve a crear sola
+    resto = bloques[NOTION_BLOQUES_POR_LLAMADA:]
+    try:
+        for i in range(0, len(resto), NOTION_BLOQUES_POR_LLAMADA):
+            _notion("PATCH", f"/blocks/{pagina['id']}/children", {"children": resto[i:i + NOTION_BLOQUES_POR_LLAMADA]})
+    except NotionError as ex:
+        raise NotionError(f"La página se creó, pero faltó parte del contenido ({ex}). Ábrela aquí: {url}") from None
+    log.info("Apuntes enviados a Notion: %s", titulo)
+    return url
+
+
+def _notion_en_segundo_plano(cid: int, forzar: bool = False) -> None:
+    """Manda los apuntes a Notion sin detener a Eco (la IA y la red tardan) y te cuenta cómo salió por Telegram."""
+    try:
+        with closing(db()) as con:
+            c = con.execute("SELECT titulo FROM capturas WHERE id=?", (cid,)).fetchone()
+        nombre = e(c["titulo"]) if c else "tu grabación"
+        url = notion_enviar(cid, forzar)
+        enviar_o_guardar(f"📓 Tus apuntes de «{nombre}» ya están en Notion:\n{e(url)}" if url.startswith("http")
+                         else f"📓 Tus apuntes de «{nombre}» ya están en Notion.")
+    except NotionError as ex:
+        log.warning("No pude enviar a Notion: %s", ex)
+        enviar_o_guardar(f"📓 No pude mandar los apuntes a Notion: {e(str(ex))}\nCuando lo arregles, escribe /notion para reintentar.")
+    except Exception:
+        log.exception("Error inesperado enviando a Notion")
+        enviar_o_guardar("📓 No pude mandar los apuntes a Notion (revisa el registro de Eco). Escribe /notion para reintentar.")
+
+
+def notion_telegram(resto: str) -> str:
+    """/notion: manda a Notion la última clase o reunión (o dice dónde quedó). «/notion otra» crea una copia nueva."""
+    if not notion_activo():
+        return ("📓 Notion no está conectado. En config.toml, sección [notion], pon tu token y la dirección de la "
+                "base de datos (README, «Apuntes en Notion»), y reinicia Eco.")
+    with closing(db()) as con:
+        c = con.execute("SELECT id, titulo FROM capturas WHERE origen IN ('reunion','clase') ORDER BY inicio DESC LIMIT 1").fetchone()
+    if not c:
+        return "Todavía no hay ninguna clase o reunión grabada."
+    previo = estado_get(f"notion:{c['id']}")
+    otra = resto.strip().lower() in ("otra", "otra vez", "de nuevo", "copia")
+    if previo and not otra:
+        return (f"📓 «{e(c['titulo'])}» ya está en Notion:\n{e(previo)}\n\n"
+                "Si quieres una copia nueva, escribe <code>/notion otra</code>.")
+    threading.Thread(target=_notion_en_segundo_plano, args=(c["id"], otra), daemon=True).start()
+    return f"📓 Armando tus apuntes de «{e(c['titulo'])}»… te aviso cuando estén en Notion (puede tardar unos minutos)."
 
 
 def revisar_sesiones_abandonadas() -> None:
@@ -4493,6 +4792,7 @@ def api_estado(es_local: bool) -> dict:
         "clase": CLASE.estado() if CLASE is not None else None,
         "clase_tipo": tipo_laptop() if CLASE is not None else None,
         "respaldo": estado_respaldo() if es_local else None,
+        "notion": notion_activo() if es_local else None,
         "google": estado_google() if es_local and google_activo() else None,
         "google_activo": google_activo(), "finanzas": fin_activo(),
         "app": estado_app() if es_local else None,

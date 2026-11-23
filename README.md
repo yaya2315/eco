@@ -313,6 +313,32 @@ Cada vez que GitHub compila una versión nueva de la app, la laptop la baja sola
 - **Panel:** el acceso directo **Eco** o el ícono junto al reloj abren tu panel con todo lo guardado.
 - **Notas en Markdown:** quedan en `servidor/notas/`, una por día más `Pendientes.md`. Si quieres verlas en Obsidian, apunta `carpeta` en `config.toml` a tu bóveda.
 
+## Apuntes en Notion
+
+Eco puede dejar cada reunión (o clase) como una **página de apuntes de cuaderno** en tu Notion: arriba un resumen corto, luego los **puntos clave**, los **apuntes por tema** (frases cortas, como los tomarías a mano), lo que hay que **hacer** (con casillas para marcar), y datos e ideas. Opcionalmente, al final, desplegables con la crónica o la transcripción literal.
+
+**Para conectarlo (una sola vez)**
+
+1. Entra a [notion.so/profile/integrations](https://www.notion.so/profile/integrations) → **Nueva integración** (interna) → copia el **secreto**.
+2. En Notion crea una base de datos para tus reuniones (por ejemplo «Reuniones y clases»). Ábrela, toca **···** → **Conexiones** y añade tu integración.
+3. Copia la dirección de esa base de datos y, en tu `config.toml`, pon:
+
+   ```toml
+   [notion]
+   token = "el secreto que copiaste"
+   destino = "la dirección de la base de datos"
+   ```
+
+4. Reinicia Eco.
+
+El token va **solo en `config.toml`** (no se sube a GitHub y no se lo pegues a nadie en un chat). Lo que se manda a Notion es el resumen, los puntos, los apuntes y las tareas; la crónica y la transcripción solo si activas `incluir_cronica` o `incluir_transcripcion`.
+
+**Cómo funciona**
+
+- Al terminar una **reunión**, Eco arma los apuntes (tarda unos minutos, usa tu IA local) y te avisa por Telegram con el enlace. Para que también se manden las clases: `tipos = ["reunion", "clase"]`.
+- `/notion` en Telegram manda a Notion la última clase o reunión (o te da el enlace si ya está). `/notion otra` crea una copia nueva. Sirve para reintentar si Notion falló o para mandar algo grabado antes.
+- Si algo falla (token, permisos, sin internet), Eco te lo dice por Telegram y no pierde nada: la reunión sigue guardada en Eco.
+
 ## Finanzas: lo que ganas y lo que gastas
 
 Eco también lleva tu dinero. No se conecta a ningún banco ni pide contraseñas: solo guarda lo que tú anotas.

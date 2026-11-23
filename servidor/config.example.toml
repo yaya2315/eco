@@ -80,6 +80,15 @@ tipo_laptop = "clase"           # qué graba por defecto el modo de la laptop: "
 silencio_marca_s = 20           # una pausa de este tiempo o más cuenta como "hubo un silencio"
 marca_hora_s = 120              # cada cuánto se anota la hora para que la IA ubique los momentos
 
+[notion]
+# Apuntes de cuaderno en tu Notion al terminar una reunión (README, «Apuntes en Notion»).
+# El token es un secreto: ponlo solo en tu config.toml (que no se sube a GitHub), nunca en este archivo de ejemplo.
+token = ""                      # "secret_..." o "ntn_...": el secreto de tu integración de Notion
+destino = ""                    # la dirección (o el ID) de la base de datos donde se crean las páginas
+tipos = ["reunion"]             # qué se manda solo al terminar: "reunion", "clase" (con /notion mandas la última a mano)
+incluir_cronica = false         # añadir «lo que pasó» completo, en un desplegable al final
+incluir_transcripcion = false   # añadir la transcripción literal, en un desplegable al final
+
 [respaldo]
 activo = true
 carpeta = ""        # vacío = tu OneDrive\Eco respaldos
