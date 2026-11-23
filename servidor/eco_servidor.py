@@ -6748,9 +6748,13 @@ def arrancar(consola: bool = True) -> ServidorEco:
     prioridad_baja()
     global CLASE
     if CFG["funciones"].get("clases", True):
-        from clase import GrabadoraClase
+        from clase import GrabadoraClase, recuperar_huerfanas
         CLASE = GrabadoraClase(ENTRADA, COLA.put, log,
                                minutos_silencio=int(CFG["sesiones"].get("clase_auto_terminar_min") or 20))
+        try:  # una grabación que se cortó a medias (Windows se reinició) no se pierde: se rescata lo que alcanzó a grabar
+            recuperar_huerfanas(ENTRADA, log)
+        except Exception:
+            log.exception("No pude rescatar grabaciones a medias")
     for f in sorted(ENTRADA.iterdir()):  # lo que quedó pendiente la última vez
         if f.suffix.lower() in EXT_AUDIO + EXT_IMAGEN:
             COLA.put(f)

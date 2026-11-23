@@ -98,41 +98,64 @@ class GrabadoraClase:
             ole32.CoInitializeEx(None, 0)
 
         e = self._estado
-        parte = _Parte(self.entrada, e["clave"], 1)
+        parte = self._nueva_parte(1)
         final_por_silencio = False
+        fallos = 0  # cortes de audio seguidos (cambio de audífonos, Bluetooth, FxSound…)
         try:
             while not self._parar.is_set():
-                altavoz = sc.default_speaker()
-                captura = sc.get_microphone(id=str(altavoz.id), include_loopback=True)
-                self.log.info("Modo clase: escuchando «%s»", altavoz.name)
-                revisado = time.time()
-                with captura.recorder(samplerate=TASA, channels=1, blocksize=TASA // 10) as rec:
-                    while not self._parar.is_set():
-                        bloque = rec.record(numframes=TASA)  # 1 segundo
-                        mono = bloque[:, 0] if bloque.ndim > 1 else bloque
-                        parte.escribir(mono)
+                try:
+                    altavoz = sc.default_speaker()
+                    captura = sc.get_microphone(id=str(altavoz.id), include_loopback=True)
+                    self.log.info("Modo clase: escuchando «%s»", altavoz.name)
+                    revisado = time.time()
+                    with captura.recorder(samplerate=TASA, channels=1, blocksize=TASA // 10) as rec:
+                        while not self._parar.is_set():
+                            bloque = rec.record(numframes=TASA)  # 1 segundo
+                            if fallos:
+                                self.log.info("Modo clase: el audio volvió, sigo grabando")
+                                fallos = 0
+                                self.ultimo_error = None
+                            mono = bloque[:, 0] if bloque.ndim > 1 else bloque
+                            parte.escribir(mono)
 
-                        silencio = float(np.sqrt(np.mean(np.square(mono)))) < UMBRAL_SILENCIO if len(mono) else True
-                        with self._lock:
-                            e["silencio_s"] = e["silencio_s"] + 1 if silencio else 0
-                        if e["silencio_s"] >= self.minutos_silencio * 60:
-                            self.log.info("Modo clase: %d min en silencio, la doy por terminada", self.minutos_silencio)
-                            final_por_silencio = True
-                            self._parar.set()
-                            break
-
-                        if parte.segundos >= self.segundos_parte:
-                            self._entregar(parte, final=False)
+                            silencio = float(np.sqrt(np.mean(np.square(mono)))) < UMBRAL_SILENCIO if len(mono) else True
                             with self._lock:
-                                e["parte"] += 1
-                            parte = _Parte(self.entrada, e["clave"], e["parte"])
-
-                        # Si cambias de audífonos a bocinas, seguimos la salida nueva.
-                        if time.time() - revisado > 30:
-                            revisado = time.time()
-                            if sc.default_speaker().id != altavoz.id:
-                                self.log.info("Modo clase: cambió la salida de audio, la sigo")
+                                e["silencio_s"] = e["silencio_s"] + 1 if silencio else 0
+                            if e["silencio_s"] >= self.minutos_silencio * 60:
+                                self.log.info("Modo clase: %d min en silencio, la doy por terminada", self.minutos_silencio)
+                                final_por_silencio = True
+                                self._parar.set()
                                 break
+
+                            if parte.segundos >= self.segundos_parte:
+                                self._entregar(parte, final=False)
+                                with self._lock:
+                                    e["parte"] += 1
+                                parte = self._nueva_parte(e["parte"])
+
+                            # Si cambias de audífonos a bocinas, seguimos la salida nueva.
+                            if time.time() - revisado > 30:
+                                revisado = time.time()
+                                if sc.default_speaker().id != altavoz.id:
+                                    self.log.info("Modo clase: cambió la salida de audio, la sigo")
+                                    break
+                except Exception as ex:
+                    # Windows reinició o cambió la salida de audio (audífonos Bluetooth, FxSound, una llamada…).
+                    # Eso NO termina la reunión: se espera un poco, se vuelve a abrir la salida y se sigue.
+                    if self._parar.is_set():
+                        break
+                    fallos += 1
+                    espera = min(5, 1 + fallos)
+                    self.ultimo_error = f"El audio se interrumpió ({ex}); sigo intentando."
+                    if fallos <= 3 or fallos % 20 == 0:
+                        self.log.warning("Modo clase: el audio se cortó (%s); reintento %d en %d s", ex, fallos, espera)
+                    with self._lock:  # un audio que nunca vuelve cuenta como silencio: no queda grabando para siempre
+                        e["silencio_s"] += espera
+                    if e["silencio_s"] >= self.minutos_silencio * 60:
+                        self.log.info("Modo clase: el audio no volvió en %d min, la doy por terminada", self.minutos_silencio)
+                        self._parar.set()
+                        break
+                    self._parar.wait(espera)
         except Exception as ex:
             self.ultimo_error = f"Se detuvo la grabación de la clase ({ex})."
             self.log.exception("Modo clase: error grabando")
@@ -143,6 +166,12 @@ class GrabadoraClase:
             self.log.info("Modo clase: terminada (%d partes)", e["parte"])
             if ole32:
                 ole32.CoUninitialize()
+
+    def _nueva_parte(self, n: int) -> "_Parte":
+        e = self._estado
+        return _Parte(self.entrada, e["clave"], n, {"sesion": {
+            "clave": e["clave"], "tipo": e.get("tipo", "clase"), "parte": n, "final": True, "nombre": e.get("nombre")},
+            "app": "eco-laptop"})
 
     def _entregar(self, parte: "_Parte", final: bool) -> None:
         e = self._estado
@@ -156,16 +185,23 @@ class GrabadoraClase:
 class _Parte:
     """Un WAV de hasta 10 min que se escribe mientras se graba."""
 
-    def __init__(self, carpeta: Path, clave: str, n: int):
+    def __init__(self, carpeta: Path, clave: str, n: int, pista: dict | None = None):
         self.n = n
         self.inicio_ms = int(time.time() * 1000)
         self.ruta = carpeta / f"{clave}_p{n:03d}.wav"
         self.tmp = self.ruta.with_name(self.ruta.name + ".part")
+        self.pista = self.tmp.with_name(self.tmp.name + ".json")   # de quién es esta parte, por si Eco muere a medias
         self.muestras = 0
+        self._ultimo_volcado = time.time()
         self._w = wave.open(str(self.tmp), "wb")
         self._w.setnchannels(1)
         self._w.setsampwidth(2)
         self._w.setframerate(TASA)
+        if pista:
+            try:
+                self.pista.write_text(json.dumps(dict(pista, inicio_ms=self.inicio_ms)), encoding="utf-8")
+            except OSError:
+                pass
 
     @property
     def segundos(self) -> float:
@@ -176,6 +212,12 @@ class _Parte:
         datos = (np.clip(mono, -1.0, 1.0) * 32767).astype("<i2")
         self._w.writeframes(datos.tobytes())
         self.muestras += len(datos)
+        if time.time() - self._ultimo_volcado >= 10:  # al disco cada 10 s: si Windows se reinicia, se pierde poco
+            self._ultimo_volcado = time.time()
+            try:
+                self._w._file.flush()
+            except Exception:
+                pass
 
     def recortar_silencio_final(self, segundos: float) -> None:
         """Al terminar por silencio, no mandamos los 20 min de nada al final."""
@@ -195,4 +237,59 @@ class _Parte:
         meta = dict(meta, inicio_ms=self.inicio_ms, duracion_s=round(self.segundos, 2))
         self.ruta.with_suffix(".json").write_text(json.dumps(meta), encoding="utf-8")
         self.tmp.replace(self.ruta)
+        try:
+            self.pista.unlink()
+        except OSError:
+            pass
         return self.ruta
+
+
+def recuperar_huerfanas(entrada: Path, log) -> list[Path]:
+    """Si Eco o Windows murieron a media grabación, queda un «.wav.part» sin cerrar. Al volver a abrir Eco se
+    convierte en un audio normal (con lo que alcanzó a grabarse) y entra a la cola como cualquier parte."""
+    rescatadas: list[Path] = []
+    for tmp in sorted(entrada.glob("*.wav.part")):
+        pista = tmp.with_name(tmp.name + ".json")
+        try:
+            datos = tmp.read_bytes()[44:]
+            muestras = len(datos) // 2
+            if muestras < 3 * TASA:  # menos de 3 s no sirven
+                tmp.unlink(missing_ok=True)
+                pista.unlink(missing_ok=True)
+                continue
+            clave, _, resto = tmp.name[: -len(".wav.part")].rpartition("_p")
+            meta = {}
+            try:
+                meta = json.loads(pista.read_text(encoding="utf-8")) if pista.exists() else {}
+            except (OSError, ValueError):
+                pass
+            ses = dict(meta.get("sesion") or {})
+            if not ses:  # sin pista (grabaciones de antes): se toma lo de otra parte de la misma sesión
+                for hermana in sorted(entrada.glob(f"{clave}_p*.json")):
+                    try:
+                        ses = dict(json.loads(hermana.read_text(encoding="utf-8")).get("sesion") or {})
+                        break
+                    except (OSError, ValueError):
+                        continue
+            ses.update(clave=clave, parte=int(resto or 1), final=True)   # lo último que se grabó: cierra la sesión
+            ses.setdefault("tipo", "clase")
+            duracion = muestras / TASA
+            inicio = int(meta.get("inicio_ms") or (tmp.stat().st_mtime * 1000 - duracion * 1000))
+            destino = tmp.with_name(tmp.name[: -len(".part")])
+            temporal = destino.with_name(destino.name + ".rescate")
+            with wave.open(str(temporal), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(TASA)
+                w.writeframes(datos[: muestras * 2])
+            destino.with_suffix(".json").write_text(json.dumps({
+                "sesion": ses, "app": "eco-laptop", "inicio_ms": inicio, "duracion_s": round(duracion, 2),
+                "rescatada": True}), encoding="utf-8")
+            temporal.replace(destino)   # el .wav aparece al final: Eco nunca ve un audio a medias
+            tmp.unlink(missing_ok=True)
+            pista.unlink(missing_ok=True)
+            rescatadas.append(destino)
+            log.info("Rescaté %s: %.0f s de una grabación que se cortó", destino.name, duracion)
+        except Exception as ex:
+            log.warning("No pude rescatar %s (%s)", tmp.name, ex)
+    return rescatadas
