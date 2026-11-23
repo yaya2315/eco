@@ -114,6 +114,8 @@ DEFAULTS: dict = {
         # Crónica: la IA te cuenta la grabación completa, como una charla, en vez de solo puntos clave.
         "cronica_reunion": True,
         "cronica_clase": False,
+        "puntos_clave": True,            # con crónica, además una lista de puntos clave al principio
+        "tipo_laptop": "clase",          # qué se graba por defecto con el modo clase de la laptop: clase | reunion
         "silencio_marca_s": 20,          # una pausa de este tiempo o más se anota como "[silencio de …]"
         "marca_hora_s": 120,             # cada cuántos segundos se anota la hora en la transcripción
     },
@@ -2442,6 +2444,14 @@ def _clave_segura(clave: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(clave or ""))[:60] or f"s{int(time.time())}"
 
 
+def tipo_laptop() -> str:
+    """Lo que graba el modo de la laptop: lo último que elegiste (panel), o `tipo_laptop` de config.toml."""
+    for t in (estado_get("clase_tipo"), CFG["sesiones"].get("tipo_laptop")):
+        if t in TIPOS_SESION:
+            return t
+    return "clase"
+
+
 def procesar_parte(ruta: Path, meta: dict) -> int | None:
     s = meta["sesion"]
     clave = _clave_segura(s.get("clave"))
@@ -2643,6 +2653,58 @@ def narrar_largo(texto: str, inicio: datetime, tipo: str, nombre: str | None) ->
     return "" if fallos == len(bloques) else "\n\n".join(partes)
 
 
+def _lista_puntos(r: dict) -> list[str]:
+    salida = []
+    for x in r.get("puntos") or []:
+        t = re.sub(r"^[\s•\-–*\d.)]+", "", str(x or "")).strip()
+        if len(t) >= 8 and t.lower() not in (p.lower() for p in salida):
+            salida.append(t[:240])
+    return salida
+
+
+def puntos_clave_largo(texto: str, tipo: str, nombre: str | None, maximo: int = 8) -> list[str]:
+    """Los puntos clave de una grabación larga: por bloques de la transcripción y, si son varios, una pasada
+    final que junta lo importante sin repetir. Si la IA falla devuelve [] (la crónica se entrega igual)."""
+    usuario = CFG["usuario"]["nombre"]
+    cosa = "clase" if tipo == "clase" else "reunión o conversación"
+    sistema = (
+        f"Eres Eco, el asistente de memoria de {usuario}. Lees la transcripción automática de una {cosa} y sacas "
+        "sus PUNTOS CLAVE: lo que de verdad importa recordar (decisiones, acuerdos, compromisos con fecha o responsable, "
+        "cifras, nombres, plazos, dudas que quedaron abiertas y conclusiones). Cada punto es una frase completa y concreta "
+        "de máximo 25 palabras, en español. No repitas puntos, no escribas relleno ni frases como \"se habló de\". "
+        "La transcripción no distingue voces: no inventes quién dijo qué. No inventes nada que no esté. Nunca escribas "
+        "contraseñas ni números de tarjeta. Responde solo JSON: {\"puntos\": [\"...\", \"...\"]}")
+    contexto = f"Nombre de la {TIPOS_SESION[tipo].lower()}: {nombre}.\n" if nombre else ""
+    bloques = _bloques(texto)
+    por_bloque = maximo if len(bloques) == 1 else 4
+    todos: list[str] = []
+    for i, b in enumerate(bloques, 1):
+        try:
+            r = _json_de(llamar_ia(
+                sistema, f"{contexto}Bloque {i} de {len(bloques)}. Da entre 2 y {por_bloque} puntos clave.\n\n{b}"))
+            todos += [t for t in _lista_puntos(r) if t.lower() not in (p.lower() for p in todos)]
+        except Exception as ex:
+            log.warning("No pude sacar los puntos clave del bloque %d de %d (%s)", i, len(bloques), ex)
+        log.info("%s · puntos clave: bloque %d de %d", TIPOS_SESION[tipo], i, len(bloques))
+    if len(bloques) == 1 or len(todos) <= maximo:
+        return todos[:maximo]
+    try:  # una sola pasada para dejar lo más importante de toda la grabación, en el orden en que pasó
+        lista = "\n".join(f"- {t}" for t in todos[:60])
+        r = _json_de(llamar_ia(
+            sistema, f"{contexto}Estos son los puntos clave de cada parte, en orden. Junta los de toda la grabación en "
+                     f"un máximo de {maximo}, sin repetir, conservando el orden y los datos concretos:\n{lista}"))
+        junto = _lista_puntos(r)
+        return junto[:maximo] if junto else todos[:maximo]
+    except Exception as ex:
+        log.warning("No pude juntar los puntos clave (%s); dejo los primeros", ex)
+        return todos[:maximo]
+
+
+def texto_puntos_clave(puntos: list[str]) -> str:
+    """Los puntos como párrafos sueltos: así se ven bien en el panel, en Telegram y en la app."""
+    return "### Puntos clave\n\n" + "\n\n".join(f"• {p}" for p in puntos)
+
+
 def cerrar_sesion(sid: int) -> int:
     with closing(db()) as con, con:
         ses = con.execute("SELECT * FROM sesiones WHERE id=?", (sid,)).fetchone()
@@ -2659,6 +2721,7 @@ def cerrar_sesion(sid: int) -> int:
 
     ia_ok = True
     cronica = None
+    puntos: list[str] = []
     quiere_cronica = bool(CFG["sesiones"].get(f"cronica_{tipo}", tipo == "reunion"))
     limpio = sin_marcas_largas(texto)  # sin "[20:41]" ni "[silencio de …]": así lo analiza la IA de siempre
     if len(limpio.split()) < 20:
@@ -2670,6 +2733,8 @@ def cerrar_sesion(sid: int) -> int:
                 info = extraer_largo(limpio, inicio, lugar, tipo, nombre)
                 if quiere_cronica and len(limpio.split()) >= 60:
                     cronica = narrar_largo(texto, inicio, tipo, nombre) or None
+                    if CFG["sesiones"].get("puntos_clave", True):
+                        puntos = puntos_clave_largo(limpio, tipo, nombre)
         except Exception as ex:
             log.warning("La IA falló con la %s (%s); guardo la transcripción completa", etiqueta.lower(), ex)
             info = normalizar({"titulo": f"{etiqueta} sin analizar",
@@ -2678,6 +2743,8 @@ def cerrar_sesion(sid: int) -> int:
     info["resumen"] = info["resumen"][:1200]
     if ia_ok and quiere_cronica and cronica is None and len(limpio.split()) >= 60:
         info["resumen"] += " (No pude escribir la crónica con la IA; la transcripción literal está en tus notas.)"
+    if puntos:  # van primero: lo más importante a la vista, y la crónica contada debajo
+        cronica = texto_puntos_clave(puntos) + (f"\n\n{cronica}" if cronica else "")
     if nombre and not info["titulo"].lower().startswith(nombre.lower()):
         info["titulo"] = f"{nombre}: {info['titulo']}"[:90]
     if faltan:
@@ -2701,7 +2768,8 @@ def cerrar_sesion(sid: int) -> int:
         for parte in mensajes_cronica(cronica):  # la crónica completa, en uno o varios mensajes
             enviar_o_guardar(parte)
             time.sleep(1.1)  # Telegram limita a ~1 mensaje por segundo en el mismo chat
-    log.info("%s lista: %s%s", etiqueta, info["titulo"], " (con crónica)" if cronica else "")
+    log.info("%s lista: %s%s%s", etiqueta, info["titulo"], " (con crónica)" if cronica else "",
+             f" y {len(puntos)} puntos clave" if puntos else "")
     return cid
 
 
@@ -4423,6 +4491,7 @@ def api_estado(es_local: bool) -> dict:
         "hoy": hoy, "es_local": es_local, "notas": str(NOTAS) if es_local else None,
         "sesiones": sesiones_en_curso(),
         "clase": CLASE.estado() if CLASE is not None else None,
+        "clase_tipo": tipo_laptop() if CLASE is not None else None,
         "respaldo": estado_respaldo() if es_local else None,
         "google": estado_google() if es_local and google_activo() else None,
         "google_activo": google_activo(), "finanzas": fin_activo(),
@@ -6096,7 +6165,9 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 if CLASE is None:
                     return self._json(503, {"ok": False})
                 if datos.get("accion") == "iniciar":
-                    return self._json(200, {"ok": True, "clase": CLASE.iniciar(datos.get("nombre"))})
+                    tipo = datos.get("tipo") if datos.get("tipo") in TIPOS_SESION else tipo_laptop()
+                    estado_set("clase_tipo", tipo)  # el ícono de la bandeja usa lo último que elegiste
+                    return self._json(200, {"ok": True, "clase": CLASE.iniciar(datos.get("nombre"), tipo)})
                 CLASE.terminar(esperar=True)
                 return self._json(200, {"ok": True, "clase": CLASE.estado()})
             if ruta == "/api/respaldo":

@@ -5,6 +5,9 @@ Eco · modo clase
 Graba lo que suena en la laptop (Meet, Zoom, Teams, YouTube…) usando la "captura de
 reproducción" de Windows (loopback WASAPI). No usa el micrófono: solo el audio de la clase.
 
+Se puede grabar como "clase" (tareas, fechas, temas de examen) o como "reunión" (crónica completa, puntos
+clave y acuerdos): es la misma grabación, cambia cómo la analiza Eco al terminar.
+
 La grabación se corta en partes de 10 minutos (16 kHz, mono) que van a la misma cola que los
 audios del teléfono; así Eco transcribe mientras la clase sigue y, al terminar, solo falta la
 última parte. Si la clase lleva mucho rato en silencio, se termina sola.
@@ -54,19 +57,21 @@ class GrabadoraClase:
         return {"grabando": bool(e), "actual": e, "error": self.ultimo_error}
 
     # ── Control ──
-    def iniciar(self, nombre: str | None = None) -> dict:
+    def iniciar(self, nombre: str | None = None, tipo: str = "clase") -> dict:
         if self.activa():
             return self.estado()
         ahora = datetime.now()
         clave = f"clase_{ahora:%Y%m%d_%H%M%S}"
         with self._lock:
             self._estado = {"clave": clave, "nombre": (nombre or "").strip()[:60] or None,
+                            "tipo": "reunion" if tipo == "reunion" else "clase",
                             "inicio_ts": time.time(), "parte": 1, "silencio_s": 0}
         self.ultimo_error = None
         self._parar.clear()
         self._hilo = threading.Thread(target=self._grabar, name="modo-clase", daemon=True)
         self._hilo.start()
-        self.log.info("Modo clase: grabando%s", f" «{nombre}»" if nombre else "")
+        self.log.info("Modo clase: grabando %s%s", "una reunión" if tipo == "reunion" else "una clase",
+                      f" «{nombre}»" if nombre else "")
         return self.estado()
 
     def terminar(self, esperar: bool = True) -> None:
@@ -141,7 +146,7 @@ class GrabadoraClase:
 
     def _entregar(self, parte: "_Parte", final: bool) -> None:
         e = self._estado
-        ruta = parte.cerrar({"sesion": {"clave": e["clave"], "tipo": "clase", "parte": parte.n,
+        ruta = parte.cerrar({"sesion": {"clave": e["clave"], "tipo": e.get("tipo", "clase"), "parte": parte.n,
                                         "final": final, "nombre": e.get("nombre")},
                              "app": "eco-laptop"})
         if ruta:

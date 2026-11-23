@@ -159,7 +159,7 @@ Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 
 ### 9. Modo clase, modo reunión, preguntas y respaldo
 
-**Modo clase (laptop).** Graba lo que suena en la laptop (Meet, Zoom, Teams), no tu micrófono.
+**Modo clase y reunión (laptop).** Graba lo que suena en la laptop (Meet, Zoom, Teams), no tu micrófono. En el panel (y en el ícono de la bandeja) eliges si es una **clase** o una **reunión**, y Eco recuerda lo último que elegiste: una reunión se guarda y se trata igual que la del teléfono (crónica completa, **puntos clave** al principio, acuerdos, tareas, transcripción y Telegram), y aparece en *Ver mis reuniones* de la app. Una clase deja tareas, fechas y temas de examen.
 - Empieza desde el panel (**Grabar la clase**, con nombre opcional) o con clic derecho en el ícono › **Grabar la clase**.
 - Cada 10 minutos Eco transcribe lo grabado; al terminar te manda por Telegram las tareas, fechas y temas de examen.
 - Si pasan 20 minutos en silencio, se termina sola.
@@ -171,7 +171,7 @@ Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 - **Crónica:** al terminar, la IA de la laptop te cuenta toda la reunión como una charla, no como puntos sueltos: un título por tema, todo lo que se habló explicado, los acuerdos y los silencios ("hubo un momento de silencio de casi un minuto"). Eco anota la hora y las pausas de 20 s o más en la transcripción para poder contarlo. Te llega completa por Telegram (después del resumen, en uno o varios mensajes), y queda en `notas/transcripciones/`, en el panel y en el teléfono.
 - **En el teléfono:** cuando la laptop termina de contártela, llega una notificación "Tu reunión ya está lista". Tócala, o despliega **Reuniones y pendientes** y abre **Ver mis reuniones**, para leerla y compartirla. La lista y la crónica se piden a la laptop, así que necesitas estar en tu red o en Tailscale.
 - **Pendientes en el teléfono:** en la pantalla de Eco, despliega **Reuniones y pendientes** y toca **Ver mis pendientes**: muestra lo mismo que la columna Pendientes del panel, agrupado en Vencidos, Hoy, Próximos y Sin fecha. Toca una tarea para marcarla (o desmarcarla) y usa la caja de arriba para agregar una, con fecha y hora si quieres. También se pide a la laptop: necesitas tu red o Tailscale.
-- En `config.toml`, sección `[sesiones]`: `cronica_reunion` (por defecto `true`), `cronica_clase` (`false`), `silencio_marca_s` (20) y `marca_hora_s` (120). Cuesta más IA que un resumen: una reunión de una hora son varias llamadas largas.
+- En `config.toml`, sección `[sesiones]`: `cronica_reunion` (por defecto `true`), `cronica_clase` (`false`), `puntos_clave` (`true`: una lista de puntos clave antes de la crónica), `tipo_laptop` (`"clase"` o `"reunion"`: lo que graba la laptop si no eliges), `silencio_marca_s` (20) y `marca_hora_s` (120). Cuesta más IA que un resumen: una reunión de una hora son varias llamadas largas.
 
 **Pregúntale a Eco.**
 - En Telegram, escribe una pregunta con signo de interrogación: *¿Qué dejó de tarea el profe de física?*

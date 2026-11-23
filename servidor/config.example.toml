@@ -75,6 +75,8 @@ clase_auto_terminar_min = 20    # la clase se termina sola tras este tiempo en s
 # Cuesta más IA que un resumen: una reunión de una hora son varias llamadas largas.
 cronica_reunion = true
 cronica_clase = false
+puntos_clave = true             # con crónica, además una lista de puntos clave al principio
+tipo_laptop = "clase"           # qué graba por defecto el modo de la laptop: "clase" o "reunion" (el panel recuerda lo último que elegiste)
 silencio_marca_s = 20           # una pausa de este tiempo o más cuenta como "hubo un silencio"
 marca_hora_s = 120              # cada cuánto se anota la hora para que la IA ubique los momentos
 

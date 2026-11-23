@@ -956,11 +956,15 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6
 
     <aside class="col col-lateral lateral" aria-label="Clase, Google y estado de Eco">
       <section class="panel clase-panel" id="clase" aria-labelledby="clase-titulo" hidden>
-        <h3 class="seccion-titulo" id="clase-titulo">Modo clase</h3>
+        <h3 class="seccion-titulo" id="clase-titulo">Clase o reunión</h3>
         <div id="clase-libre">
-          <p>Graba lo que suena en esta laptop (Meet, Zoom, Teams), no tu micrófono. Al terminar, Eco te deja las tareas, fechas y temas de examen.</p>
-          <label for="clase-nombre" class="oculto">Nombre de la clase</label>
-          <input id="clase-nombre" type="text" placeholder="Nombre de la clase (opcional), p. ej. Física" maxlength="60" autocomplete="off">
+          <div class="modos" id="clase-tipo" role="group" aria-label="Qué vas a grabar">
+            <button type="button" data-clase-tipo="clase" aria-pressed="true">Clase</button>
+            <button type="button" data-clase-tipo="reunion" aria-pressed="false">Reunión</button>
+          </div>
+          <p id="clase-ayuda">Graba lo que suena en esta laptop (Meet, Zoom, Teams), no tu micrófono. Al terminar, Eco te deja las tareas, fechas y temas de examen.</p>
+          <label for="clase-nombre" class="oculto">Nombre de la grabación</label>
+          <input id="clase-nombre" type="text" placeholder="Nombre de la clase (opcional)" maxlength="60" autocomplete="off">
           <button class="boton-principal" type="button" id="clase-iniciar">Grabar la clase</button>
         </div>
         <div id="clase-activa" hidden>
@@ -1505,11 +1509,34 @@ $("cerrar-qr").addEventListener("click", () => $("conectar").close());
 $("visor-cerrar").addEventListener("click", () => $("visor").close());
 $("visor").addEventListener("click", (ev) => { if (ev.target === $("visor")) $("visor").close(); });
 
+// Clase o reunión: se acuerda de lo último que elegiste (la laptop también, para el ícono de la bandeja).
+function ponerTipoClase() {
+  const reunion = ui.claseTipo === "reunion";
+  for (const b of document.querySelectorAll("#clase-tipo [data-clase-tipo]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.claseTipo === (reunion ? "reunion" : "clase")));
+  }
+  $("clase-iniciar").textContent = reunion ? "Grabar la reunión" : "Grabar la clase";
+  $("clase-nombre").placeholder = reunion ? "Nombre de la reunión (opcional)" : "Nombre de la clase (opcional)";
+  $("clase-ayuda").textContent = "Graba lo que suena en esta laptop (Meet, Zoom, Teams), no tu micrófono. " + (reunion
+    ? "Al terminar, Eco te cuenta la reunión completa, con los puntos clave, los acuerdos y las tareas."
+    : "Al terminar, Eco te deja las tareas, fechas y temas de examen.");
+}
+$("clase-tipo").addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-clase-tipo]");
+  if (!b) return;
+  ui.claseTipo = b.dataset.claseTipo;
+  ponerTipoClase();
+});
+
 function pintarClase(e) {
   const caja = $("clase");
   caja.hidden = !e.es_local || !e.clase;
   if (caja.hidden) return;
   const c = e.clase;
+  if (!ui.claseTipo) ui.claseTipo = e.clase_tipo === "reunion" ? "reunion" : "clase";   // solo la primera vez
+  ponerTipoClase();
+  const esReunion = c.grabando && c.actual?.tipo === "reunion";
+  $("clase-terminar").textContent = esReunion ? "Terminar la reunión" : "Terminar la clase";
   $("clase-libre").hidden = c.grabando;
   $("clase-activa").hidden = !c.grabando;
   $("clase-error").hidden = !c.error;
@@ -1519,7 +1546,7 @@ function pintarClase(e) {
     $("clase-tiempo").textContent = s >= 3600
       ? `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
       : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-    $("clase-detalle").textContent = `${a.nombre ? "Clase de " + a.nombre + ". " : ""}Parte ${a.parte}: cada 10 minutos Eco va transcribiendo lo grabado.` +
+    $("clase-detalle").textContent = `${a.nombre ? (a.tipo === "reunion" ? "Reunión: " : "Clase de ") + a.nombre + ". " : ""}Parte ${a.parte}: cada 10 minutos Eco va transcribiendo lo grabado.` +
       (a.silencio_s > 120 ? ` Lleva ${Math.round(a.silencio_s / 60)} min en silencio; si llega a 20, se termina sola.` : "");
   }
 }
@@ -2283,7 +2310,10 @@ async function irAMomento(id, fecha) {
 
 async function accionClase(accion) {
   const datos = { accion };
-  if (accion === "iniciar") datos.nombre = $("clase-nombre").value.trim();
+  if (accion === "iniciar") {
+    datos.nombre = $("clase-nombre").value.trim();
+    datos.tipo = ui.claseTipo === "reunion" ? "reunion" : "clase";
+  }
   $("clase-iniciar").disabled = $("clase-terminar").disabled = true;
   try {
     await api("/api/clase", { method: "POST", headers: { "Content-Type": "application/json", "X-Eco-Panel": "1" }, body: JSON.stringify(datos) });

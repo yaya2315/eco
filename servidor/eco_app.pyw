@@ -100,7 +100,7 @@ def main() -> None:
 
     def texto_estado(item):
         if eco.CLASE is not None and eco.CLASE.activa():
-            return "Grabando la clase…"
+            return "Grabando la reunión…" if eco.CLASE.estado()["actual"].get("tipo") == "reunion" else "Grabando la clase…"
         if eco.ESTADO.get("procesando") or eco.COLA.qsize():
             return f"Eco{de_quien}: procesando…" if eco.PERFIL else "Procesando…"
         return f"Eco{de_quien}: recibiendo momentos" if eco.PERFIL else "Recibiendo momentos"
@@ -108,17 +108,21 @@ def main() -> None:
     def texto_clase(item):
         e = eco.CLASE.estado() if eco.CLASE is not None else {"grabando": False}
         if e["grabando"]:
-            return f"Terminar la clase ({e['actual']['segundos'] // 60} min)"
-        return "Grabar la clase"
+            cosa = "la reunión" if e["actual"].get("tipo") == "reunion" else "la clase"
+            return f"Terminar {cosa} ({e['actual']['segundos'] // 60} min)"
+        return "Grabar la reunión" if eco.tipo_laptop() == "reunion" else "Grabar la clase"
 
     def alternar_clase(icon, item=None):
         def hacer():
             if eco.CLASE.activa():
+                cosa = "reunión" if eco.CLASE.estado()["actual"].get("tipo") == "reunion" else "clase"
                 eco.CLASE.terminar(esperar=True)
-                icon.notify("Listo. Eco está analizando la clase; te aviso por Telegram.", "Clase terminada")
+                icon.notify(f"Listo. Eco está analizando la {cosa}; te aviso por Telegram.", f"{cosa.capitalize()} terminada")
             else:
-                eco.CLASE.iniciar()
-                icon.notify("Eco graba lo que suena en la laptop hasta que la termines.", "Grabando la clase")
+                tipo = eco.tipo_laptop()
+                eco.CLASE.iniciar(tipo=tipo)
+                icon.notify("Eco graba lo que suena en la laptop hasta que lo termines.",
+                            "Grabando la reunión" if tipo == "reunion" else "Grabando la clase")
             icon.update_menu()
         threading.Thread(target=hacer, daemon=True).start()
 
