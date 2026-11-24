@@ -80,6 +80,9 @@ DEFAULTS: dict = {
         "palabras": [],
         # Minutos sin usarlo para sacarlo de la memoria (0 = siempre listo). Útil con varios perfiles.
         "liberar_min": 0,
+        # Pedazos que el modelo preciso transcribe a la vez (por lotes): en la CPU es bastante más rápido y el texto
+        # sale igual de bueno. 0 o 1 = uno por uno, como antes. Más alto = un poco más rápido y más memoria.
+        "lote": 4,
     },
     "ia": {
         "proveedor": "claude",
@@ -889,6 +892,39 @@ def _en_multimedia(ini_s: float, fin_s: float, base_ms: float, tramos: list[tupl
     return dentro / largo >= 0.5
 
 
+# Muletillas sueltas ("eh", "em", "mmm") y una palabra repetida pegada ("para para", "esa esa"): Whisper por lotes
+# las escribe tal cual se oyen. Se quitan para que la transcripción se lea bien; el sentido no cambia.
+_RE_MULETILLA = re.compile(r"(?<![\wáéíóúñ])(?:eh+|ehm+|em+|mm+|hmm+)(?![\wáéíóúñ])[,.]?\s*", re.I)
+_RE_REPETIDA = re.compile(r"\b(\w{2,})(?:,?\s+\1\b)+", re.I)
+
+
+def _sin_muletillas(texto: str) -> str:
+    t = _RE_MULETILLA.sub("", texto or "")
+    t = _RE_REPETIDA.sub(r"\1", t)
+    return re.sub(r"\s{2,}", " ", t).strip()
+
+
+_lotes: dict = {}   # modelo → su versión "por lotes" (BatchedInferencePipeline)
+_sin_lotes: set[str] = set()   # modelos con los que los lotes fallaron: van uno por uno
+
+
+def _transcribir_con(modelo, nombre: str, audio, beam: int, w: dict):
+    """Transcribe por lotes (varios pedazos a la vez: en la CPU es mucho más rápido) o uno por uno."""
+    comunes = dict(language=w.get("idioma") or None, beam_size=beam, vad_filter=True,
+                   condition_on_previous_text=False, hotwords=vocabulario() or None)
+    lote = int(w.get("lote") or 0)
+    if lote > 1 and nombre not in _sin_lotes and nombre != str(w.get("modelo")):
+        try:
+            if nombre not in _lotes:
+                from faster_whisper import BatchedInferencePipeline
+                _lotes[nombre] = BatchedInferencePipeline(model=modelo)
+            return _lotes[nombre].transcribe(audio, batch_size=lote, **comunes)
+        except Exception as ex:
+            _sin_lotes.add(nombre)
+            log.warning("Whisper por lotes no funcionó (%s); sigo uno por uno", ex)
+    return modelo.transcribe(audio, **comunes)
+
+
 def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None = None,
                 base_ms: float | None = None, multimedia: list[tuple[float, float]] | None = None,
                 stats: dict | None = None) -> str:
@@ -912,11 +948,8 @@ def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None 
         audio = leer_audio(ruta)
         if not isinstance(audio, str) and len(audio) < 1600:  # menos de 0.1 s: nada que escuchar
             return ""
-        segmentos, _info = modelo.transcribe(
-            audio, language=w.get("idioma") or None, beam_size=beam,
-            vad_filter=True, condition_on_previous_text=False,
-            hotwords=vocabulario() or None,
-        )
+        _ceder_a_la_ia()
+        segmentos, _info = _transcribir_con(modelo, nombre, audio, beam, w)
         partes: list[str] = []
         marcado = toque_s is None or toque_s <= 3
         con_marcas = inicio_ms is not None
@@ -925,6 +958,7 @@ def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None 
         ultimo_fin, ultima_hora = 0.0, None
         quitados, en_video = 0, False
         for seg in segmentos:
+            _ceder_a_la_ia()   # si la IA está respondiendo algo, el siguiente pedazo espera
             if not _segmento_valido(seg):
                 continue
             if multimedia and base_ms is not None and _en_multimedia(seg.start, seg.end, base_ms, multimedia):
@@ -946,7 +980,9 @@ def transcribir(ruta: Path, toque_s: float | None = None, inicio_ms: int | None 
             if not marcado and seg.end > toque_s:  # el primer pedazo que llega hasta el toque o después
                 partes.append(MARCA_TOQUE)
                 marcado = True
-            partes.append(seg.text.strip())
+            texto_seg = _sin_muletillas(seg.text)
+            if texto_seg:
+                partes.append(texto_seg)
         if not marcado and partes:
             partes.append(MARCA_TOQUE)  # tocaste al final: todo lo dicho fue antes
         if con_marcas and umbral:  # lo que queda callado hasta el final de esta parte
@@ -1013,6 +1049,7 @@ def liberar_whisper_hilo() -> None:
         with _whisper_lock:
             if _modelos and time.time() - _whisper_uso["t"] >= minutos * 60:
                 _modelos.clear()
+                _lotes.clear()
                 import gc
                 gc.collect()
                 log.info("Saqué Whisper de la memoria (sin usarlo en %g min)", minutos)
@@ -1359,10 +1396,39 @@ def _llamar_ollama(sistema: str, usuario: str, json_mode: bool = True, max_token
     return re.sub(r"<think>.*?</think>", "", respuesta or "", flags=re.S).strip()
 
 
+# La IA local y Whisper compiten por lo mismo (los 4 núcleos y la memoria, que en esta laptop es de un solo canal):
+# juntos, cada uno va a menos de la mitad. Por eso, mientras la IA responde algo, Whisper hace una pausa entre un
+# pedazo y otro, y sigue apenas la IA termina. Lo que esperas tú (una pregunta, el chat) sale mucho antes.
+_ia_ocupada = {"n": 0}
+_ia_cond = threading.Condition()
+IA_PAUSA_MAX_S = 600   # una pausa nunca dura más que esto (si la IA se colgara, Whisper sigue igual)
+
+
+@contextmanager
+def _ia_en_curso():
+    with _ia_cond:
+        _ia_ocupada["n"] += 1
+    try:
+        yield
+    finally:
+        with _ia_cond:
+            _ia_ocupada["n"] -= 1
+            _ia_cond.notify_all()
+
+
+def _ceder_a_la_ia() -> None:
+    """Whisper llama a esto entre pedazos: si la IA local está respondiendo, espera a que termine."""
+    if str(CFG["ia"].get("proveedor", "claude")).lower() != "ollama":
+        return   # con Claude la IA corre en internet: no le quita nada a la laptop
+    with _ia_cond:
+        _ia_cond.wait_for(lambda: _ia_ocupada["n"] == 0, timeout=IA_PAUSA_MAX_S)
+
+
 def llamar_ia(sistema: str, usuario: str, json_mode: bool = True, max_tokens: int | None = None) -> str:
     proveedor = str(CFG["ia"].get("proveedor", "claude")).lower()
     llamar = _llamar_ollama if proveedor == "ollama" else _llamar_claude
-    return llamar(sistema, usuario, json_mode, max_tokens)
+    with _ia_en_curso():
+        return llamar(sistema, usuario, json_mode, max_tokens)
 
 
 def extraer(texto: str, cuando: datetime, lugar: str | None, origen: str = "audio",
@@ -3081,6 +3147,24 @@ def notion_enviar(cid: int, forzar: bool = False) -> str:
 
 def _notion_en_segundo_plano(cid: int, forzar: bool = False) -> None:
     """Manda los apuntes a Notion sin detener a Eco (la IA y la red tardan) y te cuenta cómo salió por Telegram."""
+    with _de_fondo():
+        _notion_enviar_y_avisar(cid, forzar)
+
+
+_fondo = {"n": 0}
+
+
+@contextmanager
+def _de_fondo():
+    """Algo que Eco hace aparte de la cola (apuntes de Notion, una respuesta del chat): /api/estado lo cuenta."""
+    _fondo["n"] += 1
+    try:
+        yield
+    finally:
+        _fondo["n"] -= 1
+
+
+def _notion_enviar_y_avisar(cid: int, forzar: bool) -> None:
     try:
         with closing(db()) as con:
             c = con.execute("SELECT titulo FROM capturas WHERE id=?", (cid,)).fetchone()
@@ -3986,7 +4070,7 @@ def chat_preguntar(cid: int, pregunta: str) -> dict:
 def _chat_responder(cid: int, mid: int, pregunta: str) -> None:
     t0 = time.time()
     try:
-        with _chat_lock:
+        with _de_fondo(), _chat_lock:
             texto, citas = responder_en_reunion(cid, pregunta, antes_de=mid)
         estado = "listo"
         log.info("Chat: respondí una pregunta sobre la grabación #%d en %.0f s", cid, time.time() - t0)
@@ -5184,6 +5268,7 @@ def api_estado(es_local: bool) -> dict:
     return {
         "ok": True, "inicio": ESTADO["inicio"], "ultimo_audio": ESTADO["ultimo_audio"],
         "procesando": ESTADO["procesando"], "en_cola": COLA.qsize(),
+        "de_fondo": _fondo["n"],   # apuntes de Notion o respuestas del chat que se están haciendo aparte
         "direccion_fija": f"{fija}:{puerto}" if fija else None,
         "direccion_wifi": f"{ip_local()}:{puerto}",
         "ia": f"{ia['proveedor']} · {modelo_chat() if ia['proveedor'] == 'ollama' else ia['claude_modelo']}",

@@ -500,6 +500,19 @@ La app se le actualiza sola, igual que la tuya: tu Eco baja cada versión de Git
 - Tus contactos de emergencia viven **solo en el teléfono**; la laptop no los conoce. Eco no lee tu agenda: solo el contacto que tú eliges.
 - Las demás personas no saben que Eco está escuchando. Grabarlas sin que sepan puede ser ilegal y, en el colegio, ir contra las normas. Lo más sano es usarlo para tus propias cosas, avisar cuando guardas algo de una conversación y pausarlo donde no corresponde.
 
+## Velocidad: por qué tarda y qué hace Eco para ir más rápido
+
+Todo corre en tu laptop, gratis y sin mandar tus grabaciones a nadie. El precio es el tiempo: Whisper y la IA usan el procesador (no hay tarjeta de video) y la **memoria RAM**, y en esta laptop la memoria es de un solo canal (una sola tarjeta de 16 GB), lo que deja a la IA escribiendo más o menos palabra y media por segundo.
+
+**Lo que Eco ya hace solo:**
+- **Whisper por lotes** (`[whisper] lote = 4`): transcribe varios pedazos a la vez. Medido con tu grabación: unas **2 veces más rápido**, con el mismo contenido. Además quita muletillas sueltas («eh», «mmm») y palabras repetidas pegadas («para para»).
+- **La IA tiene prioridad:** mientras la IA responde algo (una pregunta en el chat, el análisis de una reunión, los apuntes de Notion), Whisper hace una pausa entre un pedazo y otro y sigue apenas termina. Juntos se estorbaban y cada uno iba a menos de la mitad.
+- **El chat lee poco:** a la IA de la laptop solo le pasa las notas cortas y los pedazos de la transcripción que hablan de tu pregunta.
+
+**Lo que más ayudaría (tú decides):**
+- **Una segunda tarjeta de memoria** igual a la que tienes (DDR4 SODIMM 2666) pone la memoria en doble canal: la IA escribe casi al doble de rápido. Revisa primero si tu laptop tiene una ranura libre.
+- **Dejarla enchufada** mientras transcribe: con batería el procesador va más lento.
+
 ## Problemas comunes
 
 | Pasa esto | Prueba esto |

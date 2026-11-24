@@ -29,6 +29,9 @@ siempre = false
 # Nombres o palabras raras que dices seguido (Eco ya usa tus clases y los nombres que anotó).
 palabras = []   # por ejemplo ["Steven", "Market Conexión", "Tinkercad"]
 liberar_min = 0 # minutos sin audios para sacar Whisper de la memoria (0 = siempre listo)
+# Pedazos que el modelo preciso transcribe a la vez. En la CPU es mucho más rápido (medido: unas 2 veces) y el
+# texto sale igual de bueno. 0 o 1 = uno por uno, como antes. 8 = un poco más rápido pero usa más memoria.
+lote = 4
 
 [ia]
 # "claude" (mejor calidad, necesita internet y una API key)
