@@ -89,6 +89,11 @@ tipos = ["reunion"]             # qué se manda solo al terminar: "reunion", "cl
 incluir_cronica = false         # añadir «lo que pasó» completo, en un desplegable al final
 incluir_transcripcion = false   # añadir la transcripción literal, en un desplegable al final
 
+[chat]
+# Preguntarle a una reunión o clase, en el panel (apartado Reuniones) y en la app (README, «Pregúntale a una reunión o clase»).
+activo = true
+fragmentos = 3                  # pedazos de la transcripción que lee por pregunta (2 a 10): más = más contexto, más lento
+
 [respaldo]
 activo = true
 carpeta = ""        # vacío = tu OneDrive\Eco respaldos

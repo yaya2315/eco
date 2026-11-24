@@ -127,6 +127,11 @@ DEFAULTS: dict = {
         "incluir_cronica": False,       # añadir «lo que pasó» completo en un desplegable
         "incluir_transcripcion": False,  # añadir la transcripción literal en un desplegable
     },
+    "chat": {
+        # Preguntarle a una reunión o clase (panel y app): Eco busca en su transcripción y te responde directo.
+        "activo": True,
+        "fragmentos": 3,                # pedazos de la transcripción que lee por pregunta (2 a 10; más = más lento)
+    },
     "respaldo": {
         "activo": True,
         "carpeta": "",      # vacío = OneDrive\Eco respaldos
@@ -485,6 +490,16 @@ CREATE TABLE IF NOT EXISTS vectores (     -- "significado" de cada pedazo, para 
     modelo        TEXT,
     PRIMARY KEY (captura_id, n)
 );
+CREATE TABLE IF NOT EXISTS chat_mensajes (  -- lo que le preguntaste a una reunión o clase, y sus respuestas
+    id            INTEGER PRIMARY KEY,
+    captura_id    INTEGER NOT NULL,
+    rol           TEXT NOT NULL,           -- 'yo' (tu pregunta) | 'eco' (la respuesta)
+    texto         TEXT NOT NULL DEFAULT '',
+    estado        TEXT NOT NULL DEFAULT 'listo',   -- 'pensando' | 'listo' | 'error'
+    citas         TEXT,                    -- JSON [{"hora": "21:31", "texto": "…"}]: de dónde salió la respuesta
+    creado        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_por_captura ON chat_mensajes(captura_id, id);
 CREATE TABLE IF NOT EXISTS fin_cuentas (  -- finanzas: Personal, Empresa… (solo separan lo que anotas)
     id            INTEGER PRIMARY KEY,
     nombre        TEXT NOT NULL,
@@ -3613,6 +3628,388 @@ def es_pregunta(texto: str) -> bool:
     return t.endswith("?") or t.startswith("¿")
 
 
+# ════════════════════════════ Chat con una reunión o clase ════════════════════════════
+# Eliges una reunión o clase y le preguntas lo que sea, tal como te lo preguntaron a ti. Eco busca en TODA la
+# transcripción los pedazos donde se habló de eso (por significado y por palabras), los junta con el resumen, los
+# puntos clave y la crónica, y te responde directo, listo para decirlo. La conversación queda guardada en la laptop:
+# la ves igual en el panel y en la app del teléfono.
+
+CHAT_TIPOS = ("reunion", "clase")
+CHAT_PALABRAS_TROZO = 120   # los mismos pedazos que "pregúntale a Eco": así se reusan sus vectores ya calculados
+# Con Ollama en la CPU, cada palabra que la IA lee cuesta tiempo (medido en la laptop: unas 5 por segundo mientras
+# Whisper transcribe). Por eso a la IA local se le pasa lo justo: notas cortas + los pedazos que hablan de la pregunta.
+CHAT_ENTERA_MAX = 2500      # una transcripción así de corta va completa; una larga, solo los pedazos que importan
+CHAT_HISTORIAL = 2          # mensajes anteriores que recuerda (para "¿y eso cuándo?")
+_chat_activos: set[int] = set()   # respuestas en camino; un "pensando" que no está aquí quedó de antes de reiniciar
+_chat_lock = threading.Lock()     # una pregunta a la vez: en CPU, dos juntas tardan más que una tras otra
+_RE_MARCA_HORA = re.compile(r"^\[(\d{1,2}:\d{2})\]$")
+_PALABRAS_VACIAS = set(
+    "que con por para una uno unos unas los las del como pero mas este esta estos estas ese esa eso esos esas "
+    "aqui alli donde cuando cual cuales quien quienes cuanto cuanta cuantos cuantas sobre entre hasta desde muy "
+    "tambien todo toda todos todas nada algo alguien ser estar hay fue era son eran sea han hemos habia tiene "
+    "tienen tenia hace hizo dijo dice dijeron decir sus nos les lea leer dime digame explicame cuentame sabes "
+    "puedes podria quiero queria pregunta respuesta reunion clase grabacion eco hablo hablaron hablamos tema".split())
+
+
+class ChatOcupado(Exception):
+    """Ya hay una respuesta en camino para esa misma grabación."""
+
+
+def chat_activo() -> bool:
+    return bool((CFG.get("chat") or {}).get("activo", True))
+
+
+def _dur_humana(seg: float | None) -> str:
+    minutos = max(1, round((seg or 0) / 60))
+    return f"{minutos // 60} h {minutos % 60} min".replace(" 0 min", "") if minutos >= 60 else f"{minutos} min"
+
+
+def _trozos_con_hora(transcripcion: str) -> list[tuple[str | None, str]]:
+    """La transcripción en pedazos de 120 palabras (iguales a los de "pregúntale a Eco"), cada uno con la hora en
+    que empieza según las marcas «[21:31]»."""
+    palabras = (transcripcion or "").split()
+    trozos: list[tuple[str | None, str]] = []
+    hora = None
+    for i in range(0, len(palabras), CHAT_PALABRAS_TROZO):
+        grupo = palabras[i:i + CHAT_PALABRAS_TROZO]
+        inicio = hora
+        for p in grupo:
+            m = _RE_MARCA_HORA.match(p)
+            if m:
+                inicio = inicio or m.group(1)
+                hora = m.group(1)
+        trozos.append((inicio, " ".join(grupo)))
+    return trozos
+
+
+def _raices(texto: str) -> set[str]:
+    """Las palabras que importan, sin acentos y recortadas (así «campamentos» encuentra «campamento»)."""
+    return {w[:6] for w in re.findall(r"[a-z0-9]+", _sin_acentos(texto)) if len(w) > 2 and w not in _PALABRAS_VACIAS}
+
+
+def _puntaje_palabras(consulta: str, textos: list[str]) -> list[float]:
+    """Qué tanto se parece cada pedazo a la pregunta por las palabras que comparten (las raras pesan más)."""
+    buscadas = _raices(consulta)
+    if not buscadas or not textos:
+        return [0.0] * len(textos)
+    conjuntos = [_raices(t) for t in textos]
+    n = len(textos)
+    # Las palabras raras pesan más; una que no aparece en ningún pedazo cuenta como común (no dice nada).
+    pesos = {w: math.log(1 + n / (1 + (sum(1 for c in conjuntos if w in c) or n))) for w in buscadas}
+    total = sum(pesos.values()) or 1.0
+    return [sum(p for w, p in pesos.items() if w in c) / total for c in conjuntos]
+
+
+def _puntaje_significado(cid: int, consulta: str, textos: list[str]) -> list[float] | None:
+    """Qué tanto habla cada pedazo de lo mismo que la pregunta, aunque use otras palabras. Reusa los vectores que
+    Eco ya calculó para "pregúntale a Eco"; si faltan, los calcula ahora. None = sin modelo de significado."""
+    if not _modelo_embed() or not textos:
+        return None
+    import numpy as np
+
+    def guardados() -> dict:
+        with closing(db()) as con:
+            filas = con.execute("SELECT texto, vector FROM vectores WHERE captura_id=? AND modelo=?",
+                                (cid, _modelo_embed())).fetchall()
+        return {f["texto"]: np.frombuffer(f["vector"], dtype=np.float32) for f in filas}
+
+    try:
+        hay = guardados()
+        if sum(1 for t in textos if t in hay) < min(len(textos), 300) * 0.9:
+            vectorizar(cid)   # se guardó antes de tener el modelo, o se editó
+            hay = guardados()
+        q = np.asarray(embeber([consulta], consulta=True)[0], dtype=np.float32)
+        q /= (np.linalg.norm(q) or 1.0)
+        return [float(hay[t] @ q) if t in hay and hay[t].shape == q.shape else 0.0 for t in textos]
+    except Exception as ex:
+        log.info("Chat: sin búsqueda por significado (%s); busco por palabras", ex)
+        return None
+
+
+def _elegir_trozos(cid: int, consulta: str, trozos: list[tuple[str | None, str]], cuantos: int) -> list[int]:
+    textos = [t for _, t in trozos]
+    palabras = _puntaje_palabras(consulta, textos)
+    significado = _puntaje_significado(cid, consulta, textos)
+    if significado is None:
+        puntaje = palabras
+        minimo = 0.15
+    else:
+        puntaje = [s + 0.35 * p for s, p in zip(significado, palabras)]
+        minimo = 0.25
+    orden = [i for i in sorted(range(len(textos)), key=lambda i: -puntaje[i]) if puntaje[i] >= minimo]
+    elegidos = set(orden[:cuantos])
+    if orden and orden[0] + 1 < len(textos):
+        elegidos.add(orden[0] + 1)   # muchas respuestas se terminan de decir en el pedazo siguiente
+    return sorted(elegidos)
+
+
+def _ia_ligera() -> bool:
+    """True con Ollama (en la laptop): hay que darle poco que leer. Con Claude (en internet) cabe todo."""
+    return str(CFG["ia"].get("proveedor", "claude")).lower() == "ollama"
+
+
+def _recortar(texto: str, maximo: int) -> str:
+    texto = (texto or "").strip()
+    return texto if len(texto) <= maximo else texto[:maximo].rsplit(" ", 1)[0] + "…"
+
+
+def _secciones_cronica(cronica: str | None) -> tuple[str, list[tuple[str, str]]]:
+    """La crónica partida: (los puntos clave, [(título del tema, lo que se contó)])."""
+    puntos, temas = "", []
+    for bloque in re.split(r"\n(?=###\s)", "\n" + (cronica or "")):
+        bloque = bloque.strip()
+        if not bloque:
+            continue
+        titulo, _, cuerpo = bloque.removeprefix("###").strip().partition("\n")
+        if titulo.lower().startswith("puntos clave"):
+            puntos = cuerpo.strip()
+        elif cuerpo.strip():
+            temas.append((titulo.strip(), cuerpo.strip()))
+        elif not bloque.startswith("###"):
+            temas.append(("", bloque))
+    return puntos, temas
+
+
+def _chat_ficha(c, its) -> str:
+    """Lo que siempre lee: de qué fue, el resumen, los puntos clave y lo que quedó por hacer. Con la IA local va
+    corto (la crónica completa se busca aparte, solo el tema que importa)."""
+    ligera = _ia_ligera()
+    ini = datetime.fromisoformat(c["inicio"])
+    tipo = TIPOS_SESION.get(c["origen"], "Reunión").lower()
+    partes = [f"Título: {c['titulo']}",
+              f"Fecha: {fecha_larga(ini.date())}; empezó a las {ini:%H:%M} y duró {_dur_humana(c['duracion'])}."]
+    if c["lugar"]:
+        partes.append(f"Lugar: {c['lugar']}")
+    if c["resumen"]:
+        partes.append(f"Resumen de la {tipo}: " + _recortar(c["resumen"], 700 if ligera else 3000))
+    puntos, _ = _secciones_cronica(c["cronica"])
+    if puntos:
+        partes.append("Puntos clave:\n" + _recortar(puntos, 1500 if ligera else 6000))
+    for etiqueta, clase in (("Tareas y acuerdos", "tarea"), ("Datos para no olvidar", "dato"), ("Ideas", "idea")):
+        lista = [i for i in its if i["tipo"] == clase][: 8 if ligera else 25]
+        if lista:
+            renglones = "\n".join(
+                "- " + _recortar(i["texto"], 160) + (f" ({_cuando_tarea(i)})" if clase == "tarea" and i["fecha"] else "")
+                for i in lista)
+            partes.append(f"{etiqueta}:\n{renglones}")
+    if c["cronica"] and not ligera:
+        partes.append("Crónica (lo que pasó, contado):\n" + _recortar(c["cronica"], 20000))
+    return "\n\n".join(partes)
+
+
+def _chat_sistema(c, ficha: str, entera: str | None) -> str:
+    """Las instrucciones y las notas de la grabación. Siempre iguales dentro de una misma conversación (así la IA
+    puede reusar lo que ya leyó)."""
+    nombre = CFG["usuario"]["nombre"]
+    tipo = TIPOS_SESION.get(c["origen"], "Reunión").lower()
+    texto = f"""Eres Eco, el asistente de {nombre}. Él grabó esta {tipo} y te pregunta sobre ella, muchas veces tal
+como alguien se lo preguntó a él. Contesta como si él tuviera que responder ya: primero la respuesta directa, en el
+mismo tono de la pregunta, lista para decirla o copiarla; después, solo si ayuda, una frase de detalle.
+Reglas: usa SOLO lo que dice esta {tipo} (notas y pedazos de transcripción); no inventes nombres, cifras ni fechas.
+La transcripción es automática: entiende la idea aunque haya palabras mal oídas y escríbelas bien. No sabes quién
+dijo cada cosa. Si de eso no se habló, dilo corto («En la {tipo} no se habló de eso») y menciona lo más cercano si lo
+hay. Listas y resúmenes, breves y ordenados (unas 100 palabras como máximo). Nunca escribas contraseñas ni números de
+tarjeta. Español. Responde solo JSON: {{"respuesta": "...", "horas": ["21:31"]}}; en "horas", las marcas [hh:mm] de
+donde sacaste la respuesta (vacía si salió de las notas o no se habló).
+
+=== Notas de la {tipo} ===
+{ficha}"""
+    if entera:
+        texto += f"\n\n=== Transcripción completa (las marcas [hh:mm] son la hora) ===\n{entera}"
+    return texto
+
+
+def _cita(transcripcion: str, hora: str) -> str | None:
+    """Lo que se dijo desde la marca [hora]: para que veas de dónde salió la respuesta."""
+    pos = (transcripcion or "").find(f"[{hora}]")
+    if pos < 0:
+        return None
+    trozo = RE_MARCAS.sub(" ", transcripcion[pos:pos + 900])
+    trozo = re.sub(r"\s+", " ", trozo).strip()
+    return _recortar(trozo, 600) or None
+
+
+def responder_en_reunion(cid: int, pregunta: str, antes_de: int | None = None) -> tuple[str, list[dict]]:
+    """La respuesta a una pregunta sobre una reunión o clase, y de qué parte de la grabación salió."""
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        if not c:
+            raise LookupError("esa grabación ya no existe")
+        its = items_de(con, cid)
+        previos = con.execute(
+            "SELECT rol, texto FROM chat_mensajes WHERE captura_id=? AND estado='listo' AND id<? ORDER BY id DESC LIMIT ?",
+            (cid, (antes_de or 1 << 62) - 1, CHAT_HISTORIAL)).fetchall()[::-1]
+    nombre = CFG["usuario"]["nombre"]
+    ligera = _ia_ligera()
+    transcripcion = c["transcripcion"] or ""
+    ficha = _chat_ficha(c, its)
+    entera = transcripcion if len(transcripcion) <= (CHAT_ENTERA_MAX if ligera else 60000) else None
+
+    # Una pregunta corta ("¿y cuándo?") se busca junto con la anterior.
+    consulta = pregunta
+    if len(pregunta.split()) < 6 and previos:
+        anterior = next((p["texto"] for p in reversed(previos) if p["rol"] == "yo"), "")
+        consulta = f"{anterior} {pregunta}".strip()
+
+    pedazos = ""
+    usados = transcripcion if entera else ""
+    if transcripcion and not entera:
+        trozos = _trozos_con_hora(transcripcion)
+        cuantos = max(2, min(10, int((CFG.get("chat") or {}).get("fragmentos") or 3)))
+        elegidos = _elegir_trozos(cid, consulta, trozos, cuantos)
+        renglones = []
+        for n, i in enumerate(elegidos, 1):
+            hora, texto = trozos[i]
+            renglones.append(f"[{n}] " + (f"(hacia las {hora}) " if hora else "") + texto)
+        pedazos = "\n\n".join(renglones)
+        usados = pedazos
+
+    # Con la IA local la crónica no va completa: solo el tema que más se parece a la pregunta.
+    tema = ""
+    if ligera:
+        _, temas = _secciones_cronica(c["cronica"])
+        if temas:
+            puntajes = _puntaje_palabras(consulta, [f"{t} {x}" for t, x in temas])
+            mejor = max(range(len(temas)), key=lambda k: puntajes[k])
+            if puntajes[mejor] >= 0.2:
+                titulo, cuerpo = temas[mejor]
+                tema = (f"### {titulo}\n" if titulo else "") + _recortar(cuerpo, 900)
+
+    usuario = ""
+    if previos:
+        usuario += "Conversación hasta ahora:\n" + "\n".join(
+            f"{nombre if p['rol'] == 'yo' else 'Eco'}: {_recortar(p['texto'], 400)}" for p in previos) + "\n\n"
+    if tema:
+        usuario += f"Lo que cuenta la crónica de ese tema:\n{tema}\n\n"
+    if not entera:
+        if pedazos:
+            usuario += ("Pedazos de la transcripción donde puede estar la respuesta (en orden; las marcas [hh:mm] "
+                        f"son la hora):\n{pedazos}\n\n")
+        elif transcripcion:
+            usuario += "(En la transcripción no encontré pedazos que hablen de esto: responde con las notas o di que no se habló.)\n\n"
+        else:
+            usuario += "(Esta grabación no guardó la transcripción: responde solo con las notas.)\n\n"
+    usuario += f"Pregunta de {nombre}: {pregunta}"
+
+    crudo = llamar_ia(_chat_sistema(c, ficha, entera), usuario, json_mode=True, max_tokens=400)
+    try:
+        datos = _json_de(crudo)
+        respuesta = str(datos.get("respuesta") or "").strip()
+        horas = datos.get("horas") if isinstance(datos.get("horas"), list) else []
+    except (ValueError, AttributeError):
+        respuesta, horas = re.sub(r"^\s*\{|\}\s*$", "", crudo or "").strip(), []
+    if not respuesta:
+        raise ValueError("la IA respondió vacío")
+    citas, vistas = [], set()
+    for h in horas[:4]:
+        h = _hora_valida(h)
+        if not h or h in vistas or f"[{h}]" not in usados:   # solo horas que de verdad estaban en lo que leyó
+            continue
+        vistas.add(h)
+        texto = _cita(transcripcion, h)
+        if texto:
+            citas.append({"hora": h, "texto": texto})
+    return respuesta, citas
+
+
+def _chat_sugerencias(c) -> list[str]:
+    if c["origen"] == "clase":
+        return ["¿Cuál fue el tema principal?", "¿Dejaron tarea o algo para la próxima?",
+                "Explícame lo más importante como para un examen", "¿Qué fechas o datos se mencionaron?"]
+    return ["¿Qué se acordó?", "¿Qué quedó pendiente y para cuándo?",
+            "Resúmemelo en tres frases", "¿Qué fechas, lugares o cifras se dijeron?"]
+
+
+def _chat_mensaje_json(f) -> dict:
+    try:
+        citas = json.loads(f["citas"]) if f["citas"] else []
+    except ValueError:
+        citas = []
+    return {"id": f["id"], "rol": f["rol"], "texto": f["texto"], "estado": f["estado"], "citas": citas,
+            "hora": datetime.fromisoformat(f["creado"]).strftime("%H:%M")}
+
+
+def _chat_soltar_viejos(cid: int) -> None:
+    """Un "pensando" que ya nadie está respondiendo (Eco se reinició a medias) pasa a error, para poder volver a preguntar."""
+    with closing(db()) as con, con:
+        filas = con.execute("SELECT id FROM chat_mensajes WHERE captura_id=? AND estado='pensando'", (cid,)).fetchall()
+        for f in filas:
+            if f["id"] not in _chat_activos:
+                con.execute("UPDATE chat_mensajes SET estado='error', texto=? WHERE id=?",
+                            ("Eco se reinició mientras pensaba esta respuesta. Pregúntalo otra vez.", f["id"]))
+
+
+def chat_conversacion(cid: int) -> dict | None:
+    """La conversación con una reunión o clase. None = no existe (o no es reunión ni clase)."""
+    _chat_soltar_viejos(cid)
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM capturas WHERE id=?", (cid,)).fetchone()
+        if not c or c["origen"] not in CHAT_TIPOS:
+            return None
+        filas = con.execute("SELECT * FROM (SELECT * FROM chat_mensajes WHERE captura_id=? ORDER BY id DESC LIMIT 200) "
+                            "ORDER BY id", (cid,)).fetchall()
+    ini = datetime.fromisoformat(c["inicio"])
+    mensajes = [_chat_mensaje_json(f) for f in filas]
+    hay_algo = bool(c["transcripcion"] or c["cronica"] or c["resumen"])
+    return {
+        "ok": True,
+        "reunion": {"id": c["id"], "tipo": c["origen"], "titulo": c["titulo"] or TIPOS_SESION[c["origen"]],
+                    "fecha": fecha_larga(ini.date()), "fecha_iso": ini.date().isoformat(), "hora": f"{ini:%H:%M}",
+                    "duracion": c["duracion"], "transcripcion": bool(c["transcripcion"])},
+        "mensajes": mensajes,
+        "pensando": any(m["estado"] == "pensando" for m in mensajes),
+        "sugerencias": _chat_sugerencias(c) if hay_algo and not mensajes else [],
+        # La laptop está transcribiendo o analizando otra grabación: la respuesta va a tardar más.
+        "ocupada": bool(ESTADO.get("procesando")) or COLA.qsize() > 0,
+    }
+
+
+def chat_preguntar(cid: int, pregunta: str) -> dict:
+    """Guarda tu pregunta y deja a Eco respondiendo aparte (en CPU puede tardar un par de minutos)."""
+    _chat_soltar_viejos(cid)
+    ahora_iso = ahora().isoformat(timespec="seconds")
+    with closing(db()) as con, con:
+        c = con.execute("SELECT origen FROM capturas WHERE id=?", (cid,)).fetchone()
+        if not c or c["origen"] not in CHAT_TIPOS:
+            raise LookupError("no existe")
+        if con.execute("SELECT 1 FROM chat_mensajes WHERE captura_id=? AND estado='pensando'", (cid,)).fetchone():
+            raise ChatOcupado()
+        con.execute("INSERT INTO chat_mensajes(captura_id, rol, texto, estado, creado) VALUES(?,?,?,?,?)",
+                    (cid, "yo", pregunta, "listo", ahora_iso))
+        mid = con.execute("INSERT INTO chat_mensajes(captura_id, rol, texto, estado, creado) VALUES(?,?,?,?,?)",
+                          (cid, "eco", "", "pensando", ahora_iso)).lastrowid
+    _chat_activos.add(mid)
+    threading.Thread(target=_chat_responder, args=(cid, mid, pregunta), name="chat", daemon=True).start()
+    return chat_conversacion(cid) or {"ok": False}
+
+
+def _chat_responder(cid: int, mid: int, pregunta: str) -> None:
+    t0 = time.time()
+    try:
+        with _chat_lock:
+            texto, citas = responder_en_reunion(cid, pregunta, antes_de=mid)
+        estado = "listo"
+        log.info("Chat: respondí una pregunta sobre la grabación #%d en %.0f s", cid, time.time() - t0)
+    except Exception as ex:
+        log.warning("Chat: no pude responder sobre la grabación #%d (%s)", cid, ex)
+        texto, citas, estado = ("No pude responder ahora. Revisa que Ollama esté encendido en la laptop y vuelve a "
+                                "preguntar."), [], "error"
+    try:
+        with closing(db()) as con, con:   # si borraste la conversación mientras tanto, no pasa nada
+            con.execute("UPDATE chat_mensajes SET texto=?, estado=?, citas=? WHERE id=? AND estado='pensando'",
+                        (texto, estado, json.dumps(citas, ensure_ascii=False) if citas else None, mid))
+    finally:
+        _chat_activos.discard(mid)
+
+
+def chat_borrar(cid: int) -> bool:
+    with closing(db()) as con, con:
+        if not con.execute("SELECT 1 FROM capturas WHERE id=?", (cid,)).fetchone():
+            return False
+        con.execute("DELETE FROM chat_mensajes WHERE captura_id=?", (cid,))
+    return True
+
+
 # ════════════════════════════ Respaldo diario ════════════════════════════
 
 def carpeta_respaldo() -> Path | None:
@@ -4713,28 +5110,35 @@ def _captura_json(con: sqlite3.Connection, c) -> dict:
     }
 
 
-def api_reuniones() -> dict:
-    """Para la app del teléfono: las reuniones recientes y las que la laptop todavía está procesando."""
+def api_reuniones(tipo: str = "reunion") -> dict:
+    """Las reuniones (o clases, o "todas") recientes y las que la laptop todavía está procesando.
+    La usan la app del teléfono y el apartado Reuniones del panel."""
+    tipos = CHAT_TIPOS if tipo == "todas" else ((tipo,) if tipo in CHAT_TIPOS else ("reunion",))
+    marcas = ",".join("?" * len(tipos))
     with closing(db()) as con:
         filas = con.execute(
-            "SELECT id, inicio, duracion, titulo, resumen, cronica FROM capturas "
-            "WHERE origen='reunion' ORDER BY inicio DESC LIMIT 30").fetchall()
+            "SELECT c.id, c.origen, c.inicio, c.duracion, c.titulo, c.resumen, c.cronica, "
+            "(c.transcripcion IS NOT NULL AND c.transcripcion != '') AS hay_texto, "
+            "(SELECT count(*) FROM chat_mensajes m WHERE m.captura_id=c.id AND m.rol='yo') AS preguntas "
+            f"FROM capturas c WHERE c.origen IN ({marcas}) ORDER BY c.inicio DESC LIMIT 60", tipos).fetchall()
         en_curso = con.execute(
-            "SELECT clave, nombre, inicio, estado FROM sesiones "
-            "WHERE tipo='reunion' AND estado != 'lista' ORDER BY inicio DESC").fetchall()
+            f"SELECT clave, tipo, nombre, inicio, estado FROM sesiones WHERE tipo IN ({marcas}) AND estado != 'lista' "
+            "ORDER BY inicio DESC", tipos).fetchall()
     reuniones = []
     for c in filas:
         ini = datetime.fromisoformat(c["inicio"])
         reuniones.append({
-            "id": c["id"], "fecha": fecha_larga(ini.date()), "hora": f"{ini:%H:%M}", "duracion": c["duracion"],
-            "titulo": c["titulo"] or "Reunión", "resumen": (c["resumen"] or "")[:240], "cronica": bool(c["cronica"]),
+            "id": c["id"], "tipo": c["origen"], "fecha": fecha_larga(ini.date()), "fecha_iso": ini.date().isoformat(),
+            "hora": f"{ini:%H:%M}", "duracion": c["duracion"],
+            "titulo": c["titulo"] or TIPOS_SESION[c["origen"]], "resumen": (c["resumen"] or "")[:240],
+            "cronica": bool(c["cronica"]), "transcripcion": bool(c["hay_texto"]), "preguntas": c["preguntas"],
         })
     procesando = []
     for s in en_curso:
         ini = datetime.fromisoformat(s["inicio"])
-        procesando.append({"clave": s["clave"], "nombre": s["nombre"], "hora": f"{ini:%H:%M}",
+        procesando.append({"clave": s["clave"], "tipo": s["tipo"], "nombre": s["nombre"], "hora": f"{ini:%H:%M}",
                            "estado": s["estado"]})
-    return {"ok": True, "reuniones": reuniones, "procesando": procesando}
+    return {"ok": True, "reuniones": reuniones, "procesando": procesando, "chat": chat_activo()}
 
 
 def api_reunion(cid: int | None = None, clave: str | None = None) -> dict | None:
@@ -4748,13 +5152,16 @@ def api_reunion(cid: int | None = None, clave: str | None = None) -> dict | None
             if ses["captura_id"] is None:
                 return {"ok": True, "estado": "borrada" if ses["estado"] == "lista" else ses["estado"], "reunion": None}
             cid = ses["captura_id"]
-        c = con.execute("SELECT * FROM capturas WHERE id=? AND origen='reunion'", (cid,)).fetchone()
+        c = con.execute("SELECT * FROM capturas WHERE id=? AND origen IN ('reunion', 'clase')", (cid,)).fetchone()
         if not c:
             return None
         its = items_de(con, c["id"])
+        preguntas = con.execute("SELECT count(*) FROM chat_mensajes WHERE captura_id=? AND rol='yo'", (cid,)).fetchone()[0]
     ini = datetime.fromisoformat(c["inicio"])
-    return {"ok": True, "estado": "lista", "reunion": {
-        "id": c["id"], "titulo": c["titulo"] or "Reunión", "fecha": fecha_larga(ini.date()), "hora": f"{ini:%H:%M}",
+    return {"ok": True, "estado": "lista", "chat": chat_activo(), "reunion": {
+        "id": c["id"], "tipo": c["origen"], "titulo": c["titulo"] or TIPOS_SESION[c["origen"]],
+        "fecha": fecha_larga(ini.date()), "hora": f"{ini:%H:%M}", "preguntas": preguntas,
+        "transcripcion": bool(c["transcripcion"]),
         "duracion": c["duracion"], "lugar": c["lugar"], "resumen": c["resumen"] or "", "cronica": c["cronica"],
         "tareas": [{"texto": i["texto"], "cuando": _cuando_tarea(i), "hecho": bool(i["hecho"])}
                    for i in its if i["tipo"] == "tarea"],
@@ -4793,6 +5200,7 @@ def api_estado(es_local: bool) -> dict:
         "clase_tipo": tipo_laptop() if CLASE is not None else None,
         "respaldo": estado_respaldo() if es_local else None,
         "notion": notion_activo() if es_local else None,
+        "chat": chat_activo(),
         "google": estado_google() if es_local and google_activo() else None,
         "google_activo": google_activo(), "finanzas": fin_activo(),
         "app": estado_app() if es_local else None,
@@ -5020,6 +5428,7 @@ def api_borrar_momento(cid: int) -> bool:
             return False
         con.execute("DELETE FROM items WHERE captura_id=?", (cid,))
         con.execute("DELETE FROM vectores WHERE captura_id=?", (cid,))
+        con.execute("DELETE FROM chat_mensajes WHERE captura_id=?", (cid,))
         con.execute("UPDATE classroom_anuncios SET captura_id=NULL WHERE captura_id=?", (cid,))
         if HAY_INDICE:
             con.execute("DELETE FROM indice WHERE captura_id=?", (cid,))
@@ -6312,7 +6721,7 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
             if not self._autorizado():
                 return self._json(401, {"ok": False, "error": "token"})
             if ruta == "/reuniones":
-                return self._json(200, api_reuniones())
+                return self._json(200, api_reuniones((params.get("tipo") or "reunion")[:10]))
             try:
                 cid = int(params["id"]) if params.get("id") else None
             except ValueError:
@@ -6342,6 +6751,16 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 return self._json(401, {"ok": False, "error": "token"})
             if ruta == "/api/estado":
                 return self._json(200, api_estado(self._es_local()))
+            if ruta == "/api/reuniones":   # el apartado Reuniones del panel (y la app)
+                return self._json(200, api_reuniones((params.get("tipo") or "todas")[:10]))
+            if ruta == "/api/chat":        # la conversación con una reunión o clase
+                if not chat_activo():
+                    return self._json(403, {"ok": False, "error": "El chat con reuniones está apagado en config.toml."})
+                try:
+                    conversacion = chat_conversacion(int(params.get("id") or 0))
+                except ValueError:
+                    return self._json(400, {"ok": False})
+                return self._json(200 if conversacion else 404, conversacion or {"ok": False})
             if ruta == "/api/dias":
                 return self._json(200, api_dias())
             if ruta == "/api/momentos":
@@ -6450,6 +6869,25 @@ p{{margin:0;color:#A3A3BA}}a{{display:inline-block;margin-top:24px;color:#B8AEFF
                 else:
                     _app_evento.set()
                 return self._json(200, {"ok": True, "app": estado_app()})
+            if ruta in ("/api/chat", "/api/chat/borrar"):
+                if not chat_activo():
+                    return self._json(403, {"ok": False, "error": "El chat con reuniones está apagado en config.toml."})
+                try:
+                    cid = int(datos.get("id") or 0)
+                except (TypeError, ValueError):
+                    return self._json(400, {"ok": False})
+                if ruta == "/api/chat/borrar":
+                    ok = chat_borrar(cid)
+                    return self._json(200 if ok else 404, {"ok": ok})
+                pregunta = re.sub(r"\s+", " ", str(datos.get("pregunta") or "")).strip()[:600]
+                if not pregunta:
+                    return self._json(400, {"ok": False, "error": "Escribe una pregunta."})
+                try:
+                    return self._json(200, chat_preguntar(cid, pregunta))
+                except LookupError:
+                    return self._json(404, {"ok": False, "error": "Esa grabación ya no existe."})
+                except ChatOcupado:
+                    return self._json(409, {"ok": False, "error": "Eco todavía está respondiendo la pregunta anterior."})
             if ruta == "/api/preguntar":
                 pregunta = str(datos.get("pregunta") or "").strip()[:500]
                 if not pregunta:

@@ -831,6 +831,131 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6
   .fin .fin-lado { display: flex; }
   .fin-tabs [data-fin-tab="consejos"] { display: none; }
 }
+/* ───────── Reuniones: eliges una reunión o clase y le preguntas lo que sea ─────────
+   Lista a la izquierda y conversación a la derecha (en el teléfono, una cosa a la vez). */
+.pagina[data-zona="reuniones"] :is(.buscador, .respuesta, .pestanas, .cuerpo) { display: none; }
+.pagina:not([data-zona="reuniones"]) .reu { display: none; }
+.reu { margin-top: var(--s4); min-width: 0; }
+.reu-cuerpo { display: grid; gap: var(--s3); grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
+.reu .panel { padding: var(--s4); border-radius: var(--r-lg); min-width: 0; }
+.reu-lista { display: flex; flex-direction: column; gap: var(--s3); min-height: 0; }
+.reu-lista .modos { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; justify-self: stretch; }
+.reu-lista .modos button { min-height: 36px; font-size: var(--t-sm); }
+.reu-buscar input {
+  width: 100%; min-height: 44px; padding: 0 var(--s4) 0 42px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+}
+.reu-buscar input::placeholder { color: var(--faint); }
+.reu-buscar input:focus { outline: none; border-color: var(--violet); }
+.reu-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; align-content: start; }
+.reu-item {
+  width: 100%; display: grid; gap: 3px; text-align: left; min-height: 64px; padding: var(--s3) var(--s4);
+  border-radius: var(--r-md); border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer;
+  transition: background-color .15s, border-color .15s;
+}
+.reu-item:hover { background: var(--surface-2); }
+.reu-item[aria-current="true"] { background: rgba(107, 91, 245, 0.14); border-color: rgba(184, 174, 255, 0.35); }
+.reu-item-tipo, .reu-tipo { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 0.6875rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--violet-soft); }
+.reu-item-tipo svg, .reu-tipo svg { width: 13px; height: 13px; }
+.reu-item-titulo { font: 600 var(--t-md)/1.35 var(--display); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.reu-item-meta { font-size: var(--t-xs); color: var(--muted); }
+.reu-item-meta b { color: var(--violet-soft); font-weight: 600; }
+.reu-proc { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4); border-radius: var(--r-md); border: 1px dashed var(--line); color: var(--muted); font-size: var(--t-sm); }
+.reu-proc::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
+.reu-vacio { padding: var(--s4); color: var(--muted); font-size: var(--t-sm); line-height: 1.55; }
+
+.reu-chat { display: flex; flex-direction: column; min-height: 0; padding: 0 !important; overflow: hidden; }
+.reu-chat-cabeza { display: flex; align-items: center; gap: var(--s3); padding: var(--s4) var(--s5); border-bottom: 1px solid var(--line); }
+.reu-chat-info { flex: 1 1 auto; min-width: 0; }
+.reu-chat-info h3 { margin: 2px 0 0; font: 600 var(--t-lg)/1.3 var(--display); letter-spacing: -0.005em; overflow-wrap: anywhere; }
+.reu-meta { margin: 2px 0 0; color: var(--muted); font-size: var(--t-xs); }
+.reu-chat-acciones { display: flex; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+.reu-volver { display: none; flex: none; }
+.reu-mensajes {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--s5);
+  display: flex; flex-direction: column; gap: var(--s4); scrollbar-width: thin; scrollbar-color: #34344a transparent;
+}
+.reu-msg { max-width: min(70ch, 88%); }
+.reu-msg.de-yo {
+  align-self: flex-end; padding: var(--s3) var(--s4); border-radius: 18px 18px 6px 18px;
+  background: var(--violet); color: #fff; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5;
+}
+.reu-msg.de-eco { align-self: flex-start; }
+.reu-firma { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: var(--t-xs); color: var(--faint); }
+.reu-firma svg { width: 16px; height: 16px; }
+.reu-burbuja {
+  padding: var(--s3) var(--s4); border-radius: 18px 18px 18px 6px; background: var(--surface-2); border: 1px solid var(--line);
+  white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; font-size: var(--t-md);
+}
+.reu-msg.con-error .reu-burbuja { color: var(--warn); border-color: rgba(255, 181, 71, 0.4); }
+.reu-acciones-msg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--s2); }
+.reu-boton {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 var(--s3); border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: var(--t-xs); font-weight: 600; cursor: pointer;
+}
+.reu-boton:hover, .reu-boton[aria-expanded="true"] { border-color: var(--violet); color: var(--text); }
+.reu-boton svg { width: 13px; height: 13px; }
+.reu-cita-texto {
+  margin: var(--s2) 0 0; padding: var(--s3) var(--s4); border-left: 2px solid var(--violet-soft); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: rgba(184, 174, 255, 0.06); color: var(--muted); font-size: var(--t-sm); line-height: 1.6;
+}
+.reu-pensando .reu-burbuja { display: flex; align-items: center; gap: var(--s3); color: var(--muted); }
+.reu-puntos { display: inline-flex; gap: 4px; }
+.reu-puntos i { width: 6px; height: 6px; border-radius: 50%; background: var(--violet-soft); animation: reu-salto 1.2s infinite ease-in-out; }
+.reu-puntos i:nth-child(2) { animation-delay: .15s; }
+.reu-puntos i:nth-child(3) { animation-delay: .3s; }
+@keyframes reu-salto { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .reu-puntos i { animation: none; opacity: .6; } }
+.reu-reloj { color: var(--faint); font-variant-numeric: tabular-nums; }
+.reu-intro, .reu-elegir { margin: auto; text-align: center; color: var(--muted); max-width: 54ch; line-height: 1.55; }
+.reu-intro strong, .reu-elegir strong { display: block; margin-bottom: var(--s2); color: var(--text); font: 600 var(--t-xl)/1.25 var(--display); letter-spacing: -0.01em; }
+.reu-intro p, .reu-elegir p { margin: 0; }
+.reu-sugerencias { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: center; margin-top: var(--s5); }
+.reu-sugerencia {
+  min-height: 40px; padding: 0 var(--s4); border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface-2); color: var(--text); font-size: var(--t-sm); cursor: pointer; transition: border-color .15s, background-color .15s;
+}
+.reu-sugerencia:hover { border-color: var(--violet); background: rgba(107, 91, 245, 0.1); }
+.reu-escribir { display: flex; align-items: flex-end; gap: var(--s2); padding: var(--s3) var(--s4) 0; border-top: 1px solid var(--line); }
+.reu-escribir textarea {
+  flex: 1 1 auto; min-height: 48px; max-height: 168px; resize: none; padding: 12px var(--s4); border-radius: 24px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font: inherit; line-height: 1.45;
+}
+.reu-escribir textarea::placeholder { color: var(--faint); }
+.reu-escribir textarea:focus { outline: none; border-color: var(--violet); }
+.reu-escribir textarea:disabled { opacity: .5; }
+.reu-enviar { width: 48px; height: 48px; flex: none; display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--violet); color: #fff; cursor: pointer; transition: background-color .15s, opacity .15s; }
+.reu-enviar:hover:not(:disabled) { background: var(--violet-deep); }
+.reu-enviar:disabled { opacity: .4; cursor: default; }
+.reu-enviar svg { width: 20px; height: 20px; }
+.reu-nota { margin: 0; padding: var(--s2) var(--s5) var(--s3); color: var(--faint); font-size: var(--t-xs); }
+.reu-nota.aviso { color: var(--warn); }
+.boton-suave.reu-preguntar { margin-top: var(--s3); display: inline-flex; align-items: center; gap: var(--s2); }
+.boton-suave.reu-preguntar svg { width: 16px; height: 16px; }
+
+/* Teléfono o ventana angosta: primero la lista; al elegir una, la conversación ocupa la pantalla. */
+@media not all and (min-width: 1100px) and (min-height: 600px) {
+  .reu { max-width: 880px; margin-inline: auto; width: 100%; }
+  .reu-cuerpo[data-abierta="si"] .reu-lista, .reu-cuerpo:not([data-abierta="si"]) .reu-chat { display: none; }
+  .reu-volver { display: inline-flex; align-items: center; }
+  .reu-chat { height: calc(100dvh - 24px); min-height: 420px; scroll-margin-top: 12px; }
+  .reu-chat-cabeza { flex-wrap: wrap; padding: var(--s3) var(--s4); }
+  .reu-chat-info { flex-basis: 60%; }
+  .reu-mensajes { padding: var(--s4); }
+  .reu-msg { max-width: 92%; }
+  .reu-nota { padding-inline: var(--s4); }
+}
+/* Computadora: todo a la vista; solo la lista y los mensajes bajan por dentro. */
+@media (min-width: 1100px) and (min-height: 600px) {
+  .pagina[data-zona="reuniones"] { padding-bottom: var(--s3); }
+  .pagina > .reu { flex: 1 1 auto; min-height: 0; margin-top: var(--s3); display: flex; }
+  .reu-cuerpo { flex: 1 1 auto; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); align-items: stretch; }
+  .reu-lista { overflow: hidden; }
+  .reu-items { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #34344a transparent; }
+}
+@media (min-width: 1600px) and (min-height: 600px) {
+  .reu-cuerpo { grid-template-columns: 400px minmax(0, 1fr); gap: var(--s4); }
+}
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -852,7 +977,8 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6
       </div>
       <div class="modos zonas" id="zonas" role="group" aria-label="Apartados de Eco" hidden>
         <button type="button" data-zona="eco" aria-pressed="true">Memoria</button>
-        <button type="button" data-zona="finanzas" aria-pressed="false">Finanzas</button>
+        <button type="button" data-zona="reuniones" aria-pressed="false" hidden>Reuniones</button>
+        <button type="button" data-zona="finanzas" aria-pressed="false" hidden>Finanzas</button>
       </div>
       <p class="estado" id="estado" role="status" aria-live="polite"><span class="punto" aria-hidden="true"></span><span id="estado-texto">Conectando con Eco…</span></p>
     </div>
@@ -1000,6 +1126,50 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border-radius: 6
       </section>
     </aside>
   </div>
+
+  <section class="reu" id="reuniones" aria-labelledby="reu-titulo">
+    <h2 class="oculto" id="reu-titulo">Pregúntale a tus reuniones y clases</h2>
+    <div class="reu-cuerpo" id="reu-cuerpo" data-abierta="no">
+      <aside class="reu-lista panel" aria-label="Elige una reunión o clase">
+        <div class="modos" id="reu-filtro" role="group" aria-label="Qué mostrar">
+          <button type="button" data-filtro="todas" aria-pressed="true">Todas</button>
+          <button type="button" data-filtro="reunion" aria-pressed="false">Reuniones</button>
+          <button type="button" data-filtro="clase" aria-pressed="false">Clases</button>
+        </div>
+        <div class="campo reu-buscar">
+          <label class="oculto" for="reu-q">Buscar por nombre o fecha</label>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="reu-q" type="search" placeholder="Buscar por nombre o fecha" autocomplete="off">
+        </div>
+        <ul class="reu-items" id="reu-items"><li class="reu-vacio">Buscando tus grabaciones…</li></ul>
+      </aside>
+      <section class="reu-chat panel" aria-labelledby="reu-chat-titulo">
+        <div class="reu-chat-cabeza">
+          <button class="boton-texto reu-volver" type="button" id="reu-volver">← Lista</button>
+          <div class="reu-chat-info">
+            <p class="reu-tipo" id="reu-tipo"></p>
+            <h3 id="reu-chat-titulo">Pregúntale a una grabación</h3>
+            <p class="reu-meta" id="reu-meta"></p>
+          </div>
+          <div class="reu-chat-acciones">
+            <button class="cerrar" type="button" id="reu-ver" hidden>Ver notas</button>
+            <button class="cerrar" type="button" id="reu-borrar" hidden>Borrar conversación</button>
+          </div>
+        </div>
+        <div class="reu-mensajes" id="reu-mensajes" aria-live="polite">
+          <div class="reu-elegir"><strong>Elige una reunión o clase</strong><p>A la izquierda están tus grabaciones. Elige una y pregúntale lo que quieras: Eco busca en lo que se dijo y te responde.</p></div>
+        </div>
+        <form class="reu-escribir" id="reu-form" autocomplete="off">
+          <label class="oculto" for="reu-pregunta">Tu pregunta</label>
+          <textarea id="reu-pregunta" rows="1" maxlength="600" placeholder="Escribe tu pregunta…" enterkeyhint="send" disabled></textarea>
+          <button class="reu-enviar" id="reu-enviar" type="submit" aria-label="Preguntar" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </form>
+        <p class="reu-nota" id="reu-nota">Enter para preguntar · Shift + Enter para otra línea</p>
+      </section>
+    </div>
+  </section>
 
   <section class="fin" id="finanzas" aria-labelledby="fin-titulo">
     <div class="fin-barra">
@@ -1650,6 +1820,7 @@ function momentoHTML(m, conFecha) {
       <div class="momento-meta">${chips.join("")}</div>
       ${foto}
       ${m.resumen ? `<p class="momento-resumen">${esc(m.resumen)}</p>` : ""}
+      ${(m.origen === "reunion" || m.origen === "clase") && ui.chat ? `<button type="button" class="boton-suave reu-preguntar" data-preguntar-reu="${m.id}">${ICONO_PREGUNTAR}Preguntarle a esta ${m.origen === "clase" ? "clase" : "reunión"}</button>` : ""}
       ${grupos}
     </article></li>`;
 }
@@ -1983,7 +2154,7 @@ ponerVista(guardado.leer("eco-vista"));
 document.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.defaultPrevented) return;
   if (ev.target.matches?.("input, textarea, select, [contenteditable='true']") || document.querySelector("dialog[open]")) return;
-  if (!ui.hoy || $("app").hidden || $("app").dataset.zona === "finanzas") return;
+  if (!ui.hoy || $("app").hidden || ($("app").dataset.zona || "eco") !== "eco") return;
   const tecla = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
   if (tecla === "/") { ev.preventDefault(); ponerVista("momentos"); ponerModo("buscar"); }
   else if (tecla === "p") { ev.preventDefault(); ponerModo("preguntar"); }
@@ -2097,8 +2268,15 @@ async function refrescar(forzar = false) {
     if (!ui.fecha) ui.fecha = e.hoy;
     pintarEstado(e);
     ui.finanzas = !!e.finanzas;
-    $("zonas").hidden = !ui.finanzas;
-    if (!ui.zonaLista) { ui.zonaLista = true; ponerZona(location.hash === "#finanzas" ? "finanzas" : guardado.leer("eco-zona")); }
+    ui.chat = e.chat !== false;
+    $("zonas").hidden = !ui.finanzas && !ui.chat;
+    document.querySelector('#zonas [data-zona="finanzas"]').hidden = !ui.finanzas;
+    document.querySelector('#zonas [data-zona="reuniones"]').hidden = !ui.chat;
+    if (!ui.zonaLista) {
+      ui.zonaLista = true;
+      const pedida = ["#finanzas", "#reuniones"].includes(location.hash) ? location.hash.slice(1) : guardado.leer("eco-zona");
+      ponerZona(pedida);
+    }
     const firma = [e.momentos_hoy, e.pendientes, e.ultimo_audio, e.procesando, e.en_cola, e.hoy,
       JSON.stringify(e.sesiones || [])].join("|");
     if (forzar || firma !== ui.firma) {
@@ -2362,11 +2540,17 @@ function fechaCorta(iso) {
 }
 
 function ponerZona(z) {
-  if (z !== "finanzas" || !ui.finanzas) z = "eco";
+  if (!((z === "finanzas" && ui.finanzas) || (z === "reuniones" && ui.chat))) z = "eco";
   $("app").dataset.zona = z;
   document.querySelectorAll("#zonas [data-zona]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.zona === z)));
   guardado.poner("eco-zona", z);
   if (z === "finanzas") cargarFinanzas();
+  if (z === "reuniones") {
+    cargarReuniones();
+    const ultima = Number(guardado.leer("eco-reu"));
+    if (!reu.abierta && ultima && matchMedia("(min-width: 1100px) and (min-height: 600px)").matches) abrirReu(ultima, { enfocar: false });
+    else if (reu.abierta) cargarChat();
+  }
 }
 $("zonas").addEventListener("click", (ev) => {
   const b = ev.target.closest("[data-zona]");
@@ -2804,6 +2988,288 @@ addEventListener("resize", () => {
   clearTimeout(fin.acomodar);
   fin.acomodar = setTimeout(() => { if (fin.d && $("app").dataset.zona === "finanzas" && !document.querySelector("dialog[open]")) pintarFinanzas(); }, 200);
 });
+
+/* ───────── Reuniones: eliges una reunión o clase y le preguntas lo que sea ─────────
+   La pregunta se guarda en la laptop y Eco responde aparte (en CPU tarda un poco): esta página pregunta cada
+   pocos segundos hasta que llega. La conversación es la misma que ves en la app del teléfono. */
+const reu = { filtro: "todas", lista: [], procesando: [], abierta: null, conv: null, firma: "", carga: 0,
+  espera: null, reloj: null, desde: new Map(), estabaPensando: false };
+const MARCA_ECO = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="none" stroke="#6B5BF5" stroke-width="1.5"/><circle cx="10" cy="10" r="5" fill="none" stroke="#B8AEFF" stroke-width="1.6"/><circle cx="10" cy="10" r="2" fill="#fff"/></svg>';
+const ICONO_PREGUNTAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1v.5M12 16.5h.01"/></svg>';
+reu.filtro = guardado.leer("eco-reu-filtro") || "todas";
+
+/** POST que devuelve el mensaje de error de la laptop (por ejemplo «todavía está respondiendo»). */
+async function enviarJSON(ruta, datos) {
+  const cabeceras = { "Content-Type": "application/json", "X-Eco-Panel": "1" };
+  const token = guardado.leer("eco-token");
+  if (token) cabeceras["X-Eco-Token"] = token;
+  const r = await fetch(ruta, { method: "POST", headers: cabeceras, body: JSON.stringify(datos), cache: "no-store" });
+  let j = {};
+  try { j = await r.json(); } catch {}
+  if (!r.ok) throw Object.assign(new Error(j.error || "http " + r.status), { codigo: r.status });
+  return j;
+}
+
+function reuFecha(iso, respaldo) { return iso && ui.hoy ? nombreDia(iso) : respaldo || ""; }
+function reuDuracion(seg) {
+  const m = Math.max(1, Math.round(seg / 60));
+  return m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}` : `${m} min`;
+}
+
+async function cargarReuniones() {
+  const mia = ++reu.carga;
+  try {
+    const r = await api("/api/reuniones?tipo=todas");
+    if (mia !== reu.carga) return;
+    reu.lista = r.reuniones || [];
+    reu.procesando = r.procesando || [];
+    pintarListaReu();
+  } catch {
+    if (!reu.lista.length) $("reu-items").innerHTML = '<li class="reu-vacio">No pude traer tus grabaciones. Revisa que Eco siga encendido.</li>';
+  }
+}
+
+function pintarListaReu() {
+  document.querySelectorAll("#reu-filtro [data-filtro]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.filtro === reu.filtro)));
+  const q = sinAcentos($("reu-q").value.trim());
+  const sirve = (tipo) => reu.filtro === "todas" || tipo === reu.filtro;
+  let html = reu.procesando.filter((p) => sirve(p.tipo)).map((p) =>
+    `<li class="reu-proc">${p.tipo === "clase" ? "Clase" : "Reunión"} de las ${esc(p.hora)}: ${p.estado === "grabando" ? "se está grabando" : "la laptop la está procesando"}</li>`).join("");
+  html += reu.lista.filter((r) => sirve(r.tipo) && (!q || sinAcentos(`${r.titulo} ${r.fecha} ${reuFecha(r.fecha_iso)}`).includes(q))).map((r) => {
+    const meta = [reuFecha(r.fecha_iso, r.fecha), r.hora, r.duracion ? reuDuracion(r.duracion) : ""].filter(Boolean).map(esc).join(" · ");
+    const preguntas = r.preguntas ? ` · <b>${r.preguntas} pregunta${r.preguntas === 1 ? "" : "s"}</b>` : "";
+    return `<li><button type="button" class="reu-item" data-reu="${r.id}" aria-current="${reu.abierta === r.id}">
+      <span class="reu-item-tipo">${r.tipo === "clase" ? ICONO.clase + "Clase" : ICONO.reunion + "Reunión"}</span>
+      <span class="reu-item-titulo">${esc(r.titulo)}</span>
+      <span class="reu-item-meta">${meta}${preguntas}</span></button></li>`;
+  }).join("");
+  if (!html) {
+    html = `<li class="reu-vacio">${q ? "No hay ninguna con ese nombre o fecha."
+      : reu.filtro === "clase" ? "Todavía no hay clases grabadas. Grábalas con el modo clase de la laptop."
+      : "Todavía no hay grabaciones. Graba una reunión o clase con el modo clase de la laptop o con la app del teléfono."}</li>`;
+  }
+  $("reu-items").innerHTML = html;
+}
+
+async function abrirReu(id, { enfocar = true } = {}) {
+  id = Number(id);
+  if (reu.abierta !== id) { reu.conv = null; reu.firma = ""; }
+  reu.abierta = id;
+  guardado.poner("eco-reu", String(id));
+  $("reu-cuerpo").dataset.abierta = "si";
+  pintarListaReu();
+  if (!reu.conv) $("reu-mensajes").innerHTML = '<div class="reu-elegir"><p>Abriendo la conversación…</p></div>';
+  await cargarChat(true);
+  if (!matchMedia("(min-width: 1100px) and (min-height: 600px)").matches) {
+    $("reu-cuerpo").querySelector(".reu-chat").scrollIntoView({ block: "start" });   // en el teléfono, la conversación a pantalla completa
+  } else if (enfocar && !$("reu-pregunta").disabled) $("reu-pregunta").focus();
+}
+
+function cerrarReu() {
+  clearTimeout(reu.espera);
+  reu.abierta = null; reu.conv = null; reu.firma = "";
+  guardado.quitar("eco-reu");
+  $("reu-cuerpo").dataset.abierta = "no";
+  pintarListaReu();
+  pintarChat();
+  if (!matchMedia("(min-width: 1100px) and (min-height: 600px)").matches) window.scrollTo({ top: 0 });
+}
+
+async function cargarChat(abajo = false) {
+  const id = reu.abierta;
+  if (!id) return;
+  clearTimeout(reu.espera);
+  try {
+    const c = await api(`/api/chat?id=${id}`);
+    if (id !== reu.abierta) return;
+    reu.conv = c;
+    pintarChat(abajo);
+    if (c.pensando) reu.espera = setTimeout(cargarChat, 2500);
+    else if (reu.estabaPensando) cargarReuniones();   // ya llegó: la lista muestra cuántas preguntas tiene
+    reu.estabaPensando = c.pensando;
+  } catch (err) {
+    if (id !== reu.abierta) return;
+    if (String(err.message).includes("404")) {
+      cerrarReu();
+      avisar("Esa grabación ya no está en la laptop.");
+      cargarReuniones();
+      return;
+    }
+    if (!reu.conv) $("reu-mensajes").innerHTML = '<div class="reu-elegir"><p>No pude abrir la conversación. Revisa que Eco siga encendido.</p></div>';
+    reu.espera = setTimeout(cargarChat, 6000);
+  }
+}
+
+function mensajeReuHTML(m) {
+  if (m.rol === "yo") return `<div class="reu-msg de-yo"><span class="oculto">Tú preguntaste: </span>${esc(m.texto)}</div>`;
+  if (m.estado === "pensando") {
+    if (!reu.desde.has(m.id)) reu.desde.set(m.id, Date.now());
+    return `<div class="reu-msg de-eco reu-pensando"><p class="reu-firma">${MARCA_ECO}Eco</p>
+      <div class="reu-burbuja"><span class="reu-puntos" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>Buscando en la grabación… <span class="reu-reloj" data-mid="${m.id}"></span></span></div></div>`;
+  }
+  const citas = (m.citas || []).map((c, i) =>
+    `<button type="button" class="reu-boton" data-cita="cita-${m.id}-${i}" aria-expanded="false" aria-controls="cita-${m.id}-${i}">${ICONO.tiempo}Se dijo a las ${esc(c.hora)}</button>`).join("");
+  const textos = (m.citas || []).map((c, i) => `<blockquote class="reu-cita-texto" id="cita-${m.id}-${i}" hidden>«${esc(c.texto)}»</blockquote>`).join("");
+  const acciones = m.estado === "error"
+    ? `<button type="button" class="reu-boton" data-reintentar="${m.id}">Volver a preguntar</button>`
+    : `${citas}<button type="button" class="reu-boton" data-copiar="${m.id}">Copiar</button>`;
+  return `<div class="reu-msg de-eco${m.estado === "error" ? " con-error" : ""}"><p class="reu-firma">${MARCA_ECO}Eco · ${esc(m.hora)}</p>
+    <div class="reu-burbuja">${esc(m.texto)}</div><div class="reu-acciones-msg">${acciones}</div>${textos}</div>`;
+}
+
+function introReuHTML(c) {
+  const cosa = c.reunion.tipo === "clase" ? "esta clase" : "esta reunión";
+  const sugerencias = (c.sugerencias || []).map((t) => `<button type="button" class="reu-sugerencia" data-sugerencia="${esc(t)}">${esc(t)}</button>`).join("");
+  return `<div class="reu-intro"><strong>Pregúntale a ${cosa}</strong>
+    <p>Escribe la pregunta tal como te la hicieron. Eco busca en toda la grabación y te da la respuesta lista para decirla.</p>
+    ${sugerencias ? `<div class="reu-sugerencias">${sugerencias}</div>` : ""}</div>`;
+}
+
+function pintarChat(abajo = false) {
+  const c = reu.conv, caja = $("reu-mensajes");
+  const abierta = Boolean(reu.abierta && c);
+  $("reu-ver").hidden = !abierta;
+  $("reu-borrar").hidden = !abierta || !c.mensajes.length;
+  $("reu-pregunta").disabled = !abierta;
+  if (!abierta) {
+    $("reu-tipo").innerHTML = "";
+    $("reu-chat-titulo").textContent = "Pregúntale a una grabación";
+    $("reu-meta").textContent = "";
+    $("reu-enviar").disabled = true;
+    if (!reu.abierta) caja.innerHTML = '<div class="reu-elegir"><strong>Elige una reunión o clase</strong><p>Elige una de tus grabaciones y pregúntale lo que quieras: Eco busca en lo que se dijo y te responde.</p></div>';
+    reu.firma = "";
+    return;
+  }
+  const r = c.reunion;
+  $("reu-tipo").innerHTML = r.tipo === "clase" ? ICONO.clase + "Clase" : ICONO.reunion + "Reunión";
+  $("reu-chat-titulo").textContent = r.titulo;
+  $("reu-meta").textContent = [reuFecha(r.fecha_iso, r.fecha), r.hora, r.duracion ? reuDuracion(r.duracion) : ""].filter(Boolean).join(" · ");
+  const firma = JSON.stringify(c.mensajes.map((m) => [m.id, m.estado, m.texto.length])) + (c.sugerencias || []).join("|");
+  if (firma !== reu.firma) {
+    const cerca = caja.scrollHeight - caja.scrollTop - caja.clientHeight < 160;
+    reu.firma = firma;
+    caja.innerHTML = c.mensajes.length ? c.mensajes.map(mensajeReuHTML).join("") : introReuHTML(c);
+    if (abajo || cerca) caja.scrollTop = caja.scrollHeight;
+  }
+  $("reu-enviar").disabled = c.pensando || !$("reu-pregunta").value.trim();
+  const nota = $("reu-nota");
+  nota.classList.toggle("aviso", Boolean(c.pensando && c.ocupada));
+  nota.textContent = c.pensando
+    ? (c.ocupada ? "Tu laptop está transcribiendo otra grabación: esta respuesta va a tardar más de lo normal."
+                 : "La IA de tu laptop está leyendo la grabación; suele tardar uno o dos minutos.")
+    : r.transcripcion ? (matchMedia("(pointer: coarse)").matches ? "Eco responde con lo que se dijo en la grabación." : "Enter para preguntar · Shift + Enter para otra línea")
+    : "Esta grabación no guardó lo que se dijo: Eco responde con el resumen y las notas.";
+  clearInterval(reu.reloj);
+  if (c.pensando) { tickReu(); reu.reloj = setInterval(tickReu, 1000); }
+}
+
+function tickReu() {
+  document.querySelectorAll(".reu-reloj").forEach((el) => {
+    const s = Math.round((Date.now() - (reu.desde.get(Number(el.dataset.mid)) || Date.now())) / 1000);
+    el.textContent = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+  });
+}
+
+async function preguntarReu(texto) {
+  texto = String(texto || "").replace(/\s+/g, " ").trim();
+  if (!texto || !reu.abierta || !reu.conv || reu.conv.pensando) return;
+  const id = reu.abierta, campo = $("reu-pregunta");
+  campo.value = ""; altoReu();
+  // Se ve al instante; la laptop confirma enseguida y responde aparte.
+  reu.conv.mensajes.push({ id: -1, rol: "yo", texto, estado: "listo", citas: [], hora: "" },
+                         { id: -2, rol: "eco", texto: "", estado: "pensando", citas: [], hora: "" });
+  reu.conv.pensando = true; reu.conv.sugerencias = [];
+  reu.desde.set(-2, Date.now());
+  pintarChat(true);
+  try {
+    const c = await enviarJSON("/api/chat", { id, pregunta: texto });
+    if (id !== reu.abierta) return;
+    reu.desde.forEach((t, k) => { if (k === -2) { const nuevo = c.mensajes.at(-1); if (nuevo) reu.desde.set(nuevo.id, t); } });
+    reu.conv = c; reu.estabaPensando = true;
+    pintarChat(true);
+    reu.espera = setTimeout(cargarChat, 2500);
+  } catch (err) {
+    if (id !== reu.abierta) return;
+    campo.value = texto; altoReu();
+    avisar(err.codigo === 409 ? "Eco todavía está respondiendo la pregunta anterior." : err.message.startsWith("http") ? "No pude mandar la pregunta. Revisa que Eco siga encendido." : err.message, 4000);
+    cargarChat(true);
+  }
+}
+
+function altoReu() {
+  const t = $("reu-pregunta");
+  t.style.height = "auto";
+  t.style.height = Math.min(t.scrollHeight + 2, 168) + "px";
+  $("reu-enviar").disabled = !t.value.trim() || Boolean(reu.conv?.pensando) || !reu.abierta;
+}
+
+$("reu-form").addEventListener("submit", (ev) => { ev.preventDefault(); preguntarReu($("reu-pregunta").value); });
+$("reu-pregunta").addEventListener("input", altoReu);
+$("reu-pregunta").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); preguntarReu($("reu-pregunta").value); }
+});
+$("reu-filtro").addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-filtro]");
+  if (!b) return;
+  reu.filtro = b.dataset.filtro;
+  guardado.poner("eco-reu-filtro", reu.filtro);
+  pintarListaReu();
+});
+$("reu-q").addEventListener("input", pintarListaReu);
+$("reu-volver").addEventListener("click", cerrarReu);
+$("reu-ver").addEventListener("click", () => {
+  const r = reu.conv?.reunion;
+  if (!r) return;
+  ponerZona("eco");
+  irAMomento(r.id, r.fecha_iso);
+});
+$("reu-borrar").addEventListener("click", async () => {
+  const id = reu.abierta;
+  if (!id) return;
+  const si = await confirmar({ titulo: "¿Borrar esta conversación?", texto: "Se borran tus preguntas y las respuestas de Eco sobre esta grabación, aquí y en el teléfono. La grabación y sus notas se quedan.", boton: "Borrar conversación" });
+  if (!si) return;
+  try { await enviarJSON("/api/chat/borrar", { id }); } catch { avisar("No pude borrarla. Revisa que Eco siga encendido."); }
+  reu.firma = "";
+  await cargarChat(true);
+  cargarReuniones();
+});
+$("reuniones").addEventListener("click", async (ev) => {
+  const item = ev.target.closest("[data-reu]");
+  if (item) { abrirReu(item.dataset.reu); return; }
+  const sugerencia = ev.target.closest("[data-sugerencia]");
+  if (sugerencia) { preguntarReu(sugerencia.dataset.sugerencia); return; }
+  const cita = ev.target.closest("[data-cita]");
+  if (cita) {
+    const abierta = cita.getAttribute("aria-expanded") === "true";
+    cita.setAttribute("aria-expanded", String(!abierta));
+    $(cita.dataset.cita).hidden = abierta;
+    return;
+  }
+  const copiar = ev.target.closest("[data-copiar]");
+  if (copiar) {
+    const m = reu.conv?.mensajes.find((x) => x.id === Number(copiar.dataset.copiar));
+    try { await navigator.clipboard.writeText(m?.texto || ""); copiar.textContent = "Copiado"; setTimeout(() => (copiar.textContent = "Copiar"), 1600); }
+    catch { avisar("No pude copiar; selecciona el texto y cópialo."); }
+    return;
+  }
+  const reintentar = ev.target.closest("[data-reintentar]");
+  if (reintentar) {
+    const lista = reu.conv?.mensajes || [], i = lista.findIndex((x) => x.id === Number(reintentar.dataset.reintentar));
+    const pregunta = lista.slice(0, i).reverse().find((x) => x.rol === "yo");
+    if (pregunta) preguntarReu(pregunta.texto);
+  }
+});
+/* Desde un momento de reunión o clase: «Preguntarle» abre su conversación. */
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-preguntar-reu]");
+  if (!b) return;
+  ponerZona("reuniones");
+  abrirReu(b.dataset.preguntarReu);
+});
+setInterval(() => {
+  if (!document.hidden && !$("app").hidden && $("app").dataset.zona === "reuniones" && !document.querySelector("dialog[open]")) cargarReuniones();
+}, 30000);
 
 refrescar(true);
 setInterval(() => { if (!document.hidden) refrescar(); }, 15000);

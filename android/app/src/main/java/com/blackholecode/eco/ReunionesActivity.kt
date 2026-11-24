@@ -27,9 +27,10 @@ import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 /**
- * Tus reuniones, leídas en el teléfono. La laptop las convierte en una crónica (la reunión contada como
- * una charla: temas explicados, silencios, acuerdos) y aquí se pide y se lee. Dos vistas en una pantalla:
- * la lista de reuniones y, al tocar una, su crónica completa. Se construye en código, como MainActivity.
+ * Tus reuniones y clases, leídas en el teléfono. La laptop convierte cada reunión en una crónica (la reunión
+ * contada como una charla: temas explicados, silencios, acuerdos) y aquí se pide y se lee. Dos vistas en una
+ * pantalla: la lista (con un selector Reuniones | Clases) y, al tocar una, todo lo que se guardó de ella, con el
+ * botón para preguntarle lo que quieras ([ChatReunionActivity]). Se construye en código, como MainActivity.
  */
 class ReunionesActivity : Activity() {
 
@@ -57,10 +58,13 @@ class ReunionesActivity : Activity() {
     private var enDetalle = false
     private var abiertaDeFrente = false  // llegó desde la notificación: "atrás" cierra la pantalla
     private var carga = 0                // para ignorar respuestas viejas si tocas rápido
+    private var tipo = "reunion"         // qué muestra la lista: "reunion" o "clase"
+    private var idAbierta = -1L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
+        tipo = getSharedPreferences("eco_reuniones", MODE_PRIVATE).getString("tipo", "reunion") ?: "reunion"
         scroll = ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(C_BG)
@@ -97,6 +101,15 @@ class ReunionesActivity : Activity() {
         if (enDetalle && !abiertaDeFrente) cargarLista() else super.onBackPressed()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Al volver de preguntarle a una reunión, se actualiza cuántas preguntas tiene.
+        if (enDetalle && idAbierta > 0 && volviendoDelChat) cargarDetalle(idAbierta, silencioso = true)
+        volviendoDelChat = false
+    }
+
+    private var volviendoDelChat = false
+
     private fun mostrar(intent: Intent) {
         val id = intent.getLongExtra(EXTRA_ID, -1L)
         abiertaDeFrente = id > 0
@@ -107,21 +120,57 @@ class ReunionesActivity : Activity() {
 
     private fun cargarLista() {
         enDetalle = false
+        idAbierta = -1L
         val mia = ++carga
-        encabezado("Reuniones", "Eco te cuenta qué pasó en cada una.")
+        encabezadoLista()
         col.addView(label("Buscando en tu laptop…", 15f, C_MUTED), lp(top = 24))
         if (prefs.server.isBlank()) {
             pintarLista(null)
             return
         }
+        val pedido = tipo
         io.execute {
-            val r = Net.reuniones(prefs.server, prefs.token)
+            val r = Net.reuniones(prefs.server, prefs.token, pedido)
             ui.post { if (mia == carga && !isFinishing) pintarLista(r) }
         }
     }
 
+    private fun encabezadoLista() {
+        encabezado("Reuniones y clases", "Léelas o pregúntales lo que quieras.")
+        col.addView(selectorTipo(), lp(top = 18))
+    }
+
+    /** Reuniones | Clases: un selector arriba, como el de Eco | Finanzas. */
+    private fun selectorTipo(): View {
+        val caja = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(C_SURFACE, 999, C_BORDER)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        for ((valor, texto) in listOf("reunion" to "Reuniones", "clase" to "Clases")) {
+            val elegido = valor == tipo
+            val b = label(texto, 15f, if (elegido) C_TEXT else C_MUTED, medium = true).apply {
+                gravity = Gravity.CENTER
+                minHeight = dp(44)
+                background = if (elegido) rounded(C_SURFACE_2, 999, C_BORDER) else null
+                isClickable = true
+                isFocusable = true
+                contentDescription = if (elegido) "$texto, elegido" else "Ver $texto"
+                setOnClickListener {
+                    if (tipo != valor) {
+                        tipo = valor
+                        getSharedPreferences("eco_reuniones", MODE_PRIVATE).edit().putString("tipo", valor).apply()
+                        cargarLista()
+                    }
+                }
+            }
+            caja.addView(b, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        }
+        return caja
+    }
+
     private fun pintarLista(r: Net.Respuesta?) {
-        encabezado("Reuniones", "Eco te cuenta qué pasó en cada una.")
+        encabezadoLista()
         val j = r?.json
         if (j == null) {
             val texto = when {
@@ -134,19 +183,23 @@ class ReunionesActivity : Activity() {
             col.addView(boton("Reintentar") { cargarLista() }, lp(top = 12))
             return
         }
+        val esClase = tipo == "clase"
         val procesando = j.optJSONArray("procesando")
         if (procesando != null) {
             for (i in 0 until procesando.length()) {
                 val p = procesando.getJSONObject(i)
                 val estado = if (p.optString("estado") == "grabando") "se sigue recibiendo en la laptop" else "la laptop la está contando"
-                col.addView(procesandoCard("Reunión de las ${p.optString("hora")}", estado), lp(top = 14))
+                col.addView(procesandoCard("${if (esClase) "Clase" else "Reunión"} de las ${p.optString("hora")}", estado), lp(top = 14))
             }
         }
         val lista = j.optJSONArray("reuniones")
         if (lista == null || lista.length() == 0) {
             if (procesando == null || procesando.length() == 0) {
                 col.addView(
-                    avisoCard("Todavía no hay reuniones. Cuando termines una con «Iniciar modo reunión», la laptop la procesa y aparece aquí."),
+                    avisoCard(
+                        if (esClase) "Todavía no hay clases. Grábalas con el modo clase de la laptop y aparecen aquí cuando la laptop las procesa."
+                        else "Todavía no hay reuniones. Cuando termines una con «Iniciar modo reunión» (o con el modo reunión de la laptop), aparece aquí."
+                    ),
                     lp(top = 20)
                 )
             }
@@ -160,8 +213,10 @@ class ReunionesActivity : Activity() {
 
     private fun tarjetaReunion(m: JSONObject): View {
         val id = m.optLong("id")
-        val titulo = m.optString("titulo").ifBlank { "Reunión" }
+        val esClase = m.optString("tipo") == "clase"
+        val titulo = m.optString("titulo").ifBlank { if (esClase) "Clase" else "Reunión" }
         val duracion = duracionTexto(m.optDouble("duracion", 0.0))
+        val preguntas = m.optInt("preguntas", 0)
         val meta = listOf(m.optString("fecha"), m.optString("hora"), duracion).filter { it.isNotBlank() }.joinToString(" · ")
         val conCronica = m.optBoolean("cronica", false)
         val card = LinearLayout(this).apply {
@@ -184,10 +239,12 @@ class ReunionesActivity : Activity() {
                 setLineSpacing(0f, 1.2f)
             }, lp(top = 8))
         }
-        card.addView(
-            label(if (conCronica) "Crónica lista · toca para leer" else "Solo resumen", 13f, if (conCronica) C_ACCENT_SOFT else C_MUTED, medium = true),
-            lp(top = 10)
-        )
+        val pie = when {
+            preguntas > 0 -> "$preguntas pregunta${if (preguntas == 1) "" else "s"} · toca para ver"
+            conCronica -> "Crónica lista · toca para leer o preguntarle"
+            else -> "Toca para ver o preguntarle"
+        }
+        card.addView(label(pie, 13f, if (conCronica || preguntas > 0) C_ACCENT_SOFT else C_MUTED, medium = true), lp(top = 10))
         return card
     }
 
@@ -210,22 +267,28 @@ class ReunionesActivity : Activity() {
 
     // ───────────────────────── Una reunión ─────────────────────────
 
-    private fun cargarDetalle(id: Long) {
+    private fun cargarDetalle(id: Long, silencioso: Boolean = false) {
         enDetalle = true
+        idAbierta = id
         val mia = ++carga
-        col.removeAllViews()
-        col.addView(label("Abriendo la reunión…", 15f, C_MUTED), lp(top = 24))
+        if (!silencioso) {
+            col.removeAllViews()
+            col.addView(label("Abriendo…", 15f, C_MUTED), lp(top = 24))
+            scroll.scrollTo(0, 0)   // una reunión nueva empieza arriba (al volver del chat se queda donde estabas)
+        }
         if (prefs.server.isBlank()) {
             pintarDetalle(null)
             return
         }
         io.execute {
             val r = Net.reunion(prefs.server, prefs.token, id = id)
-            ui.post { if (mia == carga && !isFinishing) pintarDetalle(r) }
+            // Al volver del chat sin conexión, se deja lo que ya estaba en pantalla.
+            ui.post { if (mia == carga && !isFinishing && !(silencioso && r?.json == null)) pintarDetalle(r) }
         }
     }
 
     private fun pintarDetalle(r: Net.Respuesta?) {
+        val antes = scroll.scrollY
         col.removeAllViews()
         if (!abiertaDeFrente) col.addView(botonAtras())
         val m = r?.json?.optJSONObject("reunion")
@@ -239,12 +302,31 @@ class ReunionesActivity : Activity() {
             col.addView(boton("Ver todas las reuniones") { abiertaDeFrente = false; cargarLista() }, lp(top = 12))
             return
         }
-        val titulo = m.optString("titulo").ifBlank { "Reunión" }
+        val esClase = m.optString("tipo") == "clase"
+        val cosa = if (esClase) "clase" else "reunión"
+        val titulo = m.optString("titulo").ifBlank { cosa.replaceFirstChar { it.uppercase() } }
         val duracion = duracionTexto(m.optDouble("duracion", 0.0))
         val meta = listOf(m.optString("fecha"), m.optString("hora"), duracion).filter { it.isNotBlank() }.joinToString(" · ")
-        col.addView(label("REUNIÓN", 11f, C_ACCENT_SOFT, medium = true).apply { letterSpacing = 0.18f }, lp(top = if (abiertaDeFrente) 0 else 16))
+        col.addView(label(cosa.uppercase(), 11f, C_ACCENT_SOFT, medium = true).apply { letterSpacing = 0.18f }, lp(top = if (abiertaDeFrente) 0 else 16))
         col.addView(label(titulo, 26f, C_TEXT, medium = true).apply { marcarTitulo(this) }, lp(top = 4))
         col.addView(label(meta, 14f, C_MUTED), lp(top = 4))
+
+        // Preguntarle lo que quieras: Eco busca en lo que se dijo y responde (solo si la laptop ya lo sabe hacer).
+        if (r?.json?.optBoolean("chat", false) == true) {
+            val id = m.optLong("id")
+            val preguntas = m.optInt("preguntas", 0)
+            col.addView(botonPrincipal("Preguntarle a esta $cosa") {
+                volviendoDelChat = true
+                startActivity(
+                    Intent(this, ChatReunionActivity::class.java)
+                        .putExtra(ChatReunionActivity.EXTRA_ID, id)
+                        .putExtra(ChatReunionActivity.EXTRA_TITULO, titulo)
+                )
+            }, lp(top = 18))
+            if (preguntas > 0) {
+                col.addView(label("Ya le hiciste $preguntas pregunta${if (preguntas == 1) "" else "s"}: ahí están guardadas.", 13f, C_MUTED), lp(top = 8))
+            }
+        }
 
         val resumen = m.optString("resumen")
         if (resumen.isNotBlank()) {
@@ -259,7 +341,7 @@ class ReunionesActivity : Activity() {
             col.addView(label("LO QUE PASÓ", 11f, C_ACCENT_SOFT, medium = true).apply { letterSpacing = 0.12f }, lp(top = 26))
             agregarCronica(cronica)
             col.addView(boton("Compartir la crónica") { compartir(titulo, meta, cronica) }, lp(top = 24))
-        } else {
+        } else if (!esClase) {
             col.addView(
                 avisoCard("Esta reunión se guardó sin crónica (solo el resumen). La crónica se escribe cuando termina la reunión y la IA de tu laptop está disponible."),
                 lp(top = 20)
@@ -275,6 +357,7 @@ class ReunionesActivity : Activity() {
         })
         seccionLista("Para no olvidar", listaDeTextos(m.optJSONArray("datos")))
         seccionLista("Ideas", listaDeTextos(m.optJSONArray("ideas")))
+        if (antes > 0) scroll.post { scroll.scrollTo(0, antes) }
     }
 
     /** La crónica llega como texto: "### título (hora)" para cada tema y párrafos debajo. */
@@ -321,12 +404,12 @@ class ReunionesActivity : Activity() {
     }
 
     /** "← Eco": vuelve a la pantalla principal (o a la lista, desde una reunión). */
-    private fun botonAtras(): View = label(if (enDetalle) "←  Reuniones" else "←  Eco", 15f, C_ACCENT_SOFT, medium = true).apply {
+    private fun botonAtras(): View = label(if (enDetalle) "←  Lista" else "←  Eco", 15f, C_ACCENT_SOFT, medium = true).apply {
         minimumHeight = dp(48)
         gravity = Gravity.CENTER_VERTICAL
         isClickable = true
         isFocusable = true
-        contentDescription = if (enDetalle) "Volver a la lista de reuniones" else "Volver a Eco"
+        contentDescription = if (enDetalle) "Volver a la lista" else "Volver a Eco"
         setOnClickListener { if (enDetalle) cargarLista() else finish() }
     }
 
@@ -379,6 +462,20 @@ class ReunionesActivity : Activity() {
 
     private fun ripple(content: Drawable, radius: Int): RippleDrawable =
         RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), content, rounded(0xFFFFFFFF.toInt(), radius))
+
+    private fun botonPrincipal(texto: String, onClick: () -> Unit) = Button(this).apply {
+        this.text = texto
+        isAllCaps = false
+        textSize = 16f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        minHeight = dp(52)
+        minimumHeight = dp(52)
+        stateListAnimator = null
+        setPadding(dp(16), dp(12), dp(16), dp(12))
+        background = ripple(rounded(C_ACCENT, 16), 16)
+        setTextColor(0xFFFFFFFF.toInt())
+        setOnClickListener { onClick() }
+    }
 
     private fun boton(texto: String, onClick: () -> Unit) = Button(this).apply {
         this.text = texto

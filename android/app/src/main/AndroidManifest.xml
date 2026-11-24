@@ -65,11 +65,17 @@
             android:excludeFromRecents="true"
             android:taskAffinity="com.blackholecode.eco.emergencia" />
 
-        <!-- Tus reuniones: la lista y la crónica de cada una, leídas desde la laptop -->
+        <!-- Tus reuniones y clases: la lista y lo que se guardó de cada una, leídas desde la laptop -->
         <activity
             android:name=".ReunionesActivity"
             android:exported="false"
             android:launchMode="singleTop" />
+
+        <!-- Preguntarle a una reunión o clase: Eco busca en lo que se dijo y responde -->
+        <activity
+            android:name=".ChatReunionActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <!-- Tus pendientes: verlos, marcarlos y agregar uno desde el teléfono -->
         <activity

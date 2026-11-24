@@ -159,7 +159,7 @@ Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 
 ### 9. Modo clase, modo reunión, preguntas y respaldo
 
-**Modo clase y reunión (laptop).** Graba lo que suena en la laptop (Meet, Zoom, Teams), no tu micrófono. En el panel (y en el ícono de la bandeja) eliges si es una **clase** o una **reunión**, y Eco recuerda lo último que elegiste: una reunión se guarda y se trata igual que la del teléfono (crónica completa, **puntos clave** al principio, acuerdos, tareas, transcripción y Telegram), y aparece en *Ver mis reuniones* de la app. Una clase deja tareas, fechas y temas de examen.
+**Modo clase y reunión (laptop).** Graba lo que suena en la laptop (Meet, Zoom, Teams), no tu micrófono. En el panel (y en el ícono de la bandeja) eliges si es una **clase** o una **reunión**, y Eco recuerda lo último que elegiste: una reunión se guarda y se trata igual que la del teléfono (crónica completa, **puntos clave** al principio, acuerdos, tareas, transcripción y Telegram), y aparece en *Mis reuniones y clases* de la app. Una clase deja tareas, fechas y temas de examen.
 - Empieza desde el panel (**Grabar la clase**, con nombre opcional) o con clic derecho en el ícono › **Grabar la clase**.
 - Cada 10 minutos Eco transcribe lo grabado; al terminar te manda por Telegram las tareas, fechas y temas de examen.
 - Si pasan 20 minutos en silencio, se termina sola.
@@ -169,7 +169,7 @@ Para quitarlo: **`desinstalar_inicio.bat`**. Tus notas y datos no se tocan.
 - Usa unos 15 MB por hora y sube una parte cada 10 minutos, así que la laptop va adelantando el trabajo.
 - Mientras dura la reunión, el botón de momentos se apaga: la reunión ya lo graba todo.
 - **Crónica:** al terminar, la IA de la laptop te cuenta toda la reunión como una charla, no como puntos sueltos: un título por tema, todo lo que se habló explicado, los acuerdos y los silencios ("hubo un momento de silencio de casi un minuto"). Eco anota la hora y las pausas de 20 s o más en la transcripción para poder contarlo. Te llega completa por Telegram (después del resumen, en uno o varios mensajes), y queda en `notas/transcripciones/`, en el panel y en el teléfono.
-- **En el teléfono:** cuando la laptop termina de contártela, llega una notificación "Tu reunión ya está lista". Tócala, o despliega **Reuniones y pendientes** y abre **Ver mis reuniones**, para leerla y compartirla. La lista y la crónica se piden a la laptop, así que necesitas estar en tu red o en Tailscale.
+- **En el teléfono:** cuando la laptop termina de contártela, llega una notificación "Tu reunión ya está lista". Tócala, o despliega **Reuniones y pendientes** y abre **Mis reuniones y clases**, para leerla y compartirla. La lista y la crónica se piden a la laptop, así que necesitas estar en tu red o en Tailscale.
 - **Pendientes en el teléfono:** en la pantalla de Eco, despliega **Reuniones y pendientes** y toca **Ver mis pendientes**: muestra lo mismo que la columna Pendientes del panel, agrupado en Vencidos, Hoy, Próximos y Sin fecha. Toca una tarea para marcarla (o desmarcarla) y usa la caja de arriba para agregar una, con fecha y hora si quieres. También se pide a la laptop: necesitas tu red o Tailscale.
 - En `config.toml`, sección `[sesiones]`: `cronica_reunion` (por defecto `true`), `cronica_clase` (`false`), `puntos_clave` (`true`: una lista de puntos clave antes de la crónica), `tipo_laptop` (`"clase"` o `"reunion"`: lo que graba la laptop si no eliges), `silencio_marca_s` (20) y `marca_hora_s` (120). Cuesta más IA que un resumen: una reunión de una hora son varias llamadas largas.
 
@@ -312,6 +312,19 @@ Cada vez que GitHub compila una versión nueva de la app, la laptop la baja sola
 - **Notas rápidas:** escríbele cualquier cosa al bot, por ejemplo *"examen de física el martes"*, y queda anotado con su fecha. También sirven una **nota de voz** o una **foto** de la pizarra.
 - **Panel:** el acceso directo **Eco** o el ícono junto al reloj abren tu panel con todo lo guardado.
 - **Notas en Markdown:** quedan en `servidor/notas/`, una por día más `Pendientes.md`. Si quieres verlas en Obsidian, apunta `carpeta` en `config.toml` a tu bóveda.
+
+## Pregúntale a una reunión o clase
+
+Eliges una reunión o clase ya grabada y le preguntas lo que quieras, **tal como te lo preguntaron a ti**: *«¿A qué edad entran al Campa Jóvenes?»*, *«¿Qué se acordó del retiro?»*, *«¿Dejaron tarea?»*. Eco busca en **toda la transcripción** los pedazos donde se habló de eso (por significado, no solo por palabras exactas), los junta con el resumen, los puntos clave y las tareas, y te da la respuesta **directa, lista para decirla o copiarla**. Debajo te muestra **a qué hora se dijo**: tócala y ves lo que se dijo en ese momento.
+
+- **En la laptop:** en el panel, arriba, el apartado **Reuniones**. A la izquierda eliges la grabación (filtra por *Reuniones* o *Clases*, o búscala por nombre o fecha) y a la derecha conversas. También puedes tocar **Preguntarle a esta reunión** en cualquier reunión o clase de la línea del día.
+- **En el teléfono:** **Reuniones y pendientes** › **Mis reuniones y clases** › elige una › **Preguntarle a esta reunión**. Arriba eliges *Reuniones* o *Clases*.
+- **La conversación es una sola:** lo que preguntas en el teléfono lo ves en el panel y al revés. Recuerda lo que ya preguntaste, así que puedes seguir con *«¿y cuánto cuesta?»*. Con **Borrar conversación** empiezas de cero (la grabación y sus notas se quedan).
+- **Si no se habló de eso, te lo dice** («En la reunión no se habló de eso») en vez de inventar. No sabe quién dijo cada cosa: la grabación no separa voces.
+- **Cuánto tarda:** la IA corre en tu laptop (gratis y privada), así que cada respuesta tarda. Con tu reunión de 20 minutos tardó de 4 a 7 minutos mientras la laptop transcribía otra grabación; con la laptop desocupada es bastante menos. La pregunta se guarda al instante: puedes cerrar la pantalla y volver, la respuesta te espera ahí.
+- Funciona con todo lo que se grabó como reunión o clase (laptop o teléfono). Si una grabación no guardó la transcripción, responde con el resumen y las notas.
+
+En `config.toml`, sección `[chat]`: `activo` (`true`) y `fragmentos` (`3`): cuántos pedazos de la transcripción lee por pregunta. Más pedazos = respuestas con más contexto, pero más lentas.
 
 ## Apuntes en Notion
 

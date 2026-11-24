@@ -1116,7 +1116,7 @@ class MainActivity : Activity() {
         meetingButton = opcion("Iniciar modo reunión") { startMeeting() }
         contenido.addView(meetingButton, lp())
         // Las reuniones ya grabadas: la lista y la crónica de cada una (la laptop las cuenta como una charla).
-        contenido.addView(opcion("Ver mis reuniones") {
+        contenido.addView(opcion("Mis reuniones y clases") {
             startActivity(Intent(this, ReunionesActivity::class.java))
         }, lp(top = 6))
         // Tus pendientes (los mismos del panel de la laptop): verlos, marcarlos y agregar uno.

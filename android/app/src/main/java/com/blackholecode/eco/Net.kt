@@ -171,8 +171,20 @@ object Net {
         }
     }
 
-    /** Las reuniones recientes (y las que la laptop todavía está procesando). */
-    fun reuniones(server: String, token: String): Respuesta? = leer(server, token, "/reuniones")
+    /** Las reuniones (o las clases) recientes, y las que la laptop todavía está procesando. */
+    fun reuniones(server: String, token: String, tipo: String = "reunion"): Respuesta? =
+        leer(server, token, "/reuniones?tipo=" + java.net.URLEncoder.encode(tipo, "UTF-8"))
+
+    /** La conversación con una reunión o clase (lo que le preguntaste y lo que Eco respondió). */
+    fun chat(server: String, token: String, id: Long): Respuesta? = leer(server, token, "/api/chat?id=$id")
+
+    /** Le hace una pregunta a una reunión o clase. La laptop la guarda al instante y responde aparte. */
+    fun preguntarReunion(server: String, token: String, id: Long, pregunta: String): Respuesta? =
+        enviar(server, token, "/api/chat", JSONObject().put("id", id).put("pregunta", pregunta))
+
+    /** Borra la conversación con una reunión o clase (la grabación y sus notas se quedan). */
+    fun borrarChat(server: String, token: String, id: Long): Boolean =
+        enviar(server, token, "/api/chat/borrar", JSONObject().put("id", id))?.codigo == 200
 
     /** Una reunión con su crónica, por id o por la clave con que se grabó. */
     fun reunion(server: String, token: String, id: Long? = null, clave: String? = null): Respuesta? {
@@ -224,7 +236,10 @@ object Net {
             val codigo = c.responseCode
             val json = if (codigo == 200) {
                 JSONObject(c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-            } else null
+            } else {
+                // El motivo del rechazo (por ejemplo «todavía está respondiendo la pregunta anterior»), si lo mandó.
+                runCatching { c.errorStream?.bufferedReader(Charsets.UTF_8)?.use { JSONObject(it.readText()) } }.getOrNull()
+            }
             Respuesta(codigo, json)
         } catch (_: Exception) {
             null
