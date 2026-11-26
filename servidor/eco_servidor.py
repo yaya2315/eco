@@ -135,6 +135,12 @@ DEFAULTS: dict = {
         "activo": True,
         "fragmentos": 3,                # pedazos de la transcripción que lee por pregunta (2 a 10; más = más lento)
     },
+    "procesador": {
+        # Mientras usas la laptop (o graba el modo clase), Eco y su IA local trabajan solo en la mitad de los núcleos y
+        # la otra mitad queda libre para ti. Cuando la dejas sola, usan todos. false = siempre todos (te puede trabar).
+        "cuidar_uso": True,
+        "libre_tras_min": 3,            # minutos sin tocar teclado ni mouse para que Eco vuelva a usar todo
+    },
     "respaldo": {
         "activo": True,
         "carpeta": "",      # vacío = OneDrive\Eco respaldos
@@ -795,8 +801,9 @@ def _segmento_valido(s) -> bool:
 
 
 def _hilos(nombre: str) -> int:
-    """El modelo preciso usa todos los núcleos (Eco corre con prioridad baja, así que no te traba la
-    laptop); el rápido, la mitad, para gastar menos batería."""
+    """El preciso usa todos los hilos y el rápido la mitad, para gastar menos batería. Medido en tu Ryzen con 1 min de
+    audio: 8 hilos ≈ 95-110 s y 4 hilos ≈ 150 s, así que el preciso se queda con 8. Mientras usas la laptop no se
+    cambian los hilos: cuidar_procesador_hilo los aprieta en la mitad de los núcleos (≈ 200 s, pero no te traba)."""
     pedido = int(CFG["whisper"].get("hilos") or 0)
     if pedido > 0:
         return pedido
@@ -5269,6 +5276,7 @@ def api_estado(es_local: bool) -> dict:
         "ok": True, "inicio": ESTADO["inicio"], "ultimo_audio": ESTADO["ultimo_audio"],
         "procesando": ESTADO["procesando"], "en_cola": COLA.qsize(),
         "de_fondo": _fondo["n"],   # apuntes de Notion o respuestas del chat que se están haciendo aparte
+        "procesador": ESTADO.get("procesador"),   # "mitad" mientras usas la laptop, "todo" cuando la dejas sola
         "direccion_fija": f"{fija}:{puerto}" if fija else None,
         "direccion_wifi": f"{ip_local()}:{puerto}",
         "ia": f"{ia['proveedor']} · {modelo_chat() if ia['proveedor'] == 'ollama' else ia['claude_modelo']}",
@@ -7238,8 +7246,8 @@ def _crear_servidor(puerto: int) -> "ServidorEco":
 
 
 def prioridad_baja() -> None:
-    """Eco usa todos los núcleos para transcribir, pero con prioridad "por debajo de lo normal":
-    si tú estás usando la laptop, Windows te da preferencia a ti y no se traba."""
+    """Eco corre con prioridad "por debajo de lo normal": si Windows tiene que elegir, te elige a ti. No basta para
+    que no se trabe la laptop (los núcleos y la memoria se comparten igual); de eso se encarga cuidar_procesador_hilo."""
     if os.name != "nt":
         return
     try:
@@ -7248,6 +7256,199 @@ def prioridad_baja() -> None:
         ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
     except Exception:
         pass
+
+
+# ════════════════════════════ Cuidar la laptop mientras la usas ════════════════════════════
+# Con prioridad baja Windows te da preferencia, pero no alcanza: Whisper y la IA local ocupan todos los núcleos y la
+# memoria (que en esta laptop es de un solo canal y además la usa la pantalla), y todo se pone lento o se traba.
+# Por eso, mientras usas la laptop (o graba el modo clase, que suele ser una reunión que estás oyendo en ella), Eco
+# trabaja solo en la mitad de los núcleos y la otra mitad queda libre para ti. Cuando la dejas sola, usa todos.
+
+PROCESADOR_REVISAR_S = 5
+_OLLAMA_EXE = "ollama.exe"
+_nucleos_cache: list[int] = []
+_ollama_limitado = {"si": True}   # True al encender: la primera vuelta le devuelve todo a Ollama (por si Eco se cerró
+                                  # mientras lo tenía limitado)
+_procesador_error = {"visto": False}
+_win: dict = {}
+
+
+def _cuidar_uso() -> bool:
+    return os.name == "nt" and bool((CFG.get("procesador") or {}).get("cuidar_uso", True))
+
+
+def _kernel32():
+    """Una copia propia de kernel32 para declarar los tipos sin cambiar los de ctypes.windll que usa el resto."""
+    if "k32" not in _win:
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32")
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.SetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        k32.SetProcessAffinityMask.restype = ctypes.c_int
+        k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        k32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+        k32.Process32FirstW.argtypes = k32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        k32.GetTickCount.restype = ctypes.c_uint32
+        _win["k32"] = k32
+    return _win["k32"]
+
+
+def _nucleos() -> list[int]:
+    """La máscara de cada núcleo físico (con sus dos hilos, si los tiene). Si Windows no lo dice, cada hilo cuenta
+    como un núcleo."""
+    if _nucleos_cache:
+        return _nucleos_cache
+    mascaras: list[int] = []
+    try:
+        import ctypes
+
+        class _Info(ctypes.Structure):   # SYSTEM_LOGICAL_PROCESSOR_INFORMATION
+            _fields_ = [("mascara", ctypes.c_size_t), ("relacion", ctypes.c_int), ("_union", ctypes.c_ulonglong * 2)]
+
+        k32 = ctypes.WinDLL("kernel32")
+        largo = ctypes.c_uint32(0)
+        k32.GetLogicalProcessorInformation(None, ctypes.byref(largo))
+        n = largo.value // ctypes.sizeof(_Info)
+        if n:
+            datos = (_Info * n)()
+            if k32.GetLogicalProcessorInformation(datos, ctypes.byref(largo)):
+                mascaras = [d.mascara for d in datos if d.relacion == 0 and d.mascara]   # 0 = un núcleo físico
+    except Exception:
+        mascaras = []
+    _nucleos_cache[:] = sorted(mascaras) or [1 << i for i in range(os.cpu_count() or 1)]
+    return _nucleos_cache
+
+
+def _unir(mascaras: list[int]) -> int:
+    total = 0
+    for m in mascaras:
+        total |= m
+    return total
+
+
+def mascara_mitad() -> int:
+    """Los núcleos de Eco mientras usas la laptop: la mitad de arriba. Los primeros (donde Windows atiende el teclado,
+    el mouse y la pantalla) quedan para ti. En tu Ryzen: 2 de los 4 núcleos, con sus 4 hilos."""
+    nucleos = _nucleos()
+    return _unir(nucleos[len(nucleos) - max(1, len(nucleos) // 2):])
+
+
+def mascara_todo() -> int:
+    return _unir(_nucleos())
+
+
+def hilos_mitad() -> int:
+    return bin(mascara_mitad()).count("1")
+
+
+def _segundos_sin_tocar() -> float | None:
+    """Cuánto hace que tocaste el teclado o el mouse (None si Windows no lo dice)."""
+    try:
+        import ctypes
+
+        class _Ultimo(ctypes.Structure):   # LASTINPUTINFO
+            _fields_ = [("cbSize", ctypes.c_uint32), ("dwTime", ctypes.c_uint32)]
+
+        u = _Ultimo(ctypes.sizeof(_Ultimo), 0)
+        if not ctypes.WinDLL("user32").GetLastInputInfo(ctypes.byref(u)):
+            return None
+        return ((_kernel32().GetTickCount() - u.dwTime) & 0xFFFFFFFF) / 1000
+    except Exception:
+        return None
+
+
+def _pantalla_ocupada() -> bool:
+    """Un video, un juego o una presentación en pantalla completa: aunque no toques nada, la estás usando."""
+    try:
+        import ctypes
+        estado = ctypes.c_int(0)
+        if ctypes.WinDLL("shell32").SHQueryUserNotificationState(ctypes.byref(estado)) != 0:
+            return False
+        return estado.value in (2, 3, 4, 7)   # ocupada, juego, presentación, app a pantalla completa
+    except Exception:
+        return False
+
+
+def laptop_en_uso() -> bool:
+    if CLASE is not None and CLASE.activa():
+        return True   # graba el modo clase: casi siempre es una reunión o clase que estás oyendo en la laptop
+    if _pantalla_ocupada():
+        return True
+    quieta = _segundos_sin_tocar()
+    limite = float((CFG.get("procesador") or {}).get("libre_tras_min") or 3) * 60
+    return quieta is None or quieta < limite
+
+
+def _pids(exe: str) -> list[int]:
+    import ctypes
+
+    class _Proceso(ctypes.Structure):   # PROCESSENTRY32W
+        _fields_ = [("dwSize", ctypes.c_uint32), ("cntUsage", ctypes.c_uint32), ("th32ProcessID", ctypes.c_uint32),
+                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", ctypes.c_uint32),
+                    ("cntThreads", ctypes.c_uint32), ("th32ParentProcessID", ctypes.c_uint32),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", ctypes.c_uint32), ("szExeFile", ctypes.c_wchar * 260)]
+
+    k32 = _kernel32()
+    foto = k32.CreateToolhelp32Snapshot(0x2, 0)   # TH32CS_SNAPPROCESS
+    if not foto or foto == ctypes.c_void_p(-1).value:
+        return []
+    salida = []
+    try:
+        p = _Proceso()
+        p.dwSize = ctypes.sizeof(_Proceso)
+        ok = k32.Process32FirstW(foto, ctypes.byref(p))
+        while ok:
+            if p.szExeFile.lower() == exe:
+                salida.append(p.th32ProcessID)
+            ok = k32.Process32NextW(foto, ctypes.byref(p))
+    finally:
+        k32.CloseHandle(foto)
+    return salida
+
+
+def _limitar_ollama(mascara: int) -> None:
+    """La IA local corre en Ollama, que es otro programa: se le pone la misma mitad, solo mientras le está
+    respondiendo a Eco. Al terminar (o al encender Eco) se le devuelve todo."""
+    k32 = _kernel32()
+    for pid in _pids(_OLLAMA_EXE):
+        h = k32.OpenProcess(0x0200 | 0x1000, 0, pid)   # PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
+        if h:
+            try:
+                k32.SetProcessAffinityMask(h, mascara)
+            finally:
+                k32.CloseHandle(h)
+
+
+def cuidar_procesador_hilo() -> None:
+    """Cada pocos segundos: ¿estás usando la laptop? Entonces Eco (y Ollama, si le está respondiendo a Eco) trabaja
+    en la mitad de los núcleos. ¿La dejaste sola? Entonces en todos, para terminar antes."""
+    if os.name != "nt":
+        return
+    actual = None
+    while True:
+        try:
+            mitad = _cuidar_uso() and laptop_en_uso()
+            mascara = mascara_mitad() if mitad else mascara_todo()
+            if mascara != actual:
+                k32 = _kernel32()
+                if k32.SetProcessAffinityMask(k32.GetCurrentProcess(), mascara):
+                    actual = mascara
+                    ESTADO["procesador"] = "mitad" if mitad else "todo"
+            ia_local = str(CFG["ia"].get("proveedor", "claude")).lower() == "ollama"
+            if mitad and ia_local and _ia_ocupada["n"] > 0:
+                _limitar_ollama(mascara)   # en cada vuelta: Ollama abre un proceso nuevo cuando carga otro modelo
+                _ollama_limitado["si"] = True
+            elif _ollama_limitado["si"]:
+                _limitar_ollama(mascara_todo())
+                _ollama_limitado["si"] = False
+        except Exception as ex:
+            if not _procesador_error["visto"]:
+                _procesador_error["visto"] = True
+                log.warning("No pude repartir el procesador (%s); Eco sigue igual, con prioridad baja", ex)
+        time.sleep(PROCESADOR_REVISAR_S)
 
 
 def arrancar(consola: bool = True) -> ServidorEco:
@@ -7284,7 +7485,8 @@ def arrancar(consola: bool = True) -> ServidorEco:
     threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
     migrar_recordar()
     encender_bot()
-    for destino in (trabajador, reloj, google_hilo, actualizaciones_hilo, vectores_hilo, liberar_whisper_hilo):
+    for destino in (trabajador, reloj, google_hilo, actualizaciones_hilo, vectores_hilo, liberar_whisper_hilo,
+                    cuidar_procesador_hilo):
         threading.Thread(target=destino, name=destino.__name__, daemon=True).start()
     log.info("Eco encendido (puerto %d)%s", puerto, f" · perfil {PERFIL}" if PERFIL else "")
     return servidor

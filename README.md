@@ -429,7 +429,7 @@ Actions vuelve a compilar el APK. Si ya pegaste el permiso de GitHub en el panel
 
 ## Para que entienda mejor
 
-- **Transcripción:** con la laptop enchufada Eco usa Whisper **large-v3-turbo** (casi tan preciso como el más grande y bastante más rápido; se baja solo la primera vez, ~1.6 GB). Usa todos los núcleos, pero con prioridad baja: si tú estás usando la laptop, Windows te da preferencia. Con batería usa `small`.
+- **Transcripción:** con la laptop enchufada Eco usa Whisper **large-v3-turbo** (casi tan preciso como el más grande y bastante más rápido; se baja solo la primera vez, ~1.6 GB). Mientras usas la laptop trabaja solo en la mitad de los núcleos, para no trabarte, y cuando la dejas sola usa todos (más abajo, en «Velocidad»). Con batería usa `small`.
 - **Nombres:** Whisper recibe tu nombre, tus clases y los nombres de personas que Eco ya anotó, para escribir "Steven" y no "Estiven". Puedes agregar más en `config.toml` → `[whisper] palabras = ["…"]`.
 - **El toque:** el teléfono le dice a la laptop en qué segundo tocaste *Guardar*. La IA sabe que lo importante está alrededor de ese punto y que lo de mucho antes puede ser la tele u otra conversación, así que ya no mezcla temas.
 - **La IA:** si instalaste `qwen3.5:4b`, Eco lo usa sin el modo "pensar" (en tu CPU tardaría minutos). Te lo sugiere por Telegram si falta.
@@ -508,6 +508,7 @@ Todo corre en tu laptop, gratis y sin mandar tus grabaciones a nadie. El precio 
 - **Whisper por lotes** (`[whisper] lote = 4`): transcribe varios pedazos a la vez. Medido con tu grabación: unas **2 veces más rápido**, con el mismo contenido. Además quita muletillas sueltas («eh», «mmm») y palabras repetidas pegadas («para para»).
 - **La IA tiene prioridad:** mientras la IA responde algo (una pregunta en el chat, el análisis de una reunión, los apuntes de Notion), Whisper hace una pausa entre un pedazo y otro y sigue apenas termina. Juntos se estorbaban y cada uno iba a menos de la mitad.
 - **El chat lee poco:** a la IA de la laptop solo le pasa las notas cortas y los pedazos de la transcripción que hablan de tu pregunta.
+- **No te traba la laptop** (`[procesador] cuidar_uso = true`): mientras la usas (tocaste el teclado o el mouse en los últimos 3 minutos, ves algo en pantalla completa o el modo clase está grabando), Whisper y la IA local trabajan solo en la mitad de los núcleos (en tu Ryzen, 2 de 4) y la otra mitad queda libre para ti. Cuando la dejas sola, por ejemplo de noche, usan todos. La prioridad baja sola no bastaba: Windows te daba preferencia, pero los núcleos y la memoria seguían llenos y la pantalla se trababa.
 
 **Lo que más ayudaría (tú decides):**
 - **Una segunda tarjeta de memoria** igual a la que tienes (DDR4 SODIMM 2666) pone la memoria en doble canal: la IA escribe casi al doble de rápido. Revisa primero si tu laptop tiene una ranura libre.
@@ -521,6 +522,7 @@ Todo corre en tu laptop, gratis y sin mandar tus grabaciones a nadie. El precio 
 | Eco se detiene solo | Revisa los ajustes de batería del Honor (paso 3.3). Si Android lo cierra, Eco te deja una notificación para reactivarlo. |
 | Sale `timed out` al descargar Whisper | Apaga Eco y haz doble clic en **`descargar_modelo.bat`**. Baja el modelo con calma y reintenta solo si se corta. Cuando termine, enciende Eco. Los audios que ya llegaron se procesan solos; si falla el internet, Eco los reintenta cada pocos minutos. |
 | La transcripción tarda mucho | En `config.toml` usa `modelo = "base"`. |
+| La laptop se pone lenta mientras Eco trabaja | Revisa que en `config.toml` no esté `cuidar_uso = false` en `[procesador]` y que `[whisper] hilos` sea `0`. Con eso Eco te deja libre la mitad del procesador. |
 | La transcripción sale con errores | Usa `modelo = "medium"` o `beam = 3`. Lleva el teléfono en la bolsa de la camisa, no en la del pantalón. |
 | Telegram no responde | Revisa `token` y `chat_id`, y ejecuta `iniciar.bat --probar`. |
 | Falla la compilación en Actions | Copia el error del log y pásamelo. |

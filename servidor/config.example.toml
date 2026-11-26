@@ -17,7 +17,7 @@ token = "cambia-esto-por-una-clave-larga"
 modelo = "small"
 idioma = "es"
 beam = 1        # 1 = rápido. 3-5 = un poco más preciso y más lento.
-hilos = 0       # 0 = automático (enchufada usa todos los núcleos, con prioridad baja)
+hilos = 0       # 0 = automático (lo reparte junto con [procesador]); déjalo en 0 si usas cuidar_uso
 # Con la laptop enchufada usa el más preciso (se baja solo la primera vez, ~1.6 GB).
 # "large-v3-turbo" es casi tan bueno como el más grande de Whisper y bastante más rápido.
 # "" = usar siempre el de arriba.
@@ -96,6 +96,13 @@ incluir_transcripcion = false   # añadir la transcripción literal, en un despl
 # Preguntarle a una reunión o clase, en el panel (apartado Reuniones) y en la app (README, «Pregúntale a una reunión o clase»).
 activo = true
 fragmentos = 3                  # pedazos de la transcripción que lee por pregunta (2 a 10): más = más contexto, más lento
+
+[procesador]
+# Para que Eco no te trabe la laptop (README, «Velocidad»): mientras la usas, o mientras graba el modo clase, Eco y su
+# IA local trabajan solo en la mitad de los núcleos y la otra mitad queda libre para ti. Cuando la dejas sola, usan
+# todos para terminar antes. false = siempre todos (un poco más rápido, pero te puede trabar).
+cuidar_uso = true
+libre_tras_min = 3              # minutos sin tocar teclado ni mouse para que Eco vuelva a usar todo el procesador
 
 [respaldo]
 activo = true
