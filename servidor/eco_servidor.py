@@ -7305,6 +7305,8 @@ def subir_hilo(nivel: int = 2) -> None:
 
 PROCESADOR_REVISAR_S = 5
 _OLLAMA_EXE = "ollama.exe"
+_OLLAMA_HIJOS = ("llama-server.exe", "ollama_llama_server.exe", "ollama.exe")   # donde corre el modelo
+_ollama_prioridad: dict[int, int] = {}   # la prioridad que tenía cada proceso de Ollama antes de limitarlo
 _nucleos_cache: list[int] = []
 _ollama_limitado = {"si": True}   # True al encender: la primera vuelta le devuelve todo a Ollama (por si Eco se cerró
                                   # mientras lo tenía limitado)
@@ -7449,7 +7451,8 @@ def laptop_en_uso() -> bool:
     return quieta is None or quieta < limite
 
 
-def _pids(exe: str) -> list[int]:
+def _procesos() -> list[tuple[int, int, str]]:
+    """(pid, pid del padre, programa en minúsculas) de cada proceso de Windows."""
     import ctypes
 
     class _Proceso(ctypes.Structure):   # PROCESSENTRY32W
@@ -7468,29 +7471,53 @@ def _pids(exe: str) -> list[int]:
         p.dwSize = ctypes.sizeof(_Proceso)
         ok = k32.Process32FirstW(foto, ctypes.byref(p))
         while ok:
-            if p.szExeFile.lower() == exe:
-                salida.append(p.th32ProcessID)
+            salida.append((p.th32ProcessID, p.th32ParentProcessID, p.szExeFile.lower()))
             ok = k32.Process32NextW(foto, ctypes.byref(p))
     finally:
         k32.CloseHandle(foto)
     return salida
 
 
+def _pids(exe: str) -> list[int]:
+    return [pid for pid, _, nombre in _procesos() if nombre == exe]
+
+
+def _pids_ollama() -> list[int]:
+    """Ollama y el proceso donde de verdad corre el modelo: llama-server.exe (u ollama_llama_server.exe en versiones
+    viejas), que Ollama abre como hijo. Solo los hijos de Ollama: otro llama-server que tengas no se toca."""
+    procesos = _procesos()
+    ollama = {pid for pid, _, nombre in procesos if nombre == _OLLAMA_EXE}
+    return sorted(ollama | {pid for pid, padre, nombre in procesos if padre in ollama and nombre in _OLLAMA_HIJOS})
+
+
 def _limitar_ollama(limitar: bool) -> None:
-    """La IA local corre en Ollama, que es otro programa: se le pone el mismo cuidado (mitad de los núcleos, prioridad
-    inactiva y modo de eficiencia), solo mientras le está respondiendo a Eco. Al terminar (o al encender Eco) se le
-    devuelve como estaba: todos los núcleos, prioridad normal y que Windows decida."""
+    """La IA local corre en Ollama, que es otro programa (y su modelo corre con prioridad «por encima de lo normal»,
+    más alta que la de tus programas): se le pone el mismo cuidado que a Eco (mitad de los núcleos, prioridad inactiva
+    y modo de eficiencia), solo mientras le está respondiendo a Eco. Al terminar se le devuelve como estaba: todos los
+    núcleos, su prioridad de antes y que Windows decida el modo de eficiencia. Al encender Eco se arregla lo que haya
+    quedado limitado si Eco se cerró a medias."""
     k32 = _kernel32()
-    for pid in _pids(_OLLAMA_EXE):
+    vivos = set()
+    for pid in _pids_ollama():
+        vivos.add(pid)
         h = k32.OpenProcess(0x0200 | 0x1000, 0, pid)   # PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
-        if h:
-            try:
-                if limitar:
-                    _modo(h, mascara_mitad(), PRIORIDAD_INACTIVA, True)
-                else:
-                    _modo(h, mascara_todo(), PRIORIDAD_NORMAL, None)
-            finally:
-                k32.CloseHandle(h)
+        if not h:
+            continue
+        try:
+            actual = k32.GetPriorityClass(h)
+            if limitar:
+                if pid not in _ollama_prioridad and actual and actual != PRIORIDAD_INACTIVA:
+                    _ollama_prioridad[pid] = actual
+                _modo(h, mascara_mitad(), PRIORIDAD_INACTIVA, True)
+            else:
+                antes = _ollama_prioridad.pop(pid, None)
+                if antes is None and actual == PRIORIDAD_INACTIVA:   # quedó limitado de una vez anterior
+                    antes = PRIORIDAD_NORMAL
+                _modo(h, mascara_todo(), antes or actual, None)
+        finally:
+            k32.CloseHandle(h)
+    for pid in set(_ollama_prioridad) - vivos:   # procesos que Ollama ya cerró
+        _ollama_prioridad.pop(pid, None)
 
 
 def cuidar_procesador_hilo() -> None:

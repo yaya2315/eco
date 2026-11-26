@@ -513,7 +513,7 @@ Todo corre en tu laptop, gratis y sin mandar tus grabaciones a nadie. El precio 
   - bajan a prioridad **inactiva**: solo usan lo que tus programas dejan sin usar;
   - se ponen en **modo de eficiencia** (la hojita verde del Administrador de tareas): van más despacio y gastan menos energía, y a tus núcleos les queda margen para subir la velocidad.
 
-  La grabación de la laptop, el panel y el bot siguen con prioridad alta, así que el audio no se corta y te responden rápido. Cuando dejas la laptop sola, por ejemplo de noche, todo vuelve a la normal y Eco va igual de rápido que antes.
+  A Ollama le pone lo mismo solo mientras le responde a Eco, y luego se lo devuelve como estaba. Ojo: Ollama corre su modelo (`llama-server.exe`) con prioridad «por encima de lo normal», más alta que la de tus programas, y por eso la laptop también se trababa cuando Eco analizaba. La grabación de la laptop, el panel y el bot siguen con prioridad alta, así que el audio no se corta y te responden rápido. Cuando dejas la laptop sola, por ejemplo de noche, todo vuelve a la normal y Eco va igual de rápido que antes.
 
 **Lo que más ayudaría (tú decides):**
 - **Una segunda tarjeta de memoria** igual a la que tienes (DDR4 SODIMM 2666) pone la memoria en doble canal: la IA escribe casi al doble de rápido. Revisa primero si tu laptop tiene una ranura libre.
