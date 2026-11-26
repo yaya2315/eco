@@ -136,8 +136,9 @@ DEFAULTS: dict = {
         "fragmentos": 3,                # pedazos de la transcripción que lee por pregunta (2 a 10; más = más lento)
     },
     "procesador": {
-        # Mientras usas la laptop (o graba el modo clase), Eco y su IA local trabajan solo en la mitad de los núcleos y
-        # la otra mitad queda libre para ti. Cuando la dejas sola, usan todos. false = siempre todos (te puede trabar).
+        # Mientras usas la laptop (o graba el modo clase), Eco y su IA local trabajan en la mitad de los núcleos, con
+        # prioridad inactiva y en modo de eficiencia: la otra mitad queda libre para ti. Sola, usan todo.
+        # false = siempre todo (te puede trabar).
         "cuidar_uso": True,
         "libre_tras_min": 3,            # minutos sin tocar teclado ni mouse para que Eco vuelva a usar todo
     },
@@ -2057,6 +2058,7 @@ def guardar_bot_token(token: str) -> str:
 
 
 def bot() -> None:
+    subir_hilo(2)   # el bot te contesta rápido aunque Whisper esté trabajando
     if not CFG["telegram"].get("token"):
         log.info("Telegram desactivado (falta el token: pégalo en el panel o en config.toml)")
         return
@@ -3220,6 +3222,18 @@ def revisar_sesiones_abandonadas() -> None:
         COLA.put(("cerrar_sesion", v["id"]))
 
 
+def retomar_analisis_cortados() -> list[int]:
+    """Al encender: una reunión que quedó «procesando» es un análisis que se cortó (Eco se cerró o se reinició a
+    medias), porque nadie más la está analizando. Se retoma ya, en vez de esperar las 2 horas de las abandonadas.
+    La transcripción ya está guardada: solo se rehace el análisis."""
+    with closing(db()) as con:
+        cortadas = [f["id"] for f in con.execute("SELECT id FROM sesiones WHERE estado='procesando' ORDER BY id")]
+    for sid in cortadas:
+        log.info("Retomo el análisis que se cortó (sesión %d)", sid)
+        COLA.put(("cerrar_sesion", sid))
+    return cortadas
+
+
 def sesiones_en_curso() -> list[dict]:
     with closing(db()) as con:
         filas = con.execute(
@@ -3322,6 +3336,7 @@ def descargar_modelo() -> None:
 
 def reloj() -> None:
     """Cada 30 s: manda recordatorios vencidos y, a la hora indicada, el resumen del día."""
+    subir_hilo(2)   # los recordatorios llegan a tiempo aunque Whisper esté trabajando
     while True:
         try:
             vaciar_salida()
@@ -6703,6 +6718,10 @@ def revisar_finanzas() -> None:
 class Manejador(BaseHTTPRequestHandler):
     server_version = "Eco/1.3"
 
+    def setup(self):
+        subir_hilo(2)   # el panel y el teléfono responden rápido aunque Whisper esté trabajando
+        super().setup()
+
     # ── Permisos ──
     def _autorizado(self) -> bool:
         recibido = (self.headers.get("X-Eco-Token") or "").encode()
@@ -7245,24 +7264,44 @@ def _crear_servidor(puerto: int) -> "ServidorEco":
             "y vuelve a conectar el teléfono con el QR.") from ex
 
 
+PRIORIDAD_INACTIVA, PRIORIDAD_BAJA, PRIORIDAD_NORMAL = 0x40, 0x4000, 0x20   # clases de prioridad de Windows
+
+
 def prioridad_baja() -> None:
-    """Eco corre con prioridad "por debajo de lo normal": si Windows tiene que elegir, te elige a ti. No basta para
-    que no se trabe la laptop (los núcleos y la memoria se comparten igual); de eso se encarga cuidar_procesador_hilo."""
+    """Eco corre con prioridad "por debajo de lo normal": si Windows tiene que elegir, te elige a ti. Mientras usas la
+    laptop, cuidar_procesador_hilo la baja todavía más. (Antes esto no funcionaba: sin declarar los tipos, ctypes le
+    pasaba a Windows el identificador del proceso recortado a 32 bits y el cambio fallaba en silencio.)"""
     if os.name != "nt":
         return
     try:
-        import ctypes
-        BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
+        k32 = _kernel32()
+        k32.SetPriorityClass(k32.GetCurrentProcess(), PRIORIDAD_BAJA)
+    except Exception:
+        pass
+
+
+def subir_hilo(nivel: int = 2) -> None:
+    """Sube la prioridad del hilo que llama, dentro de la de Eco: el panel, el bot y la grabación siguen respondiendo
+    rápido aunque Whisper (que corre con la prioridad del proceso) esté trabajando. 2 = alta, 15 = tiempo real."""
+    if os.name != "nt":
+        return
+    try:
+        k32 = _kernel32()
+        k32.SetThreadPriority(k32.GetCurrentThread(), nivel)
     except Exception:
         pass
 
 
 # ════════════════════════════ Cuidar la laptop mientras la usas ════════════════════════════
-# Con prioridad baja Windows te da preferencia, pero no alcanza: Whisper y la IA local ocupan todos los núcleos y la
-# memoria (que en esta laptop es de un solo canal y además la usa la pantalla), y todo se pone lento o se traba.
-# Por eso, mientras usas la laptop (o graba el modo clase, que suele ser una reunión que estás oyendo en ella), Eco
-# trabaja solo en la mitad de los núcleos y la otra mitad queda libre para ti. Cuando la dejas sola, usa todos.
+# Whisper y la IA local ocupan todos los núcleos y la memoria (que en esta laptop es de un solo canal y además la usa
+# la pantalla), y con un procesador de 15 W también se comen la energía y el calor que deja subir la velocidad.
+# Por eso, mientras usas la laptop (o graba el modo clase, que suele ser una reunión que estás oyendo en ella), Eco:
+#   · trabaja solo en la mitad de los núcleos: la otra mitad queda libre para ti;
+#   · baja a prioridad «inactiva»: solo usa lo que tus programas dejan sin usar;
+#   · se pone en «modo de eficiencia» (la hojita verde del Administrador de tareas): Windows lo corre más despacio y
+#     con menos energía, y a tus núcleos les queda margen para subir la velocidad.
+# A la IA local (Ollama, otro programa) le pone lo mismo, solo mientras le responde a Eco. Cuando dejas la laptop
+# sola, todo vuelve a la normal: todos los núcleos, prioridad baja y sin modo de eficiencia, para terminar antes.
 
 PROCESADOR_REVISAR_S = 5
 _OLLAMA_EXE = "ollama.exe"
@@ -7292,8 +7331,36 @@ def _kernel32():
         k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
         k32.Process32FirstW.argtypes = k32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         k32.GetTickCount.restype = ctypes.c_uint32
+        k32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        k32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+        k32.GetPriorityClass.restype = ctypes.c_uint32
+        k32.GetCurrentThread.restype = ctypes.c_void_p
+        k32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        k32.SetProcessInformation.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        k32.GetProcessInformation.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
         _win["k32"] = k32
     return _win["k32"]
+
+
+def _eficiencia(proceso, encendida: bool | None) -> None:
+    """El «modo de eficiencia» de Windows (EcoQoS) para un proceso: True = encendido, False = apagado (que Windows no
+    lo frene por su cuenta, aunque no tenga ventana), None = que Windows decida, como estaba."""
+    import ctypes
+
+    class _Estado(ctypes.Structure):   # PROCESS_POWER_THROTTLING_STATE
+        _fields_ = [("Version", ctypes.c_uint32), ("ControlMask", ctypes.c_uint32), ("StateMask", ctypes.c_uint32)]
+
+    velocidad = 0x1   # PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+    e = _Estado(1, 0 if encendida is None else velocidad, velocidad if encendida else 0)
+    _kernel32().SetProcessInformation(proceso, 4, ctypes.byref(e), ctypes.sizeof(e))   # 4 = ProcessPowerThrottling
+
+
+def _modo(proceso, mascara: int, prioridad: int, eficiencia: bool | None) -> bool:
+    k32 = _kernel32()
+    ok = bool(k32.SetProcessAffinityMask(proceso, mascara))
+    k32.SetPriorityClass(proceso, prioridad)
+    _eficiencia(proceso, eficiencia)
+    return ok
 
 
 def _nucleos() -> list[int]:
@@ -7409,40 +7476,49 @@ def _pids(exe: str) -> list[int]:
     return salida
 
 
-def _limitar_ollama(mascara: int) -> None:
-    """La IA local corre en Ollama, que es otro programa: se le pone la misma mitad, solo mientras le está
-    respondiendo a Eco. Al terminar (o al encender Eco) se le devuelve todo."""
+def _limitar_ollama(limitar: bool) -> None:
+    """La IA local corre en Ollama, que es otro programa: se le pone el mismo cuidado (mitad de los núcleos, prioridad
+    inactiva y modo de eficiencia), solo mientras le está respondiendo a Eco. Al terminar (o al encender Eco) se le
+    devuelve como estaba: todos los núcleos, prioridad normal y que Windows decida."""
     k32 = _kernel32()
     for pid in _pids(_OLLAMA_EXE):
         h = k32.OpenProcess(0x0200 | 0x1000, 0, pid)   # PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
         if h:
             try:
-                k32.SetProcessAffinityMask(h, mascara)
+                if limitar:
+                    _modo(h, mascara_mitad(), PRIORIDAD_INACTIVA, True)
+                else:
+                    _modo(h, mascara_todo(), PRIORIDAD_NORMAL, None)
             finally:
                 k32.CloseHandle(h)
 
 
 def cuidar_procesador_hilo() -> None:
     """Cada pocos segundos: ¿estás usando la laptop? Entonces Eco (y Ollama, si le está respondiendo a Eco) trabaja
-    en la mitad de los núcleos. ¿La dejaste sola? Entonces en todos, para terminar antes."""
+    en la mitad de los núcleos, con prioridad inactiva y en modo de eficiencia. ¿La dejaste sola? Entonces con todo,
+    para terminar antes."""
     if os.name != "nt":
         return
     actual = None
     while True:
         try:
             mitad = _cuidar_uso() and laptop_en_uso()
-            mascara = mascara_mitad() if mitad else mascara_todo()
-            if mascara != actual:
+            if mitad != actual:
                 k32 = _kernel32()
-                if k32.SetProcessAffinityMask(k32.GetCurrentProcess(), mascara):
-                    actual = mascara
+                yo = k32.GetCurrentProcess()
+                if mitad:
+                    ok = _modo(yo, mascara_mitad(), PRIORIDAD_INACTIVA, True)
+                else:
+                    ok = _modo(yo, mascara_todo(), PRIORIDAD_BAJA, False if _cuidar_uso() else None)
+                if ok:
+                    actual = mitad
                     ESTADO["procesador"] = "mitad" if mitad else "todo"
             ia_local = str(CFG["ia"].get("proveedor", "claude")).lower() == "ollama"
             if mitad and ia_local and _ia_ocupada["n"] > 0:
-                _limitar_ollama(mascara)   # en cada vuelta: Ollama abre un proceso nuevo cuando carga otro modelo
+                _limitar_ollama(True)   # en cada vuelta: Ollama abre un proceso nuevo cuando carga otro modelo
                 _ollama_limitado["si"] = True
             elif _ollama_limitado["si"]:
-                _limitar_ollama(mascara_todo())
+                _limitar_ollama(False)
                 _ollama_limitado["si"] = False
         except Exception as ex:
             if not _procesador_error["visto"]:
@@ -7482,6 +7558,7 @@ def arrancar(consola: bool = True) -> ServidorEco:
     for f in sorted(ENTRADA.iterdir()):  # lo que quedó pendiente la última vez
         if f.suffix.lower() in EXT_AUDIO + EXT_IMAGEN:
             COLA.put(f)
+    retomar_analisis_cortados()
     threading.Thread(target=reindexar_si_hace_falta, name="indice", daemon=True).start()
     migrar_recordar()
     encender_bot()

@@ -99,8 +99,9 @@ fragmentos = 3                  # pedazos de la transcripción que lee por pregu
 
 [procesador]
 # Para que Eco no te trabe la laptop (README, «Velocidad»): mientras la usas, o mientras graba el modo clase, Eco y su
-# IA local trabajan solo en la mitad de los núcleos y la otra mitad queda libre para ti. Cuando la dejas sola, usan
-# todos para terminar antes. false = siempre todos (un poco más rápido, pero te puede trabar).
+# IA local trabajan en la mitad de los núcleos, con prioridad inactiva y en modo de eficiencia (la hojita verde del
+# Administrador de tareas), y la otra mitad queda libre para ti. Cuando la dejas sola, usan todo para terminar antes.
+# false = siempre todo (te puede trabar).
 cuidar_uso = true
 libre_tras_min = 3              # minutos sin tocar teclado ni mouse para que Eco vuelva a usar todo el procesador
 

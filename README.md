@@ -508,7 +508,12 @@ Todo corre en tu laptop, gratis y sin mandar tus grabaciones a nadie. El precio 
 - **Whisper por lotes** (`[whisper] lote = 4`): transcribe varios pedazos a la vez. Medido con tu grabación: unas **2 veces más rápido**, con el mismo contenido. Además quita muletillas sueltas («eh», «mmm») y palabras repetidas pegadas («para para»).
 - **La IA tiene prioridad:** mientras la IA responde algo (una pregunta en el chat, el análisis de una reunión, los apuntes de Notion), Whisper hace una pausa entre un pedazo y otro y sigue apenas termina. Juntos se estorbaban y cada uno iba a menos de la mitad.
 - **El chat lee poco:** a la IA de la laptop solo le pasa las notas cortas y los pedazos de la transcripción que hablan de tu pregunta.
-- **No te traba la laptop** (`[procesador] cuidar_uso = true`): mientras la usas (tocaste el teclado o el mouse en los últimos 3 minutos, ves algo en pantalla completa o el modo clase está grabando), Whisper y la IA local trabajan solo en la mitad de los núcleos (en tu Ryzen, 2 de 4) y la otra mitad queda libre para ti. Cuando la dejas sola, por ejemplo de noche, usan todos. La prioridad baja sola no bastaba: Windows te daba preferencia, pero los núcleos y la memoria seguían llenos y la pantalla se trababa.
+- **No te traba la laptop** (`[procesador] cuidar_uso = true`). Mientras la usas (tocaste el teclado o el mouse en los últimos 3 minutos, ves algo en pantalla completa o el modo clase está grabando), Whisper y la IA local:
+  - trabajan solo en la mitad de los núcleos (en tu Ryzen, 2 de 4): la otra mitad queda libre para ti;
+  - bajan a prioridad **inactiva**: solo usan lo que tus programas dejan sin usar;
+  - se ponen en **modo de eficiencia** (la hojita verde del Administrador de tareas): van más despacio y gastan menos energía, y a tus núcleos les queda margen para subir la velocidad.
+
+  La grabación de la laptop, el panel y el bot siguen con prioridad alta, así que el audio no se corta y te responden rápido. Cuando dejas la laptop sola, por ejemplo de noche, todo vuelve a la normal y Eco va igual de rápido que antes.
 
 **Lo que más ayudaría (tú decides):**
 - **Una segunda tarjeta de memoria** igual a la que tienes (DDR4 SODIMM 2666) pone la memoria en doble canal: la IA escribe casi al doble de rápido. Revisa primero si tu laptop tiene una ranura libre.

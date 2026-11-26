@@ -28,6 +28,27 @@ MINUTOS_POR_PARTE = 10
 UMBRAL_SILENCIO = 0.004  # volumen (RMS) por debajo del cual un segundo cuenta como silencio
 
 
+def _hilo_de_audio() -> None:
+    """La grabación no puede esperar: mientras Eco trabaja con prioridad inactiva y en modo de eficiencia (para no
+    trabarte la laptop), este hilo sigue con prioridad de tiempo real y a toda velocidad, y el audio no se corta."""
+    try:
+        import ctypes
+
+        class _Estado(ctypes.Structure):   # THREAD_POWER_THROTTLING_STATE
+            _fields_ = [("Version", ctypes.c_uint32), ("ControlMask", ctypes.c_uint32), ("StateMask", ctypes.c_uint32)]
+
+        k32 = ctypes.WinDLL("kernel32")
+        k32.GetCurrentThread.restype = ctypes.c_void_p
+        k32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        k32.SetThreadInformation.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        hilo = k32.GetCurrentThread()
+        k32.SetThreadPriority(hilo, 15)   # THREAD_PRIORITY_TIME_CRITICAL
+        e = _Estado(1, 0x1, 0)            # este hilo, sin modo de eficiencia
+        k32.SetThreadInformation(hilo, 3, ctypes.byref(e), ctypes.sizeof(e))   # 3 = ThreadPowerThrottling
+    except Exception:
+        pass
+
+
 class GrabadoraClase:
     def __init__(self, entrada: Path, entregar: Callable[[Path], None], log,
                  minutos_silencio: int = 20, minutos_parte: int = MINUTOS_POR_PARTE):
@@ -96,6 +117,7 @@ class GrabadoraClase:
         ole32 = getattr(getattr(__import__("ctypes"), "windll", None), "ole32", None)
         if ole32:
             ole32.CoInitializeEx(None, 0)
+        _hilo_de_audio()
 
         e = self._estado
         parte = self._nueva_parte(1)
